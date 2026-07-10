@@ -7,8 +7,17 @@ def process_frame(packet):
             sensor_name,
             raw_data
         )
+        
+    return processed_data
+
 
 def process_sensor(sensor_name, data):
+    if sensor_name == "rgb_camera":
+        return process_rgb_cam(data)
+    if sensor_name == "semantic_camera":
+        return process_semantic_cam(data)
+    if sensor_name == "lidar":
+        return process_lidar(data)
     if sensor_name == "gnss":
         return process_gnss(data)
     if sensor_name == "imu":

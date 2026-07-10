@@ -109,7 +109,7 @@ class DataCollector:
             processed_data = process_frame(packet)
 
             # İşlenmiş verileri diske kaydet.
-            self.writer.save_frame(
+            self.dataset_writer.save_frame(
                 packet=packet,
                 processed_data=processed_data,
                 vehicle_data=vehicle_data,

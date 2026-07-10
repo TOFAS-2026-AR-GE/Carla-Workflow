@@ -27,7 +27,7 @@ class FramePacket:
     def to_dict(self):
         return {
             "frame_id": self.frame_id,
-            "complete": self.is_complete,
+            "complete": self.is_complete(),
             "received_sensors": sorted(self.sensor_data.keys()),
             "expected_sensors": sorted(self.expected_sensors),
             "missing_sensors": sorted(self.missing_sensors()),

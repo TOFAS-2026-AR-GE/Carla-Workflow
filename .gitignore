@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 *.pyc
 
+data/
 runs/
 outputs/
 logs/

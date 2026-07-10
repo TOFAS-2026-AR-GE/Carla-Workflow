@@ -99,11 +99,6 @@ class DatasetWriter:
             )
 
         self._append_manifest(frame_info)
-
-        print(
-            f"[OK] Frame {packet.frame_id} kaydedildi."
-        )
-
         return frame_info
 
     def _save_sensor(

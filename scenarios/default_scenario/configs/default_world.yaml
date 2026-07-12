@@ -1,0 +1,8 @@
+name: default_world
+
+simulation:
+  synchronous_mode: true
+  fixed_delta_seconds: 0.05
+
+traffic:
+  npc_count: 0

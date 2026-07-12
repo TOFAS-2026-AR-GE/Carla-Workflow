@@ -1,0 +1,19 @@
+name: CARLA YOLOv8n
+weights: carla_yolov8n_best.pt
+source: https://github.com/LinkouCommander/CARLA-Object-Detection
+dataset: https://www.kaggle.com/datasets/ibrahimalobaid/object-detection-carla-self-driving-car
+architecture: yolov8n
+image_size: 640
+epochs: 100
+classes:
+  0: bike
+  1: motobike
+  2: person
+  3: traffic_light_green
+  4: traffic_light_orange
+  5: traffic_light_red
+  6: traffic_sign_30
+  7: traffic_sign_60
+  8: traffic_sign_90
+  9: vehicle
+

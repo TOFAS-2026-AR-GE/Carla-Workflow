@@ -8,6 +8,7 @@ from carla_datas import get_datas
 from connect_carla import connect_carla
 from controllers import LaneFollowController
 from DataCollector import DataCollector
+from scenarios.traffic_scenario.traffic import cleanup_traffic
 from spec_camera import update_spectator_camera
 from vehicle import spawn_vehicle
 
@@ -154,6 +155,8 @@ def main():
         # Önce sensörleri kapat.
         if data_collector is not None:
             data_collector.stop()
+
+        cleanup_traffic()
 
         if vehicle is not None:
             try:

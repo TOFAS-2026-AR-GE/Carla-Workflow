@@ -1,0 +1,5 @@
+ultralytics==8.4.90
+opencv-python
+onnxruntime>=1.17
+Pillow
+PyYAML

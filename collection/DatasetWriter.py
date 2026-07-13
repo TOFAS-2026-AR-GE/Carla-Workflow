@@ -133,8 +133,8 @@ class DatasetWriter:
                 sensor_data,
             )
 
-        # GNSS ve IMU sözlüktür.
-        elif isinstance(sensor_data, dict):
+        # GNSS, IMU ve radar verileri JSON olarak yazılır.
+        elif isinstance(sensor_data, (dict, list)):
             file_name = f"{frame_name}.json"
 
             full_path = os.path.join(

@@ -1,0 +1,412 @@
+{
+  "communities": {
+    "0": [
+      "carla_datas",
+      "carla_datas_get_datas",
+      "carla_datas_py_vehicle",
+      "carla_datas_py_world",
+      "connect_carla",
+      "connect_carla_connect_carla",
+      "controllers",
+      "controllers_clamp",
+      "controllers_lanefollowcontroller",
+      "controllers_lanefollowcontroller_init",
+      "controllers_lanefollowcontroller_run_step",
+      "controllers_rationale_11",
+      "datacollector_datacollector",
+      "datacollector_datacollector_stop",
+      "datacollector_rationale_15",
+      "datacollector_rationale_187",
+      "main",
+      "main_get_vehicle_data",
+      "main_main",
+      "main_rationale_1",
+      "scenarios_load_map",
+      "scenarios_load_map_apply_world_settings",
+      "scenarios_load_map_load_map",
+      "scenarios_traffic_scenario_traffic",
+      "scenarios_traffic_scenario_traffic_cleanup_traffic",
+      "scenarios_traffic_scenario_traffic_spawn_traffic",
+      "scenarios_yaml_loader",
+      "scenarios_yaml_loader_load_scenario",
+      "spec_camera",
+      "spec_camera_py_vehicle",
+      "spec_camera_py_world",
+      "spec_camera_update_spectator_camera",
+      "vehicle_py_vehicle",
+      "vehicle_py_world",
+      "vehicle_spawn_vehicle"
+    ],
+    "1": [
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_argumanlari_oku",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_belgium_kopyala",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_belgium_resim_hedefi",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_belgium_sinif_hedefi",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_gtsrb_girdilerini_bul",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_gtsrb_kopyala",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_kaynak_sinif_klasorleri",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_main",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_py_path",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_209",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_222",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_227",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_241",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_248",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_253",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_263",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_272",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_282",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_287",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_339",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_350",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_355",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_rationale_422",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_reduced_codes_oku",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_resim_mi",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_resmi_kopyala",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_sinif_dosyalari_topla",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_sinif_klasorlerini_olustur",
+      "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_sinif_klasoru"
+    ],
+    "2": [
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_argumanlari_oku",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_data_yaml_yaz",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_isim_listesi",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_klasorleri_olustur",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_label_klasoru_bul",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_main",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_mutlak_yol",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_nadirlik_puani",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_py_path",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_124",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_133",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_140",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_153",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_160",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_174",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_187",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_21",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_32",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_40",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_48",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_55",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_67",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_rationale_80",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_resmi_bul",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_siniflari_oku",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_split_sinif_sayilari",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_spliti_yaz",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_tum_ornekleri_topla",
+      "trafik_levhasi_onnx_paket_scripts_yeniden_split_uygun_ornek_tasi"
+    ],
+    "3": [
+      "processing_framepacket",
+      "processing_framepacket_framepacket",
+      "processing_framepacket_framepacket_get",
+      "processing_framepacket_framepacket_init",
+      "processing_framepacket_framepacket_is_complete",
+      "processing_framepacket_framepacket_missing_sensors",
+      "processing_framepacket_framepacket_to_dict",
+      "processing_sensorsync",
+      "processing_sensorsync_rationale_1",
+      "processing_sensorsync_rationale_10",
+      "processing_sensorsync_rationale_141",
+      "processing_sensorsync_rationale_150",
+      "processing_sensorsync_rationale_165",
+      "processing_sensorsync_rationale_182",
+      "processing_sensorsync_rationale_197",
+      "processing_sensorsync_rationale_203",
+      "processing_sensorsync_rationale_40",
+      "processing_sensorsync_rationale_71",
+      "processing_sensorsync_sensorsync",
+      "processing_sensorsync_sensorsync_all_sensors_arrived",
+      "processing_sensorsync_sensorsync_buffered_frame_count",
+      "processing_sensorsync_sensorsync_cleanup",
+      "processing_sensorsync_sensorsync_clear",
+      "processing_sensorsync_sensorsync_init",
+      "processing_sensorsync_sensorsync_limit_buffer_size",
+      "processing_sensorsync_sensorsync_push",
+      "processing_sensorsync_sensorsync_remove_old_frames",
+      "processing_sensorsync_sensorsync_wait_for_frame"
+    ],
+    "4": [
+      "datacollector",
+      "datacollector_datacollector_start",
+      "datacollector_rationale_59",
+      "image",
+      "lidarmeasurement",
+      "ndarray",
+      "sensors",
+      "sensors_lidar_cloud_to_array",
+      "sensors_py_vehicle",
+      "sensors_py_world",
+      "sensors_rationale_108",
+      "sensors_rationale_123",
+      "sensors_rationale_183",
+      "sensors_rationale_91",
+      "sensors_rationale_98",
+      "sensors_rgb_image_to_array",
+      "sensors_semantic_image_to_labels",
+      "sensors_spawn_collision_sensor",
+      "sensors_spawn_four_radars",
+      "sensors_spawn_gnss",
+      "sensors_spawn_imu",
+      "sensors_spawn_lidar",
+      "sensors_spawn_radar",
+      "sensors_spawn_rgb_camera",
+      "sensors_spawn_semantic_camera"
+    ],
+    "5": [
+      "datacollector_datacollector_collect",
+      "datacollector_rationale_125",
+      "processing_sensor_processors",
+      "processing_sensor_processors_process_frame",
+      "processing_sensor_processors_process_gnss",
+      "processing_sensor_processors_process_imu",
+      "processing_sensor_processors_process_lidar",
+      "processing_sensor_processors_process_radar",
+      "processing_sensor_processors_process_rgb_camera",
+      "processing_sensor_processors_process_semantic_camera",
+      "processing_sensor_processors_process_sensor",
+      "processing_sensor_processors_rationale_113",
+      "processing_sensor_processors_rationale_131",
+      "processing_sensor_processors_rationale_160",
+      "processing_sensor_processors_rationale_172",
+      "processing_sensor_processors_rationale_34",
+      "processing_sensor_processors_rationale_5",
+      "processing_sensor_processors_rationale_64",
+      "processing_sensor_processors_rationale_92"
+    ],
+    "6": [
+      "trafik_levhasi_onnx_paket_detect_then_classify",
+      "trafik_levhasi_onnx_paket_detect_then_classify_argumanlari_oku",
+      "trafik_levhasi_onnx_paket_detect_then_classify_dosya_adi_temizle",
+      "trafik_levhasi_onnx_paket_detect_then_classify_kaynaklari_topla",
+      "trafik_levhasi_onnx_paket_detect_then_classify_kirpme_koordinati",
+      "trafik_levhasi_onnx_paket_detect_then_classify_kutu_ciz",
+      "trafik_levhasi_onnx_paket_detect_then_classify_main",
+      "trafik_levhasi_onnx_paket_detect_then_classify_rationale_107",
+      "trafik_levhasi_onnx_paket_detect_then_classify_rationale_124",
+      "trafik_levhasi_onnx_paket_detect_then_classify_rationale_167",
+      "trafik_levhasi_onnx_paket_detect_then_classify_rationale_215",
+      "trafik_levhasi_onnx_paket_detect_then_classify_rationale_25",
+      "trafik_levhasi_onnx_paket_detect_then_classify_rationale_52",
+      "trafik_levhasi_onnx_paket_detect_then_classify_rationale_62",
+      "trafik_levhasi_onnx_paket_detect_then_classify_rationale_89",
+      "trafik_levhasi_onnx_paket_detect_then_classify_rationale_94",
+      "trafik_levhasi_onnx_paket_detect_then_classify_resim_isle",
+      "trafik_levhasi_onnx_paket_detect_then_classify_siniflandir",
+      "trafik_levhasi_onnx_paket_detect_then_classify_video_isle"
+    ],
+    "7": [
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_annotation_dosyasi_bul",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_argumanlari_oku",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_camera_yolunu_bul",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_class_map",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_main",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_rationale_15",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_rationale_161",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_rationale_23",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_rationale_35",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_rationale_59",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_rationale_71",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_rationale_88",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_rationale_95",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_satiri_parcala",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_split_donustur",
+      "trafik_levhasi_onnx_paket_scripts_belgium_to_yolo_yolo_kutu"
+    ],
+    "8": [
+      "collection_datasetwriter",
+      "collection_datasetwriter_datasetwriter",
+      "collection_datasetwriter_datasetwriter_append_manifest",
+      "collection_datasetwriter_datasetwriter_init",
+      "collection_datasetwriter_datasetwriter_save_frame",
+      "collection_datasetwriter_datasetwriter_save_sensor",
+      "collection_datasetwriter_rationale_1",
+      "collection_datasetwriter_rationale_11",
+      "collection_datasetwriter_rationale_110",
+      "collection_datasetwriter_rationale_172",
+      "collection_datasetwriter_rationale_61",
+      "datacollector_datacollector_init"
+    ],
+    "9": [
+      "detector_vehicledetector",
+      "detector_vehicledetector_rationale_31",
+      "detector_vehicledetector_rationale_76",
+      "detector_vehicledetector_rationale_8",
+      "detector_vehicledetector_vehicledetector",
+      "detector_vehicledetector_vehicledetector_detect",
+      "detector_vehicledetector_vehicledetector_init"
+    ],
+    "10": [
+      "trafik_levhasi_onnx_paket_scripts_tek_sinif_yap",
+      "trafik_levhasi_onnx_paket_scripts_tek_sinif_yap_argumanlari_oku",
+      "trafik_levhasi_onnx_paket_scripts_tek_sinif_yap_labels_donustur",
+      "trafik_levhasi_onnx_paket_scripts_tek_sinif_yap_main",
+      "trafik_levhasi_onnx_paket_scripts_tek_sinif_yap_rationale_15",
+      "trafik_levhasi_onnx_paket_scripts_tek_sinif_yap_rationale_24",
+      "trafik_levhasi_onnx_paket_scripts_tek_sinif_yap_rationale_54"
+    ],
+    "11": [
+      "trafik_levhasi_onnx_paket_scripts_yolo_birlestir",
+      "trafik_levhasi_onnx_paket_scripts_yolo_birlestir_argumanlari_oku",
+      "trafik_levhasi_onnx_paket_scripts_yolo_birlestir_main",
+      "trafik_levhasi_onnx_paket_scripts_yolo_birlestir_rationale_15",
+      "trafik_levhasi_onnx_paket_scripts_yolo_birlestir_rationale_24",
+      "trafik_levhasi_onnx_paket_scripts_yolo_birlestir_rationale_55",
+      "trafik_levhasi_onnx_paket_scripts_yolo_birlestir_split_kopyala"
+    ],
+    "12": [
+      "trafik_levhasi_onnx_paket_scripts_train_classifier",
+      "trafik_levhasi_onnx_paket_scripts_train_classifier_argumanlari_oku",
+      "trafik_levhasi_onnx_paket_scripts_train_classifier_main",
+      "trafik_levhasi_onnx_paket_scripts_train_classifier_rationale_20",
+      "trafik_levhasi_onnx_paket_scripts_train_classifier_rationale_50"
+    ],
+    "13": [
+      "trafik_levhasi_onnx_paket_scripts_train_detector",
+      "trafik_levhasi_onnx_paket_scripts_train_detector_argumanlari_oku",
+      "trafik_levhasi_onnx_paket_scripts_train_detector_main",
+      "trafik_levhasi_onnx_paket_scripts_train_detector_rationale_15",
+      "trafik_levhasi_onnx_paket_scripts_train_detector_rationale_40"
+    ],
+    "14": [
+      "models_predict_carla",
+      "models_predict_carla_main"
+    ]
+  },
+  "cohesion": {
+    "0": 0.0957983193277311,
+    "1": 0.12873563218390804,
+    "2": 0.11494252873563218,
+    "3": 0.09259259259259259,
+    "4": 0.15666666666666668,
+    "5": 0.14619883040935672,
+    "6": 0.1695906432748538,
+    "7": 0.16911764705882354,
+    "8": 0.19696969696969696,
+    "9": 0.2857142857142857,
+    "10": 0.38095238095238093,
+    "11": 0.38095238095238093,
+    "12": 0.5,
+    "13": 0.5,
+    "14": 1.0
+  },
+  "gods": [
+    {
+      "id": "processing_sensorsync_sensorsync",
+      "label": "SensorSync",
+      "degree": 15
+    },
+    {
+      "id": "trafik_levhasi_onnx_paket_scripts_yeniden_split_main",
+      "label": "main()",
+      "degree": 11
+    },
+    {
+      "id": "datacollector_datacollector",
+      "label": "DataCollector",
+      "degree": 10
+    },
+    {
+      "id": "collection_datasetwriter_datasetwriter",
+      "label": "DatasetWriter",
+      "degree": 9
+    },
+    {
+      "id": "main_main",
+      "label": "main()",
+      "degree": 9
+    },
+    {
+      "id": "processing_framepacket_framepacket",
+      "label": "FramePacket",
+      "degree": 9
+    },
+    {
+      "id": "processing_sensor_processors_process_sensor",
+      "label": "process_sensor()",
+      "degree": 9
+    },
+    {
+      "id": "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_belgium_kopyala",
+      "label": "belgium_kopyala()",
+      "degree": 9
+    },
+    {
+      "id": "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_gtsrb_kopyala",
+      "label": "gtsrb_kopyala()",
+      "degree": 8
+    },
+    {
+      "id": "trafik_levhasi_onnx_paket_scripts_gtsrb_belgium_78sinif_hazirla_main",
+      "label": "main()",
+      "degree": 8
+    }
+  ],
+  "surprises": [
+    {
+      "source": "DataCollector",
+      "target": "DatasetWriter",
+      "source_files": [
+        "DataCollector.py",
+        "collection/DatasetWriter.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
+    },
+    {
+      "source": "DataCollector",
+      "target": "SensorSync",
+      "source_files": [
+        "DataCollector.py",
+        "processing/SensorSync.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
+    },
+    {
+      "source": "main()",
+      "target": "DataCollector",
+      "source_files": [
+        "main.py",
+        "DataCollector.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "connects across different repos/directories"
+    },
+    {
+      "source": "main()",
+      "target": "get_datas()",
+      "source_files": [
+        "main.py",
+        "carla_datas.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "connects across different repos/directories"
+    },
+    {
+      "source": "connect_carla()",
+      "target": "apply_world_settings()",
+      "source_files": [
+        "connect_carla.py",
+        "scenarios/load_map.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "connects across different repos/directories"
+    }
+  ],
+  "tokens": {
+    "input": 0,
+    "output": 0
+  }
+}

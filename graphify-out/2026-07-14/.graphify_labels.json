@@ -1,0 +1,21 @@
+{
+  "0": "main.py",
+  "1": "gtsrb_belgium_78sinif_hazirla.py",
+  "2": "yeniden_split.py",
+  "3": "SensorSync",
+  "4": "DataCollector.py",
+  "5": "sensor_processors.py",
+  "6": "detect_then_classify.py",
+  "7": "belgium_to_yolo.py",
+  "8": "DataCollector",
+  "9": "VehicleDetector",
+  "10": "main",
+  "11": "main",
+  "12": "argumanlari_oku",
+  "13": "argumanlari_oku",
+  "14": "predict_carla.py",
+  "15": "Trafik Levhası Tespit ve Sınıflandırma Projesi",
+  "16": "Trafik Levhası Model ve Geliştirme Paketi",
+  "17": "README.md",
+  "18": "README.md"
+}

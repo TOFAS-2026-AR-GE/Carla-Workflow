@@ -3,3 +3,7 @@ carla
 numpy
 PyYAML
 ultralytics
+torch
+opencv-python
+Pillow
+onnxruntime>=1.17

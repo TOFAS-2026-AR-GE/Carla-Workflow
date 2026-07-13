@@ -108,3 +108,224 @@ def lidar_cloud_to_array(cloud: carla.LidarMeasurement) -> np.ndarray:
   """CARLA lidar point cloud -> (N, 4) numpy array [x, y, z, intensity]."""
   points = np.frombuffer(cloud.raw_data, dtype=np.float32)
   return points.reshape((-1, 4))
+
+def spawn_radar(
+    world,
+    vehicle,
+    sync,
+    sensor_name,
+    transform,
+    range_m,
+    horizontal_fov,
+    vertical_fov,
+    points_per_second=3000,
+):
+    """
+    Araca tek bir radar bağlar.
+
+    sensor_name örnekleri:
+        radar_front
+        radar_rear
+        radar_left
+        radar_right
+    """
+
+    blueprint_library = world.get_blueprint_library()
+    radar_bp = blueprint_library.find("sensor.other.radar")
+
+    radar_bp.set_attribute(
+        "range",
+        str(range_m),
+    )
+
+    radar_bp.set_attribute(
+        "horizontal_fov",
+        str(horizontal_fov),
+    )
+
+    radar_bp.set_attribute(
+        "vertical_fov",
+        str(vertical_fov),
+    )
+
+    radar_bp.set_attribute(
+        "points_per_second",
+        str(points_per_second),
+    )
+
+    # 0.0 olduğu için radar her simülasyon frame'inde veri üretir.
+    radar_bp.set_attribute(
+        "sensor_tick",
+        "0.0",
+    )
+
+    radar = world.spawn_actor(
+        blueprint=radar_bp,
+        transform=transform,
+        attach_to=vehicle,
+        attachment_type=carla.AttachmentType.Rigid,
+    )
+
+    radar.listen(
+        lambda radar_data: sync.push(
+            sensor_name,
+            radar_data.frame,
+            radar_data,
+        )
+    )
+
+    print(f"[OK] {sensor_name} oluşturuldu.")
+
+    return radar
+
+
+def spawn_four_radars(world, vehicle, sync):
+    """
+    Ego araca dört radar bağlar:
+
+        1. Ön radar
+        2. Arka radar
+        3. Sol kör nokta radarı
+        4. Sağ kör nokta radarı
+
+    Radar konumları aracın boyutuna göre otomatik belirlenir.
+    """
+
+    # Aracın yarı uzunluğu, yarı genişliği ve yarı yüksekliği.
+    vehicle_extent = vehicle.bounding_box.extent
+
+    vehicle_half_length = vehicle_extent.x
+    vehicle_half_width = vehicle_extent.y
+    vehicle_half_height = vehicle_extent.z
+
+    # Radarın yerden yüksekliği.
+    # Bazı araçlar alçak olabileceği için minimum 0.70 metre kullanıyoruz.
+    radar_height = max(
+        0.70,
+        vehicle_half_height,
+    )
+
+    # --------------------------------------------------------
+    # Ön radar
+    # --------------------------------------------------------
+
+    front_transform = carla.Transform(
+        carla.Location(
+            x=vehicle_half_length + 0.10,
+            y=0.0,
+            z=radar_height,
+        ),
+        carla.Rotation(
+            pitch=0.0,
+            yaw=0.0,
+            roll=0.0,
+        ),
+    )
+
+    front_radar = spawn_radar(
+        world=world,
+        vehicle=vehicle,
+        sync=sync,
+        sensor_name="radar_front",
+        transform=front_transform,
+        range_m=60,
+        horizontal_fov=70,
+        vertical_fov=15,
+        points_per_second=5000,
+    )
+
+    # --------------------------------------------------------
+    # Arka radar
+    # --------------------------------------------------------
+
+    rear_transform = carla.Transform(
+        carla.Location(
+            x=-(vehicle_half_length + 0.10),
+            y=0.0,
+            z=radar_height,
+        ),
+        carla.Rotation(
+            pitch=0.0,
+            yaw=180.0,
+            roll=0.0,
+        ),
+    )
+
+    rear_radar = spawn_radar(
+        world=world,
+        vehicle=vehicle,
+        sync=sync,
+        sensor_name="radar_rear",
+        transform=rear_transform,
+        range_m=40,
+        horizontal_fov=90,
+        vertical_fov=15,
+        points_per_second=3000,
+    )
+
+    # --------------------------------------------------------
+    # Sol kör nokta radarı
+    # --------------------------------------------------------
+
+    left_transform = carla.Transform(
+        carla.Location(
+            # Yan radarları biraz arkaya koyuyoruz.
+            x=-vehicle_half_length * 0.40,
+            y=-(vehicle_half_width + 0.10),
+            z=radar_height,
+        ),
+        carla.Rotation(
+            pitch=0.0,
+            yaw=-90.0,
+            roll=0.0,
+        ),
+    )
+
+    left_radar = spawn_radar(
+        world=world,
+        vehicle=vehicle,
+        sync=sync,
+        sensor_name="radar_left",
+        transform=left_transform,
+        range_m=30,
+        horizontal_fov=100,
+        vertical_fov=20,
+        points_per_second=3000,
+    )
+
+    # --------------------------------------------------------
+    # Sağ kör nokta radarı
+    # --------------------------------------------------------
+
+    right_transform = carla.Transform(
+        carla.Location(
+            x=-vehicle_half_length * 0.40,
+            y=vehicle_half_width + 0.10,
+            z=radar_height,
+        ),
+        carla.Rotation(
+            pitch=0.0,
+            yaw=90.0,
+            roll=0.0,
+        ),
+    )
+
+    right_radar = spawn_radar(
+        world=world,
+        vehicle=vehicle,
+        sync=sync,
+        sensor_name="radar_right",
+        transform=right_transform,
+        range_m=30,
+        horizontal_fov=100,
+        vertical_fov=20,
+        points_per_second=3000,
+    )
+
+    # İsimleriyle birlikte döndürüyoruz.
+    return {
+        "radar_front": front_radar,
+        "radar_rear": rear_radar,
+        "radar_left": left_radar,
+        "radar_right": right_radar,
+    }

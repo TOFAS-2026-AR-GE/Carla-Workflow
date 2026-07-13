@@ -1,140 +1,170 @@
-from pathlib import Path
+import os
 
 import numpy as np
 from ultralytics import YOLO
 
 
 class VehicleDetector:
-    def __init__(self):
-        # VehicleDetector.py dosyası:
-        # Carla-Workflow-main/detector/VehicleDetector.py
-        self.project_root = Path(__file__).resolve().parent.parent
+    """
+    RGB kamera görüntüsünde şu nesneleri algılar:
 
-        self.model_path = (
-            self.project_root
-            / "models"
-            / "carla_yolov8n_best.pt"
-        )
+    0 -> bike
+    1 -> motobike
+    9 -> vehicle
+    """
 
-        self.data_folder = (
-            self.project_root
-            / "data"
-            / "runs"
-        )
+    # Kullanacağımız YOLO sınıfları
+    TARGET_CLASS_IDS = [0, 1, 9]
 
-        self.output_image = (
-            self.project_root
-            /"detector"
-            / "images"
-            / "detection_result.jpg"
-        )
+    CLASS_NAMES = {
+        0: "bike",
+        1: "motobike",
+        9: "vehicle",
+    }
 
-        self.min_confidence = 0.80
+    def __init__(
+        self,
+        model_path=None,
+        confidence=0.35,
+        device=None,
+    ):
+        """
+        VehicleDetector nesnesini oluşturur ve YOLO modelini yükler.
 
-        self.vehicle_class_names = {
-            "vehicle",
-            "bike",
-            "motobike"
+        model_path:
+            Model dosyasının yolu.
+
+        confidence:
+            Minimum güven değeri.
+            Örneğin 0.35, yüzde 35 güven anlamına gelir.
+
+        device:
+            None     -> Ultralytics otomatik seçer
+            "cpu"    -> İşlemci kullanır
+            "cuda:0" -> Ekran kartı kullanır
+        """
+
+        # Model yolu verilmediyse varsayılan modeli kullan.
+        if model_path is None:
+            detector_folder = os.path.dirname(__file__)
+            project_folder = os.path.dirname(detector_folder)
+
+            model_path = os.path.join(
+                project_folder,
+                "models",
+                "carla_yolov8n_best.pt",
+            )
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                f"YOLO modeli bulunamadı: {model_path}"
+            )
+
+        self.confidence = confidence
+        self.device = device
+
+        # Model program başlarken yalnızca bir kez yüklenir.
+        self.model = YOLO(model_path)
+
+        print("[VehicleDetector] YOLO modeli yüklendi.")
+        print("[VehicleDetector] Algılanacak sınıflar:")
+        print("  0 -> bike")
+        print("  1 -> motobike")
+        print("  9 -> vehicle")
+
+    def detect(self, rgb_image):
+        """
+        Verilen RGB görüntüsünde araç, bisiklet ve motosiklet algılar.
+
+        Parametre:
+            rgb_image:
+                Kameradan gelen NumPy RGB görüntüsü.
+
+        Dönen değer:
+            Algılanan nesnelerin bulunduğu liste.
+
+        Örnek:
+
+            [
+                {
+                    "class_id": 9,
+                    "class_name": "vehicle",
+                    "confidence": 0.92,
+                    "bbox": {
+                        "x1": 100,
+                        "y1": 150,
+                        "x2": 300,
+                        "y2": 400
+                    },
+                    "center_x": 200,
+                    "center_y": 275,
+                    "width": 200,
+                    "height": 250
+                }
+            ]
+        """
+
+        if rgb_image is None:
+            return []
+
+        if not isinstance(rgb_image, np.ndarray):
+            raise TypeError(
+                "rgb_image bir NumPy dizisi olmalıdır."
+            )
+
+        if rgb_image.ndim != 3 or rgb_image.shape[2] != 3:
+            raise ValueError(
+                "Görüntü 3 kanallı olmalıdır: (height, width, 3)"
+            )
+
+        # Kameradan gelen görüntü RGB.
+        # Ultralytics NumPy görüntüsünü BGR formatında bekler.
+        bgr_image = rgb_image[:, :, ::-1]
+
+        # YOLO tahmin ayarları
+        predict_options = {
+            "source": bgr_image,
+            "conf": self.confidence,
+            "classes": self.TARGET_CLASS_IDS,
+            "verbose": False,
         }
 
-        if not self.model_path.exists():
-            raise FileNotFoundError(
-                f"Model bulunamadı: {self.model_path}"
-            )
+        # Device verilmişse ayarlara ekle.
+        if self.device is not None:
+            predict_options["device"] = self.device
 
-        self.output_image.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+        results = self.model.predict(**predict_options)
 
-        self.model = YOLO(
-            str(self.model_path)
-        )
+        detections = []
 
-    def find_latest_rgb_frame(self):
-        rgb_files = list(
-            self.data_folder.glob(
-                "run_*/sensors/rgb_camera/*.npy"
-            )
-        )
-
-        if not rgb_files:
-            raise FileNotFoundError(
-                "Kaydedilmiş RGB kamera görüntüsü bulunamadı.\n"
-                "Önce CARLA serverını açıp "
-                "'python main.py' çalıştır."
-            )
-
-        latest_file = max(
-            rgb_files,
-            key=lambda file_path: file_path.stat().st_mtime,
-        )
-
-        return latest_file
-
-    def load_rgb_image(self, image_path):
-        """
-        Kaydedilmiş NumPy kamera görüntüsünü yükler.
-        """
-
-        image = np.load(
-            image_path,
-            allow_pickle=False,
-        )
-
-        if image.ndim != 3 or image.shape[2] != 3:
-            raise ValueError(
-                f"Görüntü formatı hatalı: {image.shape}\n"
-                "Beklenen format: yükseklik x genişlik x 3"
-            )
-
-        return image
-
-    def detect_vehicles(self, image):
-        """
-        YOLO modelini çalıştırır ve yalnızca araçları döndürür.
-        """
-
-        results = self.model.predict(
-            source=image,
-            conf=self.min_confidence,
-            verbose=False,
-        )
-
+        # İlk görüntünün sonucunu al.
         result = results[0]
-        detected_vehicles = []
 
         if result.boxes is None:
-            return detected_vehicles, result
+            return detections
 
+        # Bulunan her nesneyi işle.
         for box in result.boxes:
-            class_id = int(
-                box.cls[0].item()
-            )
+            class_id = int(box.cls[0].item())
+            confidence = float(box.conf[0].item())
 
-            class_name = str(
-                result.names[class_id]
-            ).lower()
+            # Bounding box koordinatlarını al.
+            x1, y1, x2, y2 = box.xyxy[0].cpu().tolist()
 
-            if class_name not in self.vehicle_class_names:
-                continue
-
-            confidence = float(
-                box.conf[0].item()
-            )
-
-            x1, y1, x2, y2 = [
-                int(value)
-                for value in box.xyxy[0].tolist()
-            ]
+            x1 = int(x1)
+            y1 = int(y1)
+            x2 = int(x2)
+            y2 = int(y2)
 
             width = x2 - x1
             height = y2 - y1
-            area = width * height
 
-            vehicle = {
+            center_x = x1 + width // 2
+            center_y = y1 + height // 2
+
+            detection = {
                 "class_id": class_id,
-                "class_name": class_name,
+                "class_name": self.CLASS_NAMES[class_id],
                 "confidence": confidence,
                 "bbox": {
                     "x1": x1,
@@ -142,88 +172,12 @@ class VehicleDetector:
                     "x2": x2,
                     "y2": y2,
                 },
-                "area_pixels": area,
+                "center_x": center_x,
+                "center_y": center_y,
+                "width": width,
+                "height": height,
             }
 
-            detected_vehicles.append(vehicle)
+            detections.append(detection)
 
-        detected_vehicles.sort(
-            key=lambda vehicle: vehicle["area_pixels"],
-            reverse=True,
-        )
-
-        return detected_vehicles, result
-    
-def main():
-    try:
-        # VehicleDetector sınıfından bir nesne oluştur.
-        detector = VehicleDetector()
-
-        print("[INFO] Son RGB kamera görüntüsü aranıyor...")
-
-        # En son kaydedilen RGB görüntüsünü bul.
-        image_path = detector.find_latest_rgb_frame()
-
-        print(f"[OK] Görüntü bulundu: {image_path}")
-
-        # NumPy görüntüsünü yükle.
-        image = detector.load_rgb_image(image_path)
-
-        print(f"[INFO] Görüntü boyutu: {image.shape}")
-
-        # Görüntüdeki araçları tespit et.
-        detected_vehicles, result = detector.detect_vehicles(
-            image=image
-        )
-
-        if not detected_vehicles:
-            print("[INFO] Görüntüde araç tespit edilmedi.")
-
-        else:
-            print(
-                f"[OK] Toplam {len(detected_vehicles)} araç tespit edildi."
-            )
-
-            for index, vehicle in enumerate(
-                detected_vehicles,
-                start=1,
-            ):
-                bbox = vehicle["bbox"]
-
-                print()
-                print(f"Araç {index}")
-                print(
-                    f"  Sınıf ID: {vehicle['class_id']}"
-                )
-                print(
-                    f"  Sınıf adı: {vehicle['class_name']}"
-                )
-                print(
-                    f"  Güven: %{vehicle['confidence'] * 100:.2f}"
-                )
-                print(
-                    "  Kutu: "
-                    f"({bbox['x1']}, {bbox['y1']}) - "
-                    f"({bbox['x2']}, {bbox['y2']})"
-                )
-                print(
-                    f"  Alan: {vehicle['area_pixels']} piksel"
-                )
-
-        # Modelin çizdiği kutulu görüntüyü kaydet.
-        result.save(
-            filename=str(detector.output_image)
-        )
-
-        print()
-        print(
-            f"[OK] Sonuç görüntüsü kaydedildi: "
-            f"{detector.output_image}"
-        )
-
-    except Exception as error:
-        print(f"[ERROR] {error}")
-
-
-if __name__ == "__main__":
-    main()
+        return detections

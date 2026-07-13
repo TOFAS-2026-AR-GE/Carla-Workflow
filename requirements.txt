@@ -2,3 +2,4 @@ python-dotenv
 carla
 numpy
 PyYAML
+ultralytics

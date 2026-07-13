@@ -7,7 +7,7 @@ simulation:
 
 traffic:
   tm_port: 8000
-  npc_count: 20
+  npc_count: 40
   safe_distance_m: 3.0
   speed_difference_percent: 0.0
 

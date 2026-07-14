@@ -63,12 +63,12 @@ class CarlaApplication:
                     and frame_id % self.settings.perception_every_n_frames == 0
                 ):
                     worker.submit(frame_id, rgb_image)
-
+                """
                 sensors.save_if_needed(
                     frame_id,
                     serializable_vehicle_state(state, control),
                 )
-
+                """
                 if not viewer.show(worker.get_latest(), rgb_image, frame_id):
                     break
 

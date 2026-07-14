@@ -1,0 +1,12 @@
+name: traffic_world
+map: Town03
+
+simulation:
+  synchronous_mode: true
+  fixed_delta_seconds: 0.05
+
+traffic:
+  tm_port: 8000
+  npc_count: 40
+  safe_distance_m: 3.0
+  speed_difference_percent: 0.0

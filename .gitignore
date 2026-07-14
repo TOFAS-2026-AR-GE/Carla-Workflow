@@ -2,5 +2,3 @@ __pycache__/
 *.pyc
 .env.local
 data/runs/
-models/vehicle/*.pt
-models/signs/*.onnx

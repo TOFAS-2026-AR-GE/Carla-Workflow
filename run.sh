@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
-set -e
-export CUDA_VISIBLE_DEVICES=""
-python main.py
+
+set -euo pipefail
+
+unset CUDA_VISIBLE_DEVICES
+
+exec python -u main.py

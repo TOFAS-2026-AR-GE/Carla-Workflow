@@ -1,4 +1,5 @@
 __pycache__/
 *.pyc
+.ruff_cache/
 .env.local
 data/runs/

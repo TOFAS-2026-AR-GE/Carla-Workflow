@@ -15,9 +15,7 @@ def image_to_rgb(image):
         4,
     )
 
-    return np.ascontiguousarray(
-        array[:, :, :3][:, :, ::-1]
-    )
+    return np.ascontiguousarray(array[:, :, :3][:, :, ::-1])
 
 
 def lidar_to_array(lidar):
@@ -59,15 +57,9 @@ def radar_to_list(radar):
     return [
         {
             "depth_m": float(point.depth),
-            "relative_velocity_mps": float(
-                point.velocity
-            ),
-            "azimuth_deg": math.degrees(
-                float(point.azimuth)
-            ),
-            "altitude_deg": math.degrees(
-                float(point.altitude)
-            ),
+            "relative_velocity_mps": float(point.velocity),
+            "azimuth_deg": math.degrees(float(point.azimuth)),
+            "altitude_deg": math.degrees(float(point.altitude)),
         }
         for point in radar
     ]
@@ -80,10 +72,7 @@ def ultrasonic_to_dict(
     nearest = None
 
     for point in measurement:
-        if (
-            nearest is None
-            or point.depth < nearest.depth
-        ):
+        if nearest is None or point.depth < nearest.depth:
             nearest = point
 
     if nearest is None:
@@ -98,15 +87,9 @@ def ultrasonic_to_dict(
     return {
         "detected": True,
         "distance_m": float(nearest.depth),
-        "relative_velocity_mps": float(
-            nearest.velocity
-        ),
-        "azimuth_deg": math.degrees(
-            float(nearest.azimuth)
-        ),
-        "altitude_deg": math.degrees(
-            float(nearest.altitude)
-        ),
+        "relative_velocity_mps": float(nearest.velocity),
+        "azimuth_deg": math.degrees(float(nearest.azimuth)),
+        "altitude_deg": math.degrees(float(nearest.altitude)),
     }
 
 
@@ -114,19 +97,9 @@ def process_packet(
     packet,
     layout,
 ):
-    cameras = {
-        spec.name: image_to_rgb(
-            packet[spec.name]
-        )
-        for spec in layout.cameras
-    }
+    cameras = {spec.name: image_to_rgb(packet[spec.name]) for spec in layout.cameras}
 
-    radars = {
-        spec.name: radar_to_list(
-            packet[spec.name]
-        )
-        for spec in layout.radars
-    }
+    radars = {spec.name: radar_to_list(packet[spec.name]) for spec in layout.radars}
 
     ultrasonics = {
         spec.name: ultrasonic_to_dict(
@@ -142,19 +115,11 @@ def process_packet(
     }
 
     return {
-        "primary_camera": (
-            layout.primary_camera_name
-        ),
+        "primary_camera": (layout.primary_camera_name),
         "cameras": cameras,
-        "lidar": lidar_to_array(
-            packet[layout.lidar.name]
-        ),
-        "gnss": gnss_to_dict(
-            packet[layout.gnss.name]
-        ),
-        "imu": imu_to_dict(
-            packet[layout.imu.name]
-        ),
+        "lidar": lidar_to_array(packet[layout.lidar.name]),
+        "gnss": gnss_to_dict(packet[layout.gnss.name]),
+        "imu": imu_to_dict(packet[layout.imu.name]),
         "radars": radars,
         "ultrasonics": ultrasonics,
     }

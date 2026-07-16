@@ -22,14 +22,10 @@ def build_reference_path(
         if not next_waypoints:
             break
 
-        current_yaw = math.radians(
-            current_waypoint.transform.rotation.yaw
-        )
+        current_yaw = math.radians(current_waypoint.transform.rotation.yaw)
 
         def heading_difference(waypoint):
-            candidate_yaw = math.radians(
-                waypoint.transform.rotation.yaw
-            )
+            candidate_yaw = math.radians(waypoint.transform.rotation.yaw)
             difference = candidate_yaw - current_yaw
 
             return abs(
@@ -44,9 +40,7 @@ def build_reference_path(
             key=heading_difference,
         )
 
-        reference_path.append(
-            current_waypoint.transform.location
-        )
+        reference_path.append(current_waypoint.transform.location)
 
     return reference_path
 
@@ -59,16 +53,10 @@ def read_vehicle_state(
     transform = vehicle.get_transform()
     velocity = vehicle.get_velocity()
 
-    speed_mps = math.sqrt(
-        velocity.x**2
-        + velocity.y**2
-        + velocity.z**2
-    )
+    speed_mps = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
 
     if route_manager is not None:
-        waypoint, reference_path = route_manager.update(
-            transform.location
-        )
+        waypoint, reference_path = route_manager.update(transform.location)
     else:
         waypoint = world.get_map().get_waypoint(
             transform.location,
@@ -77,24 +65,14 @@ def read_vehicle_state(
         )
 
         if waypoint is None:
-            raise RuntimeError(
-                "Arac icin surus seridi bulunamadi."
-            )
+            raise RuntimeError("Arac icin surus seridi bulunamadi.")
 
-        reference_path = build_reference_path(
-            waypoint
-        )
+        reference_path = build_reference_path(waypoint)
 
     if waypoint is None:
-        raise RuntimeError(
-            "Kalici rota uzerinde waypoint bulunamadi."
-        )
+        raise RuntimeError("Kalici rota uzerinde waypoint bulunamadi.")
 
-    next_location = (
-        reference_path[0]
-        if reference_path
-        else None
-    )
+    next_location = reference_path[0] if reference_path else None
 
     return {
         "location": transform.location,

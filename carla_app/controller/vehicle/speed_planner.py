@@ -18,42 +18,27 @@ class CurvatureSpeedPlanner:
         self.dt = float(dt)
 
         self.cruise_speed_mps = 30.0 / 3.6
-        self.minimum_curve_speed_mps = (
-            10.0 / 3.6
-        )
+        self.minimum_curve_speed_mps = 10.0 / 3.6
 
         # Konforlu yanal ivme.
-        self.maximum_lateral_acceleration_mps2 = (
-            1.8
-        )
+        self.maximum_lateral_acceleration_mps2 = 1.8
 
         self.maximum_speed_increase_mps2 = 1.0
         self.maximum_speed_decrease_mps2 = 3.0
 
-        self.previous_target_speed = (
-            self.cruise_speed_mps
-        )
+        self.previous_target_speed = self.cruise_speed_mps
 
     def run_step(
         self,
         state,
         lateral_info=None,
     ):
-        curvature = (
-            self._estimate_preview_curvature(
-                state["reference_path"]
-            )
-        )
+        curvature = self._estimate_preview_curvature(state["reference_path"])
 
         if curvature < 1e-4:
-            curve_speed = (
-                self.cruise_speed_mps
-            )
+            curve_speed = self.cruise_speed_mps
         else:
-            curve_speed = math.sqrt(
-                self.maximum_lateral_acceleration_mps2
-                / curvature
-            )
+            curve_speed = math.sqrt(self.maximum_lateral_acceleration_mps2 / curvature)
 
         desired_speed = clamp(
             curve_speed,
@@ -61,11 +46,9 @@ class CurvatureSpeedPlanner:
             self.cruise_speed_mps,
         )
 
-        recovery_speed = (
-            self._lane_recovery_speed(
-                state,
-                lateral_info,
-            )
+        recovery_speed = self._lane_recovery_speed(
+            state,
+            lateral_info,
         )
 
         if recovery_speed is not None:
@@ -74,26 +57,14 @@ class CurvatureSpeedPlanner:
                 recovery_speed,
             )
 
-        target_speed = (
-            self._limit_speed_change(
-                desired_speed
-            )
-        )
+        target_speed = self._limit_speed_change(desired_speed)
 
-        self.previous_target_speed = (
-            target_speed
-        )
+        self.previous_target_speed = target_speed
 
         return target_speed, {
-            "curvature_1pm": float(
-                curvature
-            ),
-            "curve_speed_mps": float(
-                curve_speed
-            ),
-            "recovery_speed_mps": (
-                recovery_speed
-            ),
+            "curvature_1pm": float(curvature),
+            "curve_speed_mps": float(curve_speed),
+            "recovery_speed_mps": (recovery_speed),
         }
 
     def _lane_recovery_speed(
@@ -109,47 +80,21 @@ class CurvatureSpeedPlanner:
             2.5,
         )
 
-        lateral_error = abs(
-            float(
-                lateral_info[
-                    "cross_track_error_m"
-                ]
-            )
-        )
+        lateral_error = abs(float(lateral_info["cross_track_error_m"]))
 
-        heading_error = abs(
-            float(
-                lateral_info[
-                    "heading_error_rad"
-                ]
-            )
-        )
+        heading_error = abs(float(lateral_info["heading_error_rad"]))
 
-        lane_fraction = (
-            lateral_error / lane_width
-        )
+        lane_fraction = lateral_error / lane_width
 
         # Arac ciddi sekilde seritten ciktiysa
         # direksiyon kontrolcusu toparlayana kadar yavasla.
-        if (
-            lane_fraction >= 0.55
-            or heading_error
-            >= math.radians(30.0)
-        ):
+        if lane_fraction >= 0.55 or heading_error >= math.radians(30.0):
             return 8.0 / 3.6
 
-        if (
-            lane_fraction >= 0.40
-            or heading_error
-            >= math.radians(20.0)
-        ):
+        if lane_fraction >= 0.40 or heading_error >= math.radians(20.0):
             return 12.0 / 3.6
 
-        if (
-            lane_fraction >= 0.30
-            or heading_error
-            >= math.radians(12.0)
-        ):
+        if lane_fraction >= 0.30 or heading_error >= math.radians(12.0):
             return 18.0 / 3.6
 
         return None
@@ -196,8 +141,7 @@ class CurvatureSpeedPlanner:
 
         for index in range(len(curvatures)):
             window = curvatures[
-                max(0, index - 1)
-                : min(
+                max(0, index - 1) : min(
                     len(curvatures),
                     index + 2,
                 )
@@ -205,20 +149,13 @@ class CurvatureSpeedPlanner:
 
             ordered = sorted(window)
 
-            filtered.append(
-                ordered[len(ordered) // 2]
-            )
+            filtered.append(ordered[len(ordered) // 2])
 
         # Tek bir maximum outlier yerine
         # ust yuzdelik kullan.
         filtered.sort()
 
-        percentile_index = int(
-            round(
-                0.85
-                * (len(filtered) - 1)
-            )
-        )
+        percentile_index = int(round(0.85 * (len(filtered) - 1)))
 
         return filtered[percentile_index]
 
@@ -241,47 +178,27 @@ class CurvatureSpeedPlanner:
             last.y - first.y,
         )
 
-        denominator = (
-            side_a
-            * side_b
-            * side_c
-        )
+        denominator = side_a * side_b * side_c
 
         if denominator < 1e-6:
             return 0.0
 
-        twice_area = (
-            (middle.x - first.x)
-            * (last.y - first.y)
-            - (middle.y - first.y)
-            * (last.x - first.x)
-        )
+        twice_area = (middle.x - first.x) * (last.y - first.y) - (
+            middle.y - first.y
+        ) * (last.x - first.x)
 
-        return (
-            2.0
-            * twice_area
-            / denominator
-        )
+        return 2.0 * twice_area / denominator
 
     def _limit_speed_change(
         self,
         desired_speed,
     ):
-        difference = (
-            desired_speed
-            - self.previous_target_speed
-        )
+        difference = desired_speed - self.previous_target_speed
 
         if difference >= 0.0:
-            maximum_change = (
-                self.maximum_speed_increase_mps2
-                * self.dt
-            )
+            maximum_change = self.maximum_speed_increase_mps2 * self.dt
         else:
-            maximum_change = (
-                self.maximum_speed_decrease_mps2
-                * self.dt
-            )
+            maximum_change = self.maximum_speed_decrease_mps2 * self.dt
 
         difference = clamp(
             difference,
@@ -289,7 +206,4 @@ class CurvatureSpeedPlanner:
             maximum_change,
         )
 
-        return (
-            self.previous_target_speed
-            + difference
-        )
+        return self.previous_target_speed + difference

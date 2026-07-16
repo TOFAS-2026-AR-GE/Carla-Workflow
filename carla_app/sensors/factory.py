@@ -23,11 +23,7 @@ def _spawn_actor(
     vehicle,
     spec: SensorSpec,
 ):
-    blueprint = (
-        world
-        .get_blueprint_library()
-        .find(spec.blueprint_id)
-    )
+    blueprint = world.get_blueprint_library().find(spec.blueprint_id)
 
     _set_supported_attributes(
         blueprint,
@@ -58,11 +54,8 @@ def _listen(
     if spec.kind == "camera":
 
         def camera_callback(image):
-            sync.push(
-                spec.name,
-                image.frame,
-                image,
-            )
+            if sync is not None:
+                sync.push(spec.name, image.frame, image)
 
             if spec.primary:
                 camera_stream.push(
@@ -76,7 +69,8 @@ def _listen(
     if spec.kind == "radar":
 
         def radar_callback(data, sensor_name=spec.name):
-            sync.push(sensor_name, data.frame, data)
+            if sync is not None:
+                sync.push(sensor_name, data.frame, data)
             radar_stream.push(
                 sensor_name,
                 data.frame,
@@ -86,13 +80,14 @@ def _listen(
         actor.listen(radar_callback)
         return
 
-    actor.listen(
-        lambda data, sensor_name=spec.name: sync.push(
-            sensor_name,
-            data.frame,
-            data,
+    if sync is not None:
+        actor.listen(
+            lambda data, sensor_name=spec.name: sync.push(
+                sensor_name,
+                data.frame,
+                data,
+            )
         )
-    )
 
 
 def spawn_layout(
@@ -102,11 +97,14 @@ def spawn_layout(
     sync,
     camera_stream,
     radar_stream,
+    specs=None,
 ) -> List[object]:
     actors = []
 
     try:
-        for spec in layout.all_specs:
+        active_specs = layout.all_specs if specs is None else tuple(specs)
+
+        for spec in active_specs:
             actor = _spawn_actor(
                 world,
                 vehicle,

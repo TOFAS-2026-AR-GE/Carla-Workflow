@@ -35,20 +35,21 @@ class CameraStream:
         with self.condition:
             self.frames.clear()
 
+
 class RadarStream:
     def __init__(self):
         self.lock = threading.Lock()
         self.latest = {}
-        
+
     def push(self, sensor_name, frame_id, points):
         with self.lock:
             self.latest[sensor_name] = (int(frame_id), points)
-    
+
     def get_latest(self, sensor_name):
         with self.lock:
             entry = self.latest.get(sensor_name)
             return entry if entry is not None else (None, [])
-    
+
     def clear(self):
         with self.lock:
             self.latest.clear()

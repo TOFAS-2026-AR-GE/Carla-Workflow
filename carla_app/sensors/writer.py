@@ -11,36 +11,22 @@ class DatasetWriter:
         self,
         output_folder: Path,
     ):
-        run_name = datetime.now().strftime(
-            "run_%Y%m%d_%H%M%S"
-        )
+        run_name = datetime.now().strftime("run_%Y%m%d_%H%M%S")
 
-        self.run_folder = (
-            output_folder / run_name
-        )
+        self.run_folder = output_folder / run_name
 
         # Ana algılama kamerası geriye uyumluluk için
         # mevcut rgb/ klasöründe tutulur.
-        self.rgb_folder = (
-            self.run_folder / "rgb"
-        )
+        self.rgb_folder = self.run_folder / "rgb"
 
         # Diğer altı kamera burada tutulur.
-        self.cameras_folder = (
-            self.run_folder / "cameras"
-        )
+        self.cameras_folder = self.run_folder / "cameras"
 
-        self.lidar_folder = (
-            self.run_folder / "lidar"
-        )
+        self.lidar_folder = self.run_folder / "lidar"
 
-        self.meta_folder = (
-            self.run_folder / "metadata"
-        )
+        self.meta_folder = self.run_folder / "metadata"
 
-        self.calibration_folder = (
-            self.run_folder / "calibration"
-        )
+        self.calibration_folder = self.run_folder / "calibration"
 
         self.primary_camera = None
 
@@ -56,23 +42,15 @@ class DatasetWriter:
                 exist_ok=True,
             )
 
-        print(
-            f"[OK] Veri klasoru: "
-            f"{self.run_folder}"
-        )
+        print(f"[OK] Veri klasoru: {self.run_folder}")
 
     def write_manifest(
         self,
         manifest,
     ):
-        self.primary_camera = (
-            manifest["primary_camera"]
-        )
+        self.primary_camera = manifest["primary_camera"]
 
-        manifest_path = (
-            self.calibration_folder
-            / "sensor_manifest.json"
-        )
+        manifest_path = self.calibration_folder / "sensor_manifest.json"
 
         with manifest_path.open(
             "w",
@@ -85,10 +63,7 @@ class DatasetWriter:
                 ensure_ascii=False,
             )
 
-        print(
-            f"[OK] Sensor manifesti: "
-            f"{manifest_path}"
-        )
+        print(f"[OK] Sensor manifesti: {manifest_path}")
 
     @staticmethod
     def _write_rgb(
@@ -106,9 +81,7 @@ class DatasetWriter:
         )
 
         if not written:
-            raise IOError(
-                f"Goruntu yazilamadi: {path}"
-            )
+            raise IOError(f"Goruntu yazilamadi: {path}")
 
     def save(
         self,
@@ -118,51 +91,31 @@ class DatasetWriter:
     ):
         name = f"{int(frame_id):08d}"
 
-        primary_camera = (
-            sensor_data["primary_camera"]
-        )
+        primary_camera = sensor_data["primary_camera"]
 
         camera_files = {}
 
-        for camera_name, rgb_image in (
-            sensor_data["cameras"].items()
-        ):
+        for camera_name, rgb_image in sensor_data["cameras"].items():
             if camera_name == primary_camera:
-                path = (
-                    self.rgb_folder
-                    / f"{name}.png"
-                )
+                path = self.rgb_folder / f"{name}.png"
             else:
-                camera_folder = (
-                    self.cameras_folder
-                    / camera_name
-                )
+                camera_folder = self.cameras_folder / camera_name
 
                 camera_folder.mkdir(
                     parents=True,
                     exist_ok=True,
                 )
 
-                path = (
-                    camera_folder
-                    / f"{name}.png"
-                )
+                path = camera_folder / f"{name}.png"
 
             self._write_rgb(
                 path,
                 rgb_image,
             )
 
-            camera_files[camera_name] = str(
-                path.relative_to(
-                    self.run_folder
-                )
-            )
+            camera_files[camera_name] = str(path.relative_to(self.run_folder))
 
-        lidar_path = (
-            self.lidar_folder
-            / f"{name}.npy"
-        )
+        lidar_path = self.lidar_folder / f"{name}.npy"
 
         np.save(
             lidar_path,
@@ -174,25 +127,16 @@ class DatasetWriter:
             "primary_camera": primary_camera,
             "files": {
                 "cameras": camera_files,
-                "lidar": str(
-                    lidar_path.relative_to(
-                        self.run_folder
-                    )
-                ),
+                "lidar": str(lidar_path.relative_to(self.run_folder)),
             },
             "vehicle": vehicle_data,
             "gnss": sensor_data["gnss"],
             "imu": sensor_data["imu"],
             "radars": sensor_data["radars"],
-            "ultrasonics": (
-                sensor_data["ultrasonics"]
-            ),
+            "ultrasonics": (sensor_data["ultrasonics"]),
         }
 
-        metadata_path = (
-            self.meta_folder
-            / f"{name}.json"
-        )
+        metadata_path = self.meta_folder / f"{name}.json"
 
         with metadata_path.open(
             "w",

@@ -51,8 +51,8 @@ class Axis1DKalman:
         self.p_pv = 0.0
         self.p_vv = 8.0
 
-        self.q = process_noise        # model ne kadar "kararsiz" (surec gurultusu)
-        self.r = measurement_noise    # sensor ne kadar gurultulu (olcum gurultusu)
+        self.q = process_noise  # model ne kadar "kararsiz" (surec gurultusu)
+        self.r = measurement_noise  # sensor ne kadar gurultulu (olcum gurultusu)
 
     def predict(self, dt):
         # 1) Pozisyonu hiza gore ilerlet, hiz sabit kalir.
@@ -97,17 +97,18 @@ class Track:
     Axis1DKalman calisir (birbirinden bagimsiz).
     """
 
-    def __init__(self, track_id, x, y, class_name,
-                 process_noise=1.0, measurement_noise=1.5):
+    def __init__(
+        self, track_id, x, y, class_name, process_noise=1.0, measurement_noise=1.5
+    ):
         self.id = track_id
         self.class_name = class_name
 
         self.kx = Axis1DKalman(x, process_noise, measurement_noise)
         self.ky = Axis1DKalman(y, process_noise, measurement_noise)
 
-        self.hit_count = 1       # kac kere gercek olcumle eslesti
-        self.miss_count = 0      # ust uste kac kere eslesmedi
-        self.confirmed = False   # yeterince eslesince "guvenilir" sayilir
+        self.hit_count = 1  # kac kere gercek olcumle eslesti
+        self.miss_count = 0  # ust uste kac kere eslesmedi
+        self.confirmed = False  # yeterince eslesince "guvenilir" sayilir
 
         # Debug/log icin son ham olcum.
         self.last_range_m = None
@@ -146,23 +147,14 @@ class Track:
     def vy(self):
         return self.ky.vel
 
-    @property
-    def speed_mps(self):
-        return math.hypot(self.vx, self.vy)
-
-    def predicted_position(self, seconds_ahead):
-        """MPC'nin soracagi soru: 'bu arac X saniye sonra nerede olur?'"""
-        return (self.x + self.vx * seconds_ahead,
-                self.y + self.vy * seconds_ahead)
-
 
 def polar_to_world(range_m, bearing_deg, ego_x, ego_y, ego_yaw_deg):
     """Ego-goreli (mesafe, aci) olcumunu dunya koordinatina (x,y) cevirir."""
     bearing_rad = math.radians(bearing_deg)
     yaw_rad = math.radians(ego_yaw_deg)
 
-    x_local = range_m * math.cos(bearing_rad)   # ego'ya gore ileri
-    y_local = range_m * math.sin(bearing_rad)   # ego'ya gore sag
+    x_local = range_m * math.cos(bearing_rad)  # ego'ya gore ileri
+    y_local = range_m * math.sin(bearing_rad)  # ego'ya gore sag
 
     world_x = ego_x + x_local * math.cos(yaw_rad) - y_local * math.sin(yaw_rad)
     world_y = ego_y + x_local * math.sin(yaw_rad) + y_local * math.cos(yaw_rad)
@@ -179,8 +171,8 @@ class Tracker:
     def __init__(self, gate_distance_m=5.0, max_misses=5):
         self.tracks = []
         self._next_id = 1
-        self.gate_distance_m = gate_distance_m   # eslesme icin izin verilen max mesafe
-        self.max_misses = max_misses             # bu kadar kayiptan sonra track silinir
+        self.gate_distance_m = gate_distance_m  # eslesme icin izin verilen max mesafe
+        self.max_misses = max_misses  # bu kadar kayiptan sonra track silinir
 
     def step(self, dt, measurements):
         """
@@ -235,6 +227,3 @@ class Tracker:
         # 5) Cok uzun suredir eslesmeyenleri temizle.
         self.tracks = [t for t in self.tracks if t.miss_count <= self.max_misses]
         return self.tracks
-
-    def confirmed_tracks(self):
-        return [t for t in self.tracks if t.confirmed]

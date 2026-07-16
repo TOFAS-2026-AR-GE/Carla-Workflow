@@ -1,6 +1,5 @@
 import carla
 
-
 FOLLOW_DISTANCE = 6.0
 FOLLOW_HEIGHT = 2.5
 FOLLOW_PITCH = -10.0

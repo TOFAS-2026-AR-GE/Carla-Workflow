@@ -1,73 +1,44 @@
-from carla_app.sensors.factory import (
-    spawn_layout,
-)
-from carla_app.sensors.layout import (
-    build_sensor_layout,
-)
-from carla_app.sensors.processors import (
-    process_packet,
-)
-from carla_app.sensors.stream import (
-    CameraStream,
-    RadarStream,
-)
-from carla_app.sensors.sync import (
-    SensorSync,
-)
-from carla_app.sensors.writer import (
-    DatasetWriter,
-)
+"""Sensor lifecycle and access for the application."""
+
+from carla_app.sensors.factory import spawn_layout
+from carla_app.sensors.layout import build_sensor_layout
+from carla_app.sensors.processors import process_packet
+from carla_app.sensors.stream import CameraStream, RadarStream
+from carla_app.sensors.sync import SensorSync
+from carla_app.sensors.writer import DatasetWriter
 
 
 class SensorManager:
-    def __init__(
-        self,
-        settings,
-    ):
+    """Run a minimal control sensor set unless dataset recording is enabled."""
+
+    def __init__(self, settings):
         self.settings = settings
-
-        # Araç bounding-box bilgisi start() sırasında
-        # mevcut olduğu için sync ve layout daha sonra
-        # oluşturuluyor.
-        self.sync = None
+        self.recording_enabled = bool(settings.enable_data_recording)
         self.layout = None
-
-        self.camera_stream = CameraStream(
-            max_frames=12
-        )
-        self.radar_stream = RadarStream()
-
-        self.writer = DatasetWriter(
-            settings.output_folder
-        )
-
+        self.sync = None
+        self.writer = None
         self.actors = []
 
-    def start(
-        self,
-        world,
-        vehicle,
-    ):
+        self.camera_stream = CameraStream(max_frames=4)
+        self.radar_stream = RadarStream()
+
+        if self.recording_enabled:
+            self.writer = DatasetWriter(settings.output_folder)
+
+    def start(self, world, vehicle):
         self.layout = build_sensor_layout(
             vehicle=vehicle,
-            camera_width=(
-                self.settings.camera_width
-            ),
-            camera_height=(
-                self.settings.camera_height
-            ),
-            front_wide_fov=(
-                self.settings.camera_fov
-            ),
-            fixed_delta_seconds=(
-                self.settings.fixed_delta_seconds
-            ),
+            camera_width=self.settings.camera_width,
+            camera_height=self.settings.camera_height,
+            front_wide_fov=self.settings.camera_fov,
+            fixed_delta_seconds=self.settings.fixed_delta_seconds,
         )
 
-        self.sync = SensorSync(
-            self.layout.sensor_names,
-            max_frames=30,
-        )
+        if self.recording_enabled:
+            active_specs = self.layout.all_specs
+            self.sync = SensorSync(self.layout.sensor_names, max_frames=8)
+        else:
+            active_specs = self.layout.control_specs
 
         self.actors = spawn_layout(
             world=world,
@@ -76,98 +47,40 @@ class SensorManager:
             sync=self.sync,
             camera_stream=self.camera_stream,
             radar_stream=self.radar_stream,
+            specs=active_specs,
         )
 
-        manifest = self.layout.to_manifest(
-            vehicle.type_id
-        )
+        if self.recording_enabled:
+            manifest = self.layout.to_manifest(vehicle.type_id)
+            self.writer.write_manifest(manifest)
+            print(f"[OK] Dataset sensorleri aktif: {len(active_specs)} sensor")
+        else:
+            names = ", ".join(spec.name for spec in active_specs)
+            print(f"[OK] Yalnizca kontrol sensorleri aktif: {names}")
 
-        self.writer.write_manifest(
-            manifest
-        )
+    def get_rgb(self, frame_id):
+        return self.camera_stream.wait(frame_id, timeout=0.5)
 
-        counts = manifest["sensor_count"]
-
-        print(
-            "[OK] Sensor setupi baslatildi: "
-            f"{counts['cameras']} kamera, "
-            f"{counts['automotive_radars']} radar, "
-            f"{counts['lidars']} lidar, "
-            f"{counts['ultrasonics']} ultrasonik, "
-            "GNSS ve IMU."
-        )
-
-        print(
-            "[INFO] Arac boyutlari: "
-            f"L={self.layout.vehicle_geometry['length_m']:.2f} m, "
-            f"W={self.layout.vehicle_geometry['width_m']:.2f} m, "
-            f"H={self.layout.vehicle_geometry['height_m']:.2f} m"
-        )
-
-    def get_rgb(
-        self,
-        frame_id,
-    ):
-        # Mevcut perception sistemi bu metodu
-        # kullanmaya devam eder.
-        # Dönen görüntü camera_front_wide görüntüsüdür.
-        return self.camera_stream.wait(
-            frame_id,
-            timeout=0.5,
-        )
-
-    def get_radar(
-        self,
-        sensor_name="radar_front_long",
-    ):
-        # (frame_id, points) dondurur. Frame beklemeden en
-        # son gelen radar paketini verir; kontrol dongusu
-        # icin dusuk gecikme onemli.
+    def get_radar(self, sensor_name="radar_front_long"):
         return self.radar_stream.get_latest(sensor_name)
 
-    def save_if_needed(
-        self,
-        frame_id,
-        vehicle_data,
-    ):
-        if (
-            frame_id
-            % self.settings.save_every_n_frames
-            != 0
-        ):
+    def save_if_needed(self, frame_id, vehicle_data):
+        if not self.recording_enabled:
             return
-
-        if (
-            self.sync is None
-            or self.layout is None
-        ):
+        if frame_id % self.settings.save_every_n_frames != 0:
+            return
+        if self.sync is None or self.layout is None or self.writer is None:
             raise RuntimeError(
-                "SensorManager.start() cagrilmadan "
-                "veri kaydi yapilamaz."
+                "SensorManager.start() cagrilmadan veri kaydi yapilamaz."
             )
 
-        packet = self.sync.wait(
-            frame_id,
-            timeout=1.5,
-        )
-
+        packet = self.sync.wait(frame_id, timeout=1.5)
         if packet is None:
-            print(
-                "[WARN] Sensor paketi eksik, "
-                f"frame atlandi: {frame_id}"
-            )
+            print(f"[WARN] Sensor paketi eksik; frame atlandi: {frame_id}")
             return
 
-        sensor_data = process_packet(
-            packet,
-            self.layout,
-        )
-
-        self.writer.save(
-            frame_id,
-            sensor_data,
-            vehicle_data,
-        )
+        sensor_data = process_packet(packet, self.layout)
+        self.writer.save(frame_id, sensor_data, vehicle_data)
 
     def stop(self):
         for actor in self.actors:
@@ -175,17 +88,14 @@ class SensorManager:
                 actor.stop()
             except Exception:
                 pass
-
             try:
                 actor.destroy()
             except Exception:
                 pass
 
         self.actors.clear()
-
         if self.sync is not None:
             self.sync.clear()
-
         self.camera_stream.clear()
-
+        self.radar_stream.clear()
         print("[OK] Sensorler kapatildi.")

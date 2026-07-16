@@ -1,3 +1,5 @@
+"""OpenCV perception viewer."""
+
 import cv2
 import numpy as np
 
@@ -5,36 +7,47 @@ import numpy as np
 class PerceptionViewer:
     def __init__(self, window_name="CARLA Perception"):
         self.window_name = window_name
+        self.closed = False
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
     def show(self, result, fallback_image=None, fallback_frame_id=None):
+        if self.closed:
+            return False
+
         if result is None:
             image = fallback_image
-            frame_id = fallback_frame_id
+            result_frame_id = fallback_frame_id
             vehicles = []
             signs = []
+            errors = {}
             elapsed_ms = 0.0
         else:
-            image = result["image"]
-            frame_id = result["frame_id"]
-            vehicles = result["vehicles"]
-            signs = result["signs"]
-            elapsed_ms = result["elapsed_ms"]
+            image = result.get("image", fallback_image)
+            result_frame_id = result.get("frame_id", fallback_frame_id)
+            vehicles = result.get("vehicles", [])
+            signs = result.get("signs", [])
+            errors = result.get("errors", {})
+            elapsed_ms = float(result.get("elapsed_ms", 0.0))
 
         if image is None:
-            return self._read_key()
+            return self._window_is_open() and self._read_key()
 
-        frame = np.ascontiguousarray(image[:, :, ::-1]).copy()
+        frame = np.ascontiguousarray(image[:, :, :3][:, :, ::-1]).copy()
         for detection in vehicles:
             self._draw(frame, detection, (0, 220, 0), "VEH")
         for detection in signs:
             self._draw(frame, detection, (0, 165, 255), "SIGN")
 
+        lag = 0
+        if fallback_frame_id is not None and result_frame_id is not None:
+            lag = max(0, int(fallback_frame_id) - int(result_frame_id))
+
         header = (
-            f"Frame {frame_id} | Vehicles {len(vehicles)} | "
-            f"Signs {len(signs)} | {elapsed_ms:.1f} ms"
+            f"Frame {result_frame_id} | Vehicles {len(vehicles)} | "
+            f"Signs {len(signs)} | Lag {lag} | {elapsed_ms:.1f} ms"
         )
-        cv2.rectangle(frame, (0, 0), (frame.shape[1], 32), (20, 20, 20), -1)
+        header_color = (40, 40, 160) if errors else (20, 20, 20)
+        cv2.rectangle(frame, (0, 0), (frame.shape[1], 32), header_color, -1)
         cv2.putText(
             frame,
             header,
@@ -46,21 +59,53 @@ class PerceptionViewer:
             cv2.LINE_AA,
         )
 
+        if errors:
+            error_text = " | ".join(
+                f"{name}: {message}" for name, message in errors.items()
+            )
+            cv2.rectangle(frame, (0, 32), (frame.shape[1], 62), (20, 20, 180), -1)
+            cv2.putText(
+                frame,
+                error_text[:130],
+                (10, 53),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.48,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
         cv2.imshow(self.window_name, frame)
-        return self._read_key()
+        self.closed = not (self._window_is_open() and self._read_key())
+        return not self.closed
 
     def close(self):
-        cv2.destroyAllWindows()
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            cv2.destroyWindow(self.window_name)
+        except cv2.error:
+            pass
 
-    def _read_key(self):
+    def _window_is_open(self):
+        try:
+            return cv2.getWindowProperty(self.window_name, cv2.WND_PROP_VISIBLE) >= 1
+        except cv2.error:
+            return False
+
+    @staticmethod
+    def _read_key():
         key = cv2.waitKey(1) & 0xFF
         return key not in (27, ord("q"), ord("Q"))
 
     @staticmethod
     def _draw(frame, detection, color, prefix):
-        x1, y1, x2, y2 = detection["bbox"]
-        confidence = detection["confidence"]
-        label = f"{prefix} {detection['class_name']} {confidence:.2f}"
+        x1, y1, x2, y2 = [int(value) for value in detection["bbox"]]
+        confidence = float(detection.get("confidence", 0.0))
+        class_name = str(detection.get("class_name", "unknown"))
+        label = f"{prefix} {class_name} {confidence:.2f}"
+
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         cv2.putText(
             frame,

@@ -1,30 +1,16 @@
+# Controller Improvements
 
-## Araç kontrolcüsü
-Kamera için 2D bbox bilgisi model aracılığı ile 
-Radar için de mesafe hiz , aci : radar_to_list() fonksiyonu
-
-fusion.py de bbox'in acisi hesaplandı radarın da aynı açıdakı noktaları eslendi 
-en yakın noktadan mesafe + medyan hız = göreli hız çıktı
-sonra yolonun gecikmeli çalışması ile radarın anlık çalışması sebebiyle aradaki frame farkını hesaplayıp ona gore extrapole ederek
-zamanı hizalıyoruz
-
-   sonuc: her tespit icin
-   (range_m, bearing_deg, rel_v) -
-   yani GERCEK, METRIK bir olcum
-
- +---------- TAKIP -----------+
-        (tracking.py)
-   Kalman filtresi (x,y ayri ayri):
-   - eslesen olcumu track'e isle
-     (gurultuyu azalt, hiz cikar)
-   - eslesmeyen olcum icin yeni
-     track ac
-   - kayip track'leri predict()
-     ile "fizige gore" ilerlet,
-     cok kayipsa sil
-        |
-   sonuc: guvenilir, surekli,
-   ID'li track'ler - her biri
-   (x, y, vx, vy) biliyor ve
-   "N saniye sonra nerede olur"
-   diye sorulabiliyor
+- Vehicle YOLO sınıfları model metadata'sından doğrulanıyor.
+- GPU kullanılamazsa inference otomatik CPU'ya düşüyor.
+- Levha modeli araç tespitinden ayrıldı; bir modelin hatası diğer sonucu silmiyor.
+- OpenCV penceresinde bbox, inference gecikmesi ve detector hatası gösteriliyor.
+- Pencerenin X düğmesi ana döngüyü gerçekten sonlandırıyor.
+- Normal çalışmada yalnızca ön kamera ve ön radar açılıyor.
+- Kamera-radar range verisinin ikinci kez extrapolate edilmesi kaldırıldı.
+- Radar-only lead seçimine zamansal doğrulama, kısa kayıp toleransı ve komşu
+  şerit reddi eklendi.
+- Uzak lead için dinamik ACC aktivasyonu korunuyor; gereksiz yavaşlama önleniyor.
+- Stanley kontrolüne hata filtresi, daha sağlam eğrilik hesabı ve hız tabanlı
+  direksiyon/rate limitleri eklendi.
+- Kullanılmayan eski MPC ve LaneFollow kontrolcüleri kaldırıldı.
+- Tekrarlanabilir kontrol ve perception birim testleri eklendi.

@@ -75,9 +75,7 @@ class PersistentRouteManager:
         )
 
         if waypoint is None:
-            raise RuntimeError(
-                "Arac icin surus seridi bulunamadi."
-            )
+            raise RuntimeError("Arac icin surus seridi bulunamadi.")
 
         self._waypoints = [waypoint]
         self._extend_route()
@@ -121,8 +119,7 @@ class PersistentRouteManager:
             relative_y = vehicle_location.y - first.y
 
             along_track = (
-                relative_x * segment_x
-                + relative_y * segment_y
+                relative_x * segment_x + relative_y * segment_y
             ) / segment_length
 
             if along_track <= segment_length:
@@ -150,9 +147,7 @@ class PersistentRouteManager:
         candidates,
     ):
         if len(self._waypoints) >= 2:
-            previous_location = (
-                self._waypoints[-2].transform.location
-            )
+            previous_location = self._waypoints[-2].transform.location
             last_location = last.transform.location
 
             previous_heading = math.atan2(
@@ -160,9 +155,7 @@ class PersistentRouteManager:
                 last_location.x - previous_location.x,
             )
         else:
-            previous_heading = math.radians(
-                last.transform.rotation.yaw
-            )
+            previous_heading = math.radians(last.transform.rotation.yaw)
 
         def candidate_score(candidate):
             location = candidate.transform.location
@@ -173,11 +166,7 @@ class PersistentRouteManager:
                 location.x - last_location.x,
             )
 
-            heading_change = abs(
-                normalize_angle(
-                    heading - previous_heading
-                )
-            )
+            heading_change = abs(normalize_angle(heading - previous_heading))
 
             lane_penalty = 0.0
 
@@ -215,10 +204,7 @@ class PersistentRouteManager:
         )
 
     def reference_locations(self):
-        return [
-            waypoint.transform.location
-            for waypoint in self._waypoints
-        ]
+        return [waypoint.transform.location for waypoint in self._waypoints]
 
     def distance_to_route(self, vehicle_location):
         if not self._waypoints:

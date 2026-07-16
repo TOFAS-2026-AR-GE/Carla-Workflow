@@ -3,6 +3,8 @@ import json
 import numpy as np
 from ultralytics import YOLO
 
+from carla_app.perception.device import move_model_to_cpu, resolve_device
+
 
 class TrafficSignDetector:
     def __init__(
@@ -25,19 +27,18 @@ class TrafficSignDetector:
         self.classifier_confidence = classifier_confidence
         self.detector_image_size = detector_image_size
         self.classifier_image_size = classifier_image_size
-        self.device = device
-        print(f"[OK] Trafik levhasi modelleri: {device}")
+        self.device = resolve_device(device)
+        print(f"[OK] Trafik levhasi modelleri: {self.device}")
 
     def detect(self, rgb_image):
         bgr_image = np.ascontiguousarray(rgb_image[:, :, ::-1])
         height, width = bgr_image.shape[:2]
-        result = self.detector.predict(
+        result = self._predict(
+            self.detector,
             source=bgr_image,
             conf=self.detector_confidence,
             iou=self.detector_iou,
             imgsz=self.detector_image_size,
-            device=self.device,
-            verbose=False,
         )[0]
 
         detections = []
@@ -67,11 +68,10 @@ class TrafficSignDetector:
         return detections
 
     def _classify(self, crop):
-        result = self.classifier.predict(
+        result = self._predict(
+            self.classifier,
             source=crop,
             imgsz=self.classifier_image_size,
-            device=self.device,
-            verbose=False,
         )[0]
         if result.probs is None:
             return -1, "unknown", 0.0
@@ -103,3 +103,22 @@ class TrafficSignDetector:
         with open(path, "r", encoding="utf-8") as file:
             data = json.load(file)
         return {int(key): str(value) for key, value in data.items()}
+
+    def _predict(self, model, **arguments):
+        arguments.update(device=self.device, verbose=False)
+
+        try:
+            return model.predict(**arguments)
+        except (RuntimeError, ValueError) as error:
+            if self.device == "cpu":
+                raise
+
+            print(
+                f"[WARN] Sign GPU inference basarisiz ({error}); "
+                "CPU ile yeniden deneniyor."
+            )
+            self.device = "cpu"
+            move_model_to_cpu(self.detector)
+            move_model_to_cpu(self.classifier)
+            arguments["device"] = "cpu"
+            return model.predict(**arguments)

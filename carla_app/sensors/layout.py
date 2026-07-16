@@ -60,6 +60,15 @@ class SensorLayout:
         return [spec.name for spec in self.all_specs]
 
     @property
+    def control_specs(self) -> Tuple[SensorSpec, ...]:
+        """Sensors required by the live controller and perception viewer."""
+        primary_camera = next(camera for camera in self.cameras if camera.primary)
+        front_radar = next(
+            radar for radar in self.radars if radar.name == "radar_front_long"
+        )
+        return primary_camera, front_radar
+
+    @property
     def primary_camera_name(self) -> str:
         for camera in self.cameras:
             if camera.primary:
@@ -334,18 +343,14 @@ def build_sensor_layout(
             "channels": "32",
             "range": "80.0",
             "points_per_second": "560000",
-            "rotation_frequency": (
-                f"{1.0 / fixed_delta_seconds:.3f}"
-            ),
+            "rotation_frequency": (f"{1.0 / fixed_delta_seconds:.3f}"),
             "upper_fov": "10.0",
             "lower_fov": "-25.0",
             "horizontal_fov": "360.0",
             "sensor_tick": "0.0",
             "dropoff_general_rate": "0.10",
         },
-        physical_sensor=(
-            "single 360-degree 32-channel roof LiDAR"
-        ),
+        physical_sensor=("single 360-degree 32-channel roof LiDAR"),
     )
 
     gnss = SensorSpec(
@@ -364,9 +369,7 @@ def build_sensor_layout(
             "noise_alt_stddev": "0.10",
             "noise_seed": "41",
         },
-        physical_sensor=(
-            "multi-band RTK-capable GNSS antenna/receiver"
-        ),
+        physical_sensor=("multi-band RTK-capable GNSS antenna/receiver"),
     )
 
     imu = SensorSpec(
@@ -388,10 +391,7 @@ def build_sensor_layout(
             "noise_gyro_stddev_z": "0.001",
             "noise_seed": "43",
         },
-        physical_sensor=(
-            "automotive six-axis IMU near vehicle center "
-            "of gravity"
-        ),
+        physical_sensor=("automotive six-axis IMU near vehicle center of gravity"),
     )
 
     radars = (
@@ -429,9 +429,7 @@ def build_sensor_layout(
                 sensor_range=70.0,
                 points_per_second=3500,
             ),
-            physical_sensor=(
-                "front-left 77 GHz corner radar"
-            ),
+            physical_sensor=("front-left 77 GHz corner radar"),
         ),
         SensorSpec(
             name="radar_front_right",
@@ -449,9 +447,7 @@ def build_sensor_layout(
                 sensor_range=70.0,
                 points_per_second=3500,
             ),
-            physical_sensor=(
-                "front-right 77 GHz corner radar"
-            ),
+            physical_sensor=("front-right 77 GHz corner radar"),
         ),
         SensorSpec(
             name="radar_rear_left",
@@ -469,9 +465,7 @@ def build_sensor_layout(
                 sensor_range=70.0,
                 points_per_second=3500,
             ),
-            physical_sensor=(
-                "rear-left 77 GHz corner radar"
-            ),
+            physical_sensor=("rear-left 77 GHz corner radar"),
         ),
         SensorSpec(
             name="radar_rear_right",
@@ -489,9 +483,7 @@ def build_sensor_layout(
                 sensor_range=70.0,
                 points_per_second=3500,
             ),
-            physical_sensor=(
-                "rear-right 77 GHz corner radar"
-            ),
+            physical_sensor=("rear-right 77 GHz corner radar"),
         ),
     )
 
@@ -587,12 +579,9 @@ def build_sensor_layout(
                 sensor_range=4.5,
                 points_per_second=450,
             ),
-            physical_sensor=(
-                "40 kHz parking ultrasonic transducer"
-            ),
+            physical_sensor=("40 kHz parking ultrasonic transducer"),
         )
-        for name, x, y_ratio, yaw
-        in ultrasonic_positions
+        for name, x, y_ratio, yaw in ultrasonic_positions
     )
 
     geometry = {

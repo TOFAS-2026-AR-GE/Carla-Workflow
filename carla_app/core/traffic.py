@@ -17,9 +17,7 @@ class Traffic:
         self.manager = self.client.get_trafficmanager(
             self.scenario.traffic_manager_port
         )
-        self.manager.set_synchronous_mode(
-            self.world.get_settings().synchronous_mode
-        )
+        self.manager.set_synchronous_mode(self.world.get_settings().synchronous_mode)
         self.manager.set_global_distance_to_leading_vehicle(
             self.scenario.safe_distance_m
         )

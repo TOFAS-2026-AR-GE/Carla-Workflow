@@ -144,6 +144,27 @@ class VehicleControllerIntegrationTests(unittest.TestCase):
         self.assertEqual(control.brake, 1.0)
         self.assertEqual(info["safety"]["target_source"], "camera_radar_track")
 
+    def test_closer_raw_radar_range_stabilizes_longitudinal_lead(self):
+        tracked_lead = {
+            "track_id": 4,
+            "distance_m": 7.1,
+            "relative_speed_mps": -0.9,
+            "source": "camera_radar_track",
+        }
+        near_radar = {
+            "track_id": -2,
+            "distance_m": 3.9,
+            "relative_speed_mps": -0.8,
+            "source": "radar_emergency",
+        }
+
+        lead = VehicleController._longitudinal_lead(tracked_lead, near_radar)
+
+        self.assertEqual(lead["track_id"], tracked_lead["track_id"])
+        self.assertAlmostEqual(lead["distance_m"], 3.9)
+        self.assertAlmostEqual(lead["relative_speed_mps"], -0.9)
+        self.assertEqual(lead["source"], "camera_radar_track+radar_near")
+
 
 if __name__ == "__main__":
     unittest.main()

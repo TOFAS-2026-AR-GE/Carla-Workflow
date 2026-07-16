@@ -29,9 +29,13 @@ class VehicleController:
             state,
             lateral_info=lateral_info,
         )
+        longitudinal_lead = self._longitudinal_lead(
+            lead_vehicle,
+            emergency_obstacle,
+        )
         throttle, brake, longitudinal_info = self.longitudinal.run_step(
             state,
-            lead_vehicle,
+            longitudinal_lead,
             target_speed,
         )
         emergency, safety_info = self.safety.evaluate_candidates(
@@ -60,5 +64,34 @@ class VehicleController:
             "longitudinal": longitudinal_info,
             "safety": safety_info,
             "emergency_obstacle": emergency_obstacle,
+            "longitudinal_lead": longitudinal_lead,
         }
         return control, info
+
+    @staticmethod
+    def _longitudinal_lead(lead_vehicle, emergency_obstacle):
+        """Use a closer raw-radar return without losing tracked identity."""
+        if emergency_obstacle is None:
+            return lead_vehicle
+        if lead_vehicle is None:
+            return emergency_obstacle
+
+        try:
+            lead_distance = float(lead_vehicle["distance_m"])
+            radar_distance = float(emergency_obstacle["distance_m"])
+            lead_relative_speed = float(lead_vehicle["relative_speed_mps"])
+            radar_relative_speed = float(emergency_obstacle["relative_speed_mps"])
+        except (KeyError, TypeError, ValueError):
+            return lead_vehicle
+
+        if radar_distance >= lead_distance:
+            return lead_vehicle
+
+        lead = dict(lead_vehicle)
+        lead["distance_m"] = radar_distance
+        lead["relative_speed_mps"] = min(
+            lead_relative_speed,
+            radar_relative_speed,
+        )
+        lead["source"] = f"{lead.get('source', 'tracked')}+radar_near"
+        return lead

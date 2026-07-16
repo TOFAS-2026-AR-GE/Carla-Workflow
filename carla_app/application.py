@@ -231,6 +231,11 @@ class CarlaApplication:
                 f" rel_v={float(lead_vehicle['relative_speed_mps']):+.2f}m/s"
                 f" source={lead_vehicle.get('source', 'unknown')}"
             )
+        filtered_distance = control_info.get("longitudinal", {}).get(
+            "filtered_lead_distance_m"
+        )
+        if filtered_distance is not None:
+            message += f" ctrl_gap={float(filtered_distance):.1f}m"
         emergency_obstacle = control_info.get("emergency_obstacle")
         if emergency_obstacle is not None:
             message += f" aeb_radar={float(emergency_obstacle['distance_m']):.1f}m"

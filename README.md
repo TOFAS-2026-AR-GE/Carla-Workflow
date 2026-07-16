@@ -90,8 +90,13 @@ paketini açar ve kayıtları `data/runs/` altında oluşturur.
 - 2 metre, hareket halindeki sabit takip mesafesi değil duruş boşluğudur.
 - Hareketli takip hedefi `2 m + 0.9 s × ego hızı` olarak hesaplanır.
 - Araç 2 metre boşlukta `HOLD` moduna geçerek sabit frenle yerinde kalır.
-- Öndeki araç hareket ettiğinde radar hızı veya açılan boşluk `RESTART` modunu
-  etkinleştirir; eski fren ivmesi sıfırlanır ve araç gecikmeden kontrollü kalkar.
+- Düşük hızda `APPROACH`, mesafe sıçramalarına doğrudan gaz/fren vermek yerine
+  öndeki aracın hızına ve kalan boşluğa göre tek bir yaklaşma hızı hesaplar.
+- `RESTART` yalnızca araç gerçekten `HOLD` durumundayken ve öndeki aracın
+  kalkışı iki tick doğrulandığında etkinleşir; uzaktaki gürültülü ölçüm tek
+  başına kalkış komutu üretemez.
+- Kamera ve radar mesafeleri kaynak değiştirirken yakın olan radar ölçümü
+  korunur; daha uzağa sıçrayan ölçümler yavaş filtrelenir.
 - Radar bağıl hızında negatif değer yaklaşmayı, pozitif değer uzaklaşmayı gösterir.
 - Uzak araç yalnızca gözlemlenir (`LEAD_FAR`); dinamik aktivasyon mesafesine
   girmeden fren komutu üretmez.
@@ -101,6 +106,8 @@ paketini açar ve kayıtları `data/runs/` altında oluşturur.
   inference'a verilir; dünya frame'iyle tam eşleşmeyen görüntü artık atılmaz.
 - Ham ön radar, bbox veya tracker oluşmasa bile kısa menzilde bağımsız AEB
   girdisi üretir.
+- Durum satırındaki `ctrl_gap`, filtrelenip boylamsal kontrolcüde kullanılan
+  gerçek takip mesafesidir; `lead` ise takip katmanının ham seçimini gösterir.
 - Stanley direksiyon komutu hata filtresi, hız tabanlı limit ve değişim hızı
   limitiyle yumuşatılır.
 

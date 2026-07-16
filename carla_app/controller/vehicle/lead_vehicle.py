@@ -478,11 +478,24 @@ class LeadVehicleTracker:
             return radar_lead
         if radar_lead is None:
             return tracked_lead
+
+        # Camera identity is useful, but its Kalman range can lag when a bbox
+        # disappears and returns. Keep that identity while using the closer
+        # front-radar range and velocity. This prevents 4 m -> 7 m -> 5 m
+        # source-switch jumps from reaching the controller.
         if abs(tracked_lead["distance_m"] - radar_lead["distance_m"]) <= 3.0:
-            return tracked_lead
-        if radar_lead["distance_m"] < tracked_lead["distance_m"]:
-            return radar_lead
-        return tracked_lead
+            lead = dict(tracked_lead)
+            if radar_lead["distance_m"] < tracked_lead["distance_m"]:
+                lead["distance_m"] = radar_lead["distance_m"]
+                lead["relative_speed_mps"] = radar_lead["relative_speed_mps"]
+                lead["lead_speed_mps"] = radar_lead["lead_speed_mps"]
+                lead["radar_points"] = radar_lead["radar_points"]
+            return lead
+
+        return min(
+            (tracked_lead, radar_lead),
+            key=lambda candidate: candidate["distance_m"],
+        )
 
     def _select_with_hysteresis(self, candidates):
         if not candidates:

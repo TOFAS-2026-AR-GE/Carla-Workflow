@@ -1,9 +1,8 @@
 from carla_app.config import Settings
 from carla_app.core.client import CarlaSession
-from carla_app.core.controller import LaneFollowController
 from carla_app.core.scenario import load_scenario
 from carla_app.core.spectator import update_spectator
-from carla_app.core.state import read_vehicle_state, serializable_vehicle_state
+from carla_app.core.state import read_vehicle_state
 from carla_app.core.traffic import Traffic
 from carla_app.core.vehicle import spawn_ego_vehicle
 from carla_app.perception.fusion import fuse_detections_with_radar

@@ -270,9 +270,10 @@ class LeadVehicleTracker:
             if not self._inside_ego_lane(lateral, state):
                 continue
 
-            # CARLA radar velocity is positive towards the sensor. The
-            # controller uses lead_speed - ego_speed, so the sign is inverted.
-            relative_speed = clamp(-float(radar_velocity), -20.0, 20.0)
+            # CARLA's signed radar value already matches the controller's
+            # convention in this setup: negative means the range is closing,
+            # positive means the target is pulling away. Do not invert it.
+            relative_speed = clamp(float(radar_velocity), -20.0, 20.0)
             candidates.append(
                 {
                     "track_id": -1,
@@ -321,7 +322,7 @@ class LeadVehicleTracker:
             if forward <= 0.5 or abs(lateral) > corridor_half_width:
                 continue
 
-            relative_speed = clamp(-radar_velocity, -25.0, 20.0)
+            relative_speed = clamp(radar_velocity, -25.0, 20.0)
             closing_speed = max(0.0, -relative_speed)
             ttc = forward / closing_speed if closing_speed > 0.1 else math.inf
 
@@ -460,7 +461,7 @@ class LeadVehicleTracker:
     def _tracked_relative_speed(self, track, state):
         radar_velocity = track.last_relative_velocity_mps
         if radar_velocity is not None:
-            measured = -float(radar_velocity)
+            measured = float(radar_velocity)
         else:
             yaw = math.radians(state["yaw"])
             lead_speed = track.vx * math.cos(yaw) + track.vy * math.sin(yaw)

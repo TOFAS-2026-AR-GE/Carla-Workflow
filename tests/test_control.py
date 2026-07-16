@@ -78,21 +78,70 @@ class LongitudinalControllerTests(unittest.TestCase):
         self.assertEqual(throttle, 0.0)
         self.assertGreater(brake, 0.0)
 
-    def test_three_metres_is_standstill_gap_not_moving_gap(self):
+    def test_two_metres_is_held_as_the_standstill_gap(self):
         controller = LongitudinalController(dt=0.05)
         state = straight_state(speed_mps=0.0)
         lead = {
             "track_id": 11,
-            "distance_m": 3.0,
+            "distance_m": 2.0,
             "relative_speed_mps": 0.0,
         }
 
         controller.run_step(state, lead, 30.0 / 3.6)
         throttle, brake, info = controller.run_step(state, lead, 30.0 / 3.6)
-        self.assertEqual(info["mode"], "FOLLOW")
-        self.assertAlmostEqual(info["desired_gap_m"], 3.0)
+        self.assertEqual(info["mode"], "HOLD")
+        self.assertAlmostEqual(info["desired_gap_m"], 2.0)
         self.assertEqual(throttle, 0.0)
+        self.assertEqual(brake, controller.hold_brake)
+
+    def test_lead_pulling_away_restarts_without_acceleration_memory_delay(self):
+        controller = LongitudinalController(dt=0.05)
+        state = straight_state(speed_mps=0.0)
+        stopped_lead = {
+            "track_id": 11,
+            "distance_m": 2.0,
+            "relative_speed_mps": 0.0,
+        }
+
+        controller.run_step(state, stopped_lead, 30.0 / 3.6)
+        controller.run_step(state, stopped_lead, 30.0 / 3.6)
+
+        moving_lead = {
+            "track_id": 11,
+            "distance_m": 2.2,
+            "relative_speed_mps": 0.8,
+        }
+        throttle, brake, info = controller.run_step(
+            state,
+            moving_lead,
+            30.0 / 3.6,
+        )
+
+        self.assertEqual(info["mode"], "RESTART")
+        self.assertTrue(info["restart_active"])
+        self.assertGreater(throttle, 0.0)
         self.assertEqual(brake, 0.0)
+
+    def test_slow_approach_to_stopped_lead_does_not_enter_restart(self):
+        controller = LongitudinalController(dt=0.05)
+        state = straight_state(speed_mps=0.8)
+        stopped_lead = {
+            "track_id": 11,
+            "distance_m": 4.0,
+            "relative_speed_mps": -0.8,
+        }
+
+        controller.run_step(state, stopped_lead, 30.0 / 3.6)
+        throttle, brake, info = controller.run_step(
+            state,
+            stopped_lead,
+            30.0 / 3.6,
+        )
+
+        self.assertEqual(info["mode"], "FOLLOW")
+        self.assertFalse(info["restart_active"])
+        self.assertEqual(throttle, 0.0)
+        self.assertGreater(brake, 0.0)
 
 
 class EmergencyBrakeTests(unittest.TestCase):
@@ -104,6 +153,17 @@ class EmergencyBrakeTests(unittest.TestCase):
         self.assertTrue(emergency)
         self.assertAlmostEqual(info["ttc_s"], 0.5)
 
+    def test_stationary_two_metre_gap_is_left_to_normal_hold_control(self):
+        supervisor = EmergencyBrakeSupervisor()
+        stopped_lead = {"distance_m": 2.0, "relative_speed_mps": 0.0}
+
+        first_emergency, _ = supervisor.evaluate(stopped_lead)
+        second_emergency, info = supervisor.evaluate(stopped_lead)
+
+        self.assertFalse(first_emergency)
+        self.assertFalse(second_emergency)
+        self.assertEqual(info["hazard_count"], 0)
+
 
 class LeadVehicleTrackerTests(unittest.TestCase):
     def test_radar_lead_requires_temporal_confirmation(self):
@@ -114,7 +174,7 @@ class LeadVehicleTrackerTests(unittest.TestCase):
                 "depth_m": 20.0 + offset,
                 "azimuth_deg": offset,
                 "altitude_deg": 0.0,
-                "relative_velocity_mps": 3.0,
+                "relative_velocity_mps": -3.0,
             }
             for offset in (-0.3, 0.0, 0.3)
         ]
@@ -151,7 +211,7 @@ class LeadVehicleTrackerTests(unittest.TestCase):
                 "depth_m": 9.0,
                 "azimuth_deg": 0.0,
                 "altitude_deg": 0.0,
-                "relative_velocity_mps": 8.0,
+                "relative_velocity_mps": -8.0,
             }
         ]
 
@@ -171,7 +231,7 @@ class LeadVehicleTrackerTests(unittest.TestCase):
                 "depth_m": 9.0,
                 "azimuth_deg": 13.0,
                 "altitude_deg": 0.0,
-                "relative_velocity_mps": 8.0,
+                "relative_velocity_mps": -8.0,
             }
         ]
 

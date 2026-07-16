@@ -87,8 +87,12 @@ paketini açar ve kayıtları `data/runs/` altında oluşturur.
 
 ## Kontrol davranışı
 
-- 3 metre, hareket halindeki sabit takip mesafesi değil duruş boşluğudur.
-- Hareketli takip hedefi `3 m + 0.9 s × ego hızı` olarak hesaplanır.
+- 2 metre, hareket halindeki sabit takip mesafesi değil duruş boşluğudur.
+- Hareketli takip hedefi `2 m + 0.9 s × ego hızı` olarak hesaplanır.
+- Araç 2 metre boşlukta `HOLD` moduna geçerek sabit frenle yerinde kalır.
+- Öndeki araç hareket ettiğinde radar hızı veya açılan boşluk `RESTART` modunu
+  etkinleştirir; eski fren ivmesi sıfırlanır ve araç gecikmeden kontrollü kalkar.
+- Radar bağıl hızında negatif değer yaklaşmayı, pozitif değer uzaklaşmayı gösterir.
 - Uzak araç yalnızca gözlemlenir (`LEAD_FAR`); dinamik aktivasyon mesafesine
   girmeden fren komutu üretmez.
 - Radar-only engel normalde iki ardışık tick doğrulanmadan ACC'ye verilmez.

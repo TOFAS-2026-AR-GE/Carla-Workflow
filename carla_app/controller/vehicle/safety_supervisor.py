@@ -9,8 +9,13 @@ class EmergencyBrakeSupervisor:
     """
 
     def __init__(self):
-        self.hard_distance_m = 3.0
-        self.immediate_distance_m = 1.5
+        # ACC aims for a 2 m standstill gap. The emergency layer reserves the
+        # same clearance while calculating stopping distance, but only uses a
+        # smaller physical-clearance limit after the vehicles are stationary.
+        # This keeps AEB from fighting the normal HOLD brake at 2 m.
+        self.stopping_clearance_m = 2.0
+        self.hard_distance_m = 1.25
+        self.immediate_distance_m = 0.65
 
         self.ttc_threshold_s = 1.50
         self.immediate_ttc_s = 0.80
@@ -44,7 +49,7 @@ class EmergencyBrakeSupervisor:
 
         closing_speed = max(0.0, -relative_speed)
         ttc = distance / closing_speed if closing_speed > 0.1 else math.inf
-        usable_distance = max(distance - self.hard_distance_m, 0.10)
+        usable_distance = max(distance - self.stopping_clearance_m, 0.10)
         required_deceleration = closing_speed**2 / (2.0 * usable_distance)
 
         immediate = distance <= self.immediate_distance_m or ttc <= self.immediate_ttc_s
@@ -96,7 +101,7 @@ class EmergencyBrakeSupervisor:
             ttc = math.inf
 
         usable_distance = max(
-            distance - self.hard_distance_m,
+            distance - self.stopping_clearance_m,
             0.10,
         )
 

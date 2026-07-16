@@ -143,9 +143,9 @@ def fuse_detections_with_radar(
                     "bearing_deg": match["bearing_deg"],
                     "has_range": True,
                     "range_m": match["range_m"],
-                    # CARLA defines positive radar velocity as motion towards
-                    # the sensor. Conversion to controller convention happens
-                    # in LeadVehicleTracker.
+                    # Preserve CARLA's signed radial velocity. The controller
+                    # uses the observed sign directly: negative is closing and
+                    # positive is pulling away in the live sensor stream.
                     "relative_velocity_mps": match["radar_velocity_mps"],
                     "radar_points_matched": match["matched_points"],
                 }

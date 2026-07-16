@@ -19,12 +19,24 @@ class LongitudinalController:
         self.integral_limit = 6.0
         self.integral_error = 0.0
 
-        # The 3 m value is the standstill clearance. At speed, a time gap is
-        # added; using a fixed 3 m moving gap would not be collision-safe.
-        self.standstill_gap_m = 3.0
+        # Bumper-to-bumper clearance when both vehicles are stopped. A time
+        # gap is still added while moving, so 2 m is not used at road speed.
+        self.standstill_gap_m = 2.0
         self.time_headway_s = 0.9
         self.gap_gain = 0.28
         self.relative_speed_gain = 0.85
+
+        # Simple stop-and-go states. HOLD prevents creeping inside the 2 m
+        # gap. RESTART reacts as soon as the lead pulls away or opens the gap.
+        self.hold_speed_threshold_mps = 0.20
+        self.hold_gap_tolerance_m = 0.10
+        self.hold_relative_speed_mps = 0.25
+        self.hold_brake = 0.25
+        self.restart_speed_threshold_mps = 0.35
+        self.restart_gap_margin_m = 0.60
+        self.restart_relative_speed_mps = 0.25
+        self.restart_acceleration_mps2 = 1.20
+        self.restart_jerk_limit_mps3 = 2.50
 
         self.activation_margin_m = 4.0
         self.activation_reaction_time_s = 1.0
@@ -58,6 +70,8 @@ class LongitudinalController:
         activation_distance = None
         following_acceleration = None
         safe_acceleration_limit = None
+        hold_active = False
+        restart_active = False
 
         if lead is None:
             self.following_active = False
@@ -93,6 +107,28 @@ class LongitudinalController:
                     relative_speed + self.cbf_alpha * gap_error
                 ) / self.time_headway_s
 
+                hold_active = (
+                    current_speed <= self.hold_speed_threshold_mps
+                    and distance <= self.standstill_gap_m + self.hold_gap_tolerance_m
+                    and abs(relative_speed) <= self.hold_relative_speed_mps
+                )
+                restart_active = (
+                    not hold_active
+                    and current_speed <= self.restart_speed_threshold_mps
+                    and (
+                        (
+                            gap_error >= self.restart_gap_margin_m
+                            and relative_speed >= -0.10
+                        )
+                        or relative_speed >= self.restart_relative_speed_mps
+                    )
+                )
+                if restart_active:
+                    following_acceleration = max(
+                        following_acceleration,
+                        self.restart_acceleration_mps2,
+                    )
+
         desired_acceleration = nominal_acceleration
         if self.following_active:
             desired_acceleration = min(
@@ -112,11 +148,26 @@ class LongitudinalController:
         else:
             self.integral_error = integral_candidate
 
-        acceleration = self._limit_jerk(desired_acceleration)
-        throttle, brake = self._to_pedals(acceleration)
+        if hold_active:
+            # Brake holding is separate from the acceleration state. Resetting
+            # it here avoids carrying negative acceleration into RESTART.
+            self.previous_acceleration = 0.0
+            acceleration = 0.0
+            throttle, brake = 0.0, self.hold_brake
+        else:
+            restart_jerk = self.restart_jerk_limit_mps3 if restart_active else None
+            acceleration = self._limit_jerk(
+                desired_acceleration,
+                acceleration_jerk_limit=restart_jerk,
+            )
+            throttle, brake = self._to_pedals(acceleration)
 
         if lead is None:
             mode = "CRUISE"
+        elif hold_active:
+            mode = "HOLD"
+        elif restart_active:
+            mode = "RESTART"
         elif self.following_active:
             mode = "FOLLOW"
         else:
@@ -133,6 +184,8 @@ class LongitudinalController:
             "gap_error_m": gap_error,
             "activation_distance_m": activation_distance,
             "lead_confirmed_for_control": lead_confirmed,
+            "hold_active": hold_active,
+            "restart_active": restart_active,
         }
         return throttle, brake, info
 
@@ -204,9 +257,13 @@ class LongitudinalController:
         )
         return acceleration, integral_candidate
 
-    def _limit_jerk(self, desired_acceleration):
+    def _limit_jerk(self, desired_acceleration, acceleration_jerk_limit=None):
         jerk_limit = (
-            self.acceleration_jerk_limit
+            (
+                self.acceleration_jerk_limit
+                if acceleration_jerk_limit is None
+                else float(acceleration_jerk_limit)
+            )
             if desired_acceleration >= self.previous_acceleration
             else self.braking_jerk_limit
         )

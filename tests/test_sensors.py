@@ -23,6 +23,33 @@ if "cv2" not in sys.modules:
     sys.modules["cv2"] = types.ModuleType("cv2")
 
 from carla_app.sensors.manager import SensorManager  # noqa: E402
+from carla_app.sensors.stream import CameraStream  # noqa: E402
+
+
+class CameraStreamTests(unittest.TestCase):
+    def test_returns_delayed_camera_frame_instead_of_discarding_it(self):
+        stream = CameraStream(max_frames=4)
+        image = object()
+        stream.push(98, image)
+
+        camera_frame_id, returned_image = stream.wait_latest(100, timeout=0.0)
+
+        self.assertEqual(camera_frame_id, 98)
+        self.assertIs(returned_image, image)
+
+    def test_returns_each_camera_frame_only_once(self):
+        stream = CameraStream(max_frames=4)
+        stream.push(12, object())
+
+        self.assertEqual(stream.wait_latest(14, timeout=0.0)[0], 12)
+        self.assertEqual(stream.wait_latest(15, timeout=0.0), (None, None))
+
+    def test_future_frame_is_not_labeled_as_current(self):
+        stream = CameraStream(max_frames=4)
+        stream.push(21, object())
+
+        self.assertEqual(stream.wait_latest(20, timeout=0.0), (None, None))
+        self.assertEqual(stream.wait_latest(21, timeout=0.0)[0], 21)
 
 
 class SensorManagerTests(unittest.TestCase):

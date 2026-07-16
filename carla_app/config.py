@@ -92,7 +92,7 @@ class Settings:
             ),
             vehicle_device=get("VEHICLE_DEVICE", "cpu").strip() or "cpu",
             sign_device=get("SIGN_DEVICE", "cpu").strip() or "cpu",
-            vehicle_confidence=float(get("VEHICLE_CONFIDENCE", "0.35")),
+            vehicle_confidence=float(get("VEHICLE_CONFIDENCE", "0.05")),
             sign_detector_confidence=float(get("SIGN_DETECTOR_CONFIDENCE", "0.25")),
             sign_detector_iou=float(get("SIGN_DETECTOR_IOU", "0.50")),
             sign_classifier_confidence=float(get("SIGN_CLASSIFIER_CONFIDENCE", "0.50")),

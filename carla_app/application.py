@@ -99,10 +99,10 @@ class CarlaApplication:
                     vehicle,
                     route_manager=route_manager,
                 )
-                rgb_image = sensors.get_rgb(frame_id)
+                camera_frame_id, rgb_image = sensors.get_rgb(frame_id)
 
-                if rgb_image is not None and frame_id % perception_period == 0:
-                    worker.submit(frame_id, rgb_image)
+                if rgb_image is not None and camera_frame_id % perception_period == 0:
+                    worker.submit(camera_frame_id, rgb_image)
 
                 perception_result = worker.get_latest()
                 radar_frame_id, radar_points = sensors.get_radar("radar_front_long")
@@ -115,7 +115,12 @@ class CarlaApplication:
                     radar_frame_id=radar_frame_id,
                     radar_points=radar_points,
                 )
-                control, control_info = controller.run_step(state, lead_vehicle)
+                emergency_obstacle = lead_tracker.get_emergency_obstacle()
+                control, control_info = controller.run_step(
+                    state,
+                    lead_vehicle,
+                    emergency_obstacle=emergency_obstacle,
+                )
                 vehicle.apply_control(control)
                 update_spectator(world, vehicle)
 
@@ -129,6 +134,7 @@ class CarlaApplication:
                     print(
                         self._status_message(
                             frame_id=frame_id,
+                            camera_frame_id=camera_frame_id,
                             state=state,
                             perception_result=perception_result,
                             radar_frame_id=radar_frame_id,
@@ -141,7 +147,8 @@ class CarlaApplication:
                 if not viewer.show(
                     perception_result,
                     fallback_image=rgb_image,
-                    fallback_frame_id=frame_id,
+                    fallback_frame_id=camera_frame_id,
+                    current_frame_id=frame_id,
                 ):
                     break
 
@@ -179,6 +186,7 @@ class CarlaApplication:
     @staticmethod
     def _status_message(
         frame_id,
+        camera_frame_id,
         state,
         perception_result,
         radar_frame_id,
@@ -204,6 +212,7 @@ class CarlaApplication:
             f"steer={float(control_info['steer']):+.2f} "
             f"throttle={float(control_info['throttle']):.2f} "
             f"brake={float(control_info['brake']):.2f} "
+            f"camera={camera_frame_id} "
             f"bbox={len(vehicles)} age={perception_age} "
             f"radar={len(radar_points)}@{radar_frame_id}"
         )
@@ -222,6 +231,9 @@ class CarlaApplication:
                 f" rel_v={float(lead_vehicle['relative_speed_mps']):+.2f}m/s"
                 f" source={lead_vehicle.get('source', 'unknown')}"
             )
+        emergency_obstacle = control_info.get("emergency_obstacle")
+        if emergency_obstacle is not None:
+            message += f" aeb_radar={float(emergency_obstacle['distance_m']):.1f}m"
         if errors:
             message += f" detector_errors={','.join(sorted(errors))}"
 

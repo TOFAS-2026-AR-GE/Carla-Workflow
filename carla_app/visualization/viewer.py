@@ -10,7 +10,13 @@ class PerceptionViewer:
         self.closed = False
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
-    def show(self, result, fallback_image=None, fallback_frame_id=None):
+    def show(
+        self,
+        result,
+        fallback_image=None,
+        fallback_frame_id=None,
+        current_frame_id=None,
+    ):
         if self.closed:
             return False
 
@@ -39,8 +45,8 @@ class PerceptionViewer:
             self._draw(frame, detection, (0, 165, 255), "SIGN")
 
         lag = 0
-        if fallback_frame_id is not None and result_frame_id is not None:
-            lag = max(0, int(fallback_frame_id) - int(result_frame_id))
+        if current_frame_id is not None and result_frame_id is not None:
+            lag = max(0, int(current_frame_id) - int(result_frame_id))
 
         header = (
             f"Frame {result_frame_id} | Vehicles {len(vehicles)} | "

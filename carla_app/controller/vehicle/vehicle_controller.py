@@ -21,7 +21,7 @@ class VehicleController:
         self.longitudinal = LongitudinalController(dt)
         self.safety = EmergencyBrakeSupervisor()
 
-    def run_step(self, state, lead_vehicle):
+    def run_step(self, state, lead_vehicle, emergency_obstacle=None):
         steer = self.lateral.run_step(state)
         lateral_info = self.lateral.last_info
 
@@ -34,7 +34,10 @@ class VehicleController:
             lead_vehicle,
             target_speed,
         )
-        emergency, safety_info = self.safety.evaluate(lead_vehicle)
+        emergency, safety_info = self.safety.evaluate_candidates(
+            lead_vehicle,
+            emergency_obstacle,
+        )
 
         if emergency:
             throttle = 0.0
@@ -56,5 +59,6 @@ class VehicleController:
             "speed_plan": speed_plan,
             "longitudinal": longitudinal_info,
             "safety": safety_info,
+            "emergency_obstacle": emergency_obstacle,
         }
         return control, info

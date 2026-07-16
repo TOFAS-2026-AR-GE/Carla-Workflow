@@ -19,7 +19,7 @@ class SensorManager:
         self.writer = None
         self.actors = []
 
-        self.camera_stream = CameraStream(max_frames=4)
+        self.camera_stream = CameraStream(max_frames=8)
         self.radar_stream = RadarStream()
 
         if self.recording_enabled:
@@ -59,7 +59,7 @@ class SensorManager:
             print(f"[OK] Yalnizca kontrol sensorleri aktif: {names}")
 
     def get_rgb(self, frame_id):
-        return self.camera_stream.wait(frame_id, timeout=0.5)
+        return self.camera_stream.wait_latest(frame_id, timeout=0.5)
 
     def get_radar(self, sensor_name="radar_front_long"):
         return self.radar_stream.get_latest(sensor_name)

@@ -64,7 +64,7 @@ geçer.
 
 ```dotenv
 VEHICLE_DEVICE=auto
-VEHICLE_CONFIDENCE=0.20
+VEHICLE_CONFIDENCE=0.05
 PERCEPTION_EVERY_N_FRAMES=1
 
 ENABLE_SIGN_DETECTION=false
@@ -75,6 +75,8 @@ MAX_RUNTIME_SECONDS=0
 ```
 
 - `VEHICLE_DEVICE=auto`: CUDA varsa `0`, yoksa `cpu` seçer.
+- `VEHICLE_CONFIDENCE=0.05`: repodaki özel CARLA modelinin düşük skorlu
+  geçerli araç kutularını korur; yalnızca modelin araç sınıfları çizilir.
 - Levha tespiti kapalıdır; açılması araç bbox sonucunu artık etkileyemez.
 - Dataset kaydı kapalıyken sadece kontrol için gereken iki sensör çalışır.
 - `MAX_RUNTIME_SECONDS=0` sınırsız interaktif kullanım demektir. Otomatik test
@@ -91,6 +93,10 @@ paketini açar ve kayıtları `data/runs/` altında oluşturur.
   girmeden fren komutu üretmez.
 - Radar-only engel normalde iki ardışık tick doğrulanmadan ACC'ye verilmez.
   Çok yakın veya TTC'si kritik engelde güvenlik için beklenmez.
+- CARLA GPU kamera callback'i birkaç tick gecikse bile gerçek kamera frame'i
+  inference'a verilir; dünya frame'iyle tam eşleşmeyen görüntü artık atılmaz.
+- Ham ön radar, bbox veya tracker oluşmasa bile kısa menzilde bağımsız AEB
+  girdisi üretir.
 - Stanley direksiyon komutu hata filtresi, hız tabanlı limit ve değişim hızı
   limitiyle yumuşatılır.
 

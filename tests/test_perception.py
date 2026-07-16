@@ -39,6 +39,26 @@ class VehicleDetectorTests(unittest.TestCase):
             [],
         )
 
+    def test_predict_uses_configured_low_threshold_and_vehicle_classes(self):
+        captured = {}
+
+        class FakeModel:
+            def predict(self, **arguments):
+                captured.update(arguments)
+                return []
+
+        detector = VehicleDetector.__new__(VehicleDetector)
+        detector.model = FakeModel()
+        detector.confidence = 0.05
+        detector.image_size = 640
+        detector.device = "cpu"
+        detector.vehicle_class_ids = [0, 1, 9]
+
+        detector._predict(np.zeros((20, 30, 3), dtype=np.uint8))
+
+        self.assertEqual(captured["conf"], 0.05)
+        self.assertEqual(captured["classes"], [0, 1, 9])
+
 
 class PerceptionSystemTests(unittest.TestCase):
     def test_sign_failure_does_not_discard_vehicle_boxes(self):

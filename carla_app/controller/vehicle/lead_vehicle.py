@@ -55,6 +55,7 @@ class LeadVehicleTracker:
         self.radar_candidate_ticks = 0
         self.last_radar_lead = None
         self.radar_missing_ticks = 0
+        self.emergency_obstacle = None
 
     def update(
         self,
@@ -74,7 +75,21 @@ class LeadVehicleTracker:
         tracks = self.tracker.step(self.dt, measurements)
         tracked_lead = self._select_tracked_lead(tracks, state)
         radar_lead = self._select_direct_radar_lead(radar_points, state)
+        self.emergency_obstacle = self._select_emergency_radar_obstacle(
+            radar_points,
+            state,
+        )
         return self._choose_safest_lead(tracked_lead, radar_lead)
+
+    def get_emergency_obstacle(self):
+        """Return the closest raw-radar hazard in the ego corridor.
+
+        This last-resort AEB input deliberately does not depend on a camera
+        bbox or a confirmed tracker. It is used only at short range or low TTC.
+        """
+        if self.emergency_obstacle is None:
+            return None
+        return dict(self.emergency_obstacle)
 
     def _build_camera_radar_measurements(
         self,
@@ -276,6 +291,69 @@ class LeadVehicleTracker:
 
         return candidates
 
+    def _select_emergency_radar_obstacle(self, radar_points, state):
+        """Keep AEB alive when YOLO or normal radar clustering misses."""
+        lane_width = max(2.5, float(state.get("lane_width", 3.5)))
+        corridor_half_width = min(1.8, max(1.2, 0.5 * lane_width))
+        ego_speed = max(0.0, float(state.get("speed_mps", 0.0)))
+        candidates = []
+
+        for point in radar_points or []:
+            try:
+                depth = float(point["depth_m"])
+                azimuth = float(point["azimuth_deg"])
+                altitude = float(point.get("altitude_deg", 0.0))
+                radar_velocity = float(point.get("relative_velocity_mps", 0.0))
+            except (KeyError, TypeError, ValueError):
+                continue
+
+            values = (depth, azimuth, altitude, radar_velocity)
+            if not all(math.isfinite(value) for value in values):
+                continue
+            if not 0.5 < depth <= 20.0:
+                continue
+            if abs(azimuth) > 16.0 or abs(altitude) > 6.0:
+                continue
+
+            angle_rad = math.radians(azimuth)
+            forward = depth * math.cos(angle_rad)
+            lateral = depth * math.sin(angle_rad)
+            if forward <= 0.5 or abs(lateral) > corridor_half_width:
+                continue
+
+            relative_speed = clamp(-radar_velocity, -25.0, 20.0)
+            closing_speed = max(0.0, -relative_speed)
+            ttc = forward / closing_speed if closing_speed > 0.1 else math.inf
+
+            # A single raw point is accepted only in the near-field or when
+            # its measured closing rate is already safety-critical.
+            if forward > 8.0 and ttc > 1.8:
+                continue
+
+            candidates.append(
+                {
+                    "track_id": -2,
+                    "class_name": "radar_emergency_obstacle",
+                    "distance_m": float(forward),
+                    "lateral_m": float(lateral),
+                    "lead_speed_mps": max(0.0, ego_speed + relative_speed),
+                    "relative_speed_mps": float(relative_speed),
+                    "source": "radar_emergency",
+                    "radar_points": 1,
+                    "bearing_deg": float(azimuth),
+                    "ttc_s": float(ttc),
+                }
+            )
+
+        return min(
+            candidates,
+            key=lambda candidate: (
+                candidate["ttc_s"],
+                candidate["distance_m"],
+            ),
+            default=None,
+        )
+
     def _cluster_radar_points(self, radar_points):
         prepared = []
         for point in radar_points or []:
@@ -286,7 +364,7 @@ class LeadVehicleTracker:
 
             if not 0.5 < depth <= 80.0:
                 continue
-            if abs(azimuth) > 16.0 or not -3.0 <= altitude <= 4.0:
+            if abs(azimuth) > 16.0 or abs(altitude) > 6.0:
                 continue
 
             angle_rad = math.radians(azimuth)

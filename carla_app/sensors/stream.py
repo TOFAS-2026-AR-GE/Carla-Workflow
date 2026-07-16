@@ -15,21 +15,37 @@ class CameraStream:
                 del self.frames[min(self.frames)]
             self.condition.notify_all()
 
-    def wait(self, frame_id, timeout=0.5):
-        frame_id = int(frame_id)
+    def wait_latest(self, world_frame_id, timeout=0.5):
+        """Return the newest camera frame available for this world tick.
+
+        CARLA RGB cameras are rendered on the GPU and their callbacks can
+        arrive a few world ticks late. Waiting only for an exact frame ID
+        causes every delayed image to be discarded forever. The actual camera
+        frame ID is returned with the image so perception keeps correct time.
+        """
+        world_frame_id = int(world_frame_id)
         end_time = time.monotonic() + timeout
 
         with self.condition:
-            while frame_id not in self.frames:
+            while True:
+                available = [
+                    frame_id for frame_id in self.frames if frame_id <= world_frame_id
+                ]
+                if available:
+                    camera_frame_id = max(available)
+                    image = self.frames[camera_frame_id]
+                    for old_id in [
+                        frame_id
+                        for frame_id in self.frames
+                        if frame_id <= camera_frame_id
+                    ]:
+                        del self.frames[old_id]
+                    return camera_frame_id, image
+
                 remaining = end_time - time.monotonic()
                 if remaining <= 0:
-                    return None
+                    return None, None
                 self.condition.wait(remaining)
-
-            image = self.frames.pop(frame_id)
-            for old_id in [item for item in self.frames if item < frame_id]:
-                del self.frames[old_id]
-            return image
 
     def clear(self):
         with self.condition:

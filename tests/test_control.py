@@ -143,6 +143,42 @@ class LeadVehicleTrackerTests(unittest.TestCase):
         self.assertIsNone(tracker.update(1, state, None, 1, points))
         self.assertIsNone(tracker.update(2, state, None, 2, points))
 
+    def test_single_close_radar_point_is_available_to_emergency_braking(self):
+        tracker = LeadVehicleTracker(0.05, 800, 90.0)
+        state = straight_state(speed_mps=8.0)
+        points = [
+            {
+                "depth_m": 9.0,
+                "azimuth_deg": 0.0,
+                "altitude_deg": 0.0,
+                "relative_velocity_mps": 8.0,
+            }
+        ]
+
+        lead = tracker.update(1, state, None, 1, points)
+        emergency = tracker.get_emergency_obstacle()
+
+        self.assertIsNone(lead)
+        self.assertIsNotNone(emergency)
+        self.assertEqual(emergency["source"], "radar_emergency")
+        self.assertAlmostEqual(emergency["relative_speed_mps"], -8.0)
+
+    def test_adjacent_radar_point_is_not_an_emergency_obstacle(self):
+        tracker = LeadVehicleTracker(0.05, 800, 90.0)
+        state = straight_state(speed_mps=8.0)
+        points = [
+            {
+                "depth_m": 9.0,
+                "azimuth_deg": 13.0,
+                "altitude_deg": 0.0,
+                "relative_velocity_mps": 8.0,
+            }
+        ]
+
+        tracker.update(1, state, None, 1, points)
+
+        self.assertIsNone(tracker.get_emergency_obstacle())
+
 
 if __name__ == "__main__":
     unittest.main()

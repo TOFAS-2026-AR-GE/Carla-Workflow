@@ -5,7 +5,7 @@ Bu branch, CARLA içindeki ego aracı için şu canlı akışı çalıştırır:
 1. Ön RGB kameradan YOLO araç tespiti ve OpenCV bbox gösterimi
 2. Ön radar ile kamera bbox eşleştirmesi
 3. Aynı şeritteki kararlı lead vehicle seçimi
-4. Stanley şerit takibi, eğriliğe göre hız planlama, ACC/CBF ve acil fren
+4. Stanley şerit takibi, eğriliğe göre hız planlama, IDM takip ve acil fren
 
 Varsayılan canlı kullanımda yalnızca `camera_front_wide` ve
 `radar_front_long` açılır. Böylece kullanılmayan 25 sensör simülasyonu ve
@@ -87,19 +87,26 @@ paketini açar ve kayıtları `data/runs/` altında oluşturur.
 
 ## Kontrol davranışı
 
-- 2 metre, hareket halindeki sabit takip mesafesi değil duruş boşluğudur.
-- Hareketli takip hedefi `2 m + 0.9 s × ego hızı` olarak hesaplanır.
-- Araç 2 metre boşlukta `HOLD` moduna geçerek sabit frenle yerinde kalır.
-- Düşük hızda `APPROACH`, mesafe sıçramalarına doğrudan gaz/fren vermek yerine
-  öndeki aracın hızına ve kalan boşluğa göre tek bir yaklaşma hızı hesaplar.
-- `RESTART` yalnızca araç gerçekten `HOLD` durumundayken ve öndeki aracın
-  kalkışı iki tick doğrulandığında etkinleşir; uzaktaki gürültülü ölçüm tek
-  başına kalkış komutu üretemez.
+- Boylamsal kontrol, literatürdeki Intelligent Driver Model (IDM) denklemini
+  kullanır. Serbest yol, yaklaşma ve takip için ayrı fazlar yoktur; her tick'te
+  hız, mesafe ve bağıl hızdan tek bir sürekli ivme hesaplanır.
+- `2.0 m` duruş boşluğu, `1.2 s` zaman aralığı, `1.5 m/s²` rahat hızlanma ve
+  `2.0 m/s²` rahat yavaşlama IDM'nin fiziksel parametreleridir.
+- Araç yaklaşık 2 metre boşlukta tamamen durunca `HOLD` moduna geçer. Bu,
+  eğimde kaymayı önleyen tek ayrık kontrol durumudur.
+- Öndeki araç hareket ettiğinde iki ardışık tick yeterlidir. `HOLD` bırakılır
+  ve gaz yine aynı IDM ivmesinden gelir; sabit süre bekleyen bir kalkış fazı
+  yoktur. Durum satırındaki kısa `RESTART` etiketi yalnızca gözlem amaçlıdır.
+- Düşük hızda pozitif IDM ivmesi CARLA'nın mekanik direncinde kaybolmasın diye
+  küçük bir başlangıç gazı uygulanır. Böylece 3-5 metre aralığında araç
+  gazsız ve frensiz biçimde sürünmez.
+- İvme ve fren komutlarında ayrı jerk limitleri vardır. Gaz ve fren aynı tick'te
+  hiçbir zaman birlikte verilmez.
 - Kamera ve radar mesafeleri kaynak değiştirirken yakın olan radar ölçümü
   korunur; daha uzağa sıçrayan ölçümler yavaş filtrelenir.
 - Radar bağıl hızında negatif değer yaklaşmayı, pozitif değer uzaklaşmayı gösterir.
-- Uzak araç yalnızca gözlemlenir (`LEAD_FAR`); dinamik aktivasyon mesafesine
-  girmeden fren komutu üretmez.
+- Uzak ve yaklaşmayan araç yalnızca gözlemlenir (`LEAD_FAR`). Yaklaşma hızı
+  yüksekse IDM uzak mesafede de erken ve yumuşak biçimde yavaşlayabilir.
 - Radar-only engel normalde iki ardışık tick doğrulanmadan ACC'ye verilmez.
   Çok yakın veya TTC'si kritik engelde güvenlik için beklenmez.
 - CARLA GPU kamera callback'i birkaç tick gecikse bile gerçek kamera frame'i
@@ -108,8 +115,19 @@ paketini açar ve kayıtları `data/runs/` altında oluşturur.
   girdisi üretir.
 - Durum satırındaki `ctrl_gap`, filtrelenip boylamsal kontrolcüde kullanılan
   gerçek takip mesafesidir; `lead` ise takip katmanının ham seçimini gösterir.
-- Stanley direksiyon komutu hata filtresi, hız tabanlı limit ve değişim hızı
-  limitiyle yumuşatılır.
+- Stanley kontrolcüsü ön aksın rota başlık ve yanal hatasını kullanır. Direksiyon
+  komutu hata filtresi, hız tabanlı limit ve değişim hızı limitiyle yumuşatılır.
+- Viraj hedef hızı `v = sqrt(a_y / eğrilik)` bağıntısıyla belirlenir. Rota
+  hatası büyüdüğünde araç kontrollü toparlanabilmek için ayrıca yavaşlar.
+- AEB normal takipten bağımsızdır. En tehlikeli kamera/radar adayının TTC'sini
+  ve 2 metre boşlukta durmak için gereken yavaşlamayı izler; kritik durumda
+  normal kontrolü geçersiz kılıp tam fren uygular.
+
+Kontrol denklemlerinin temel kaynakları:
+
+- [Intelligent Driver Model](https://mtreiber.de/publications/micro_tgf99.pdf)
+- [Stanley lateral control](https://ai.stanford.edu/~gabeh/papers/hoffmann_stanley_control07.pdf)
+- [NHTSA Automatic Emergency Braking standard](https://www.federalregister.gov/documents/2024/05/09/2024-09054/federal-motor-vehicle-safety-standards-automatic-emergency-braking-systems-for-light-vehicles)
 
 ## Testler
 
@@ -118,6 +136,7 @@ python -m unittest discover -s tests -v
 python -m compileall -q carla_app main.py scripts tests
 ```
 
-Testler; direksiyon yönünü ve rate limitini, uzak aracın fren yaptırmamasını,
-yakın araç takibini, acil freni, radar doğrulamasını, komşu şerit reddini,
+Testler; Stanley yönünü ve rate limitini, viraj hızını, gönderilen düşük hız
+logunun tekrarını, gürültülü ölçümde tek seferde 2 metreye duruşu, hızlı
+kalkışı, IDM takibini, acil freni, radar doğrulamasını, komşu şerit reddini,
 kamera-radar füzyonunu ve levha hatasının araç bbox'ını bozmamasını kapsar.

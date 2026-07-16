@@ -84,8 +84,8 @@ class CarlaApplication:
 
             print("[INFO] Q, ESC veya pencerenin X dugmesi ile cikis.")
             print(
-                "[INFO] Controller: PersistentRoute + filtered Stanley + "
-                "time-headway ACC/CBF + AEB"
+                "[INFO] Controller: PersistentRoute + Stanley + "
+                "IDM adaptive cruise + TTC/AEB"
             )
 
             first_frame_id = None

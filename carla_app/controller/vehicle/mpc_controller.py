@@ -1,7 +1,5 @@
 import math
 
-import carla
-
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(value, maximum))
@@ -14,114 +12,109 @@ def normalize_angle(angle):
     )
 
 
-class MPCController:
+class LateralMPC:
+    """Sadece direksiyon kontrolü yapan basit MPC."""
+
     def __init__(self, dt=0.05):
         self.dt = dt
 
-        # MPC gelecekte kaç adım düşünecek?
         self.horizon = 10
-
-        # Tesla Model 3 için yaklaşık dingil mesafesi.
         self.wheelbase = 2.87
-
-        # Ön tekerleklerin yaklaşık maksimum açısı.
         self.max_wheel_angle = math.radians(35.0)
 
-        # Normal yol hedef hızı: 30 km/h.
-        self.target_speed_mps = 30.0 / 3.6
+        self.max_steer = 0.70
 
-        # Kavşak hedef hızı: 15 km/h.
-        self.junction_speed_mps = 15.0 / 3.6
+        # Bir tick'te direksiyon en fazla bu kadar değişebilir.
+        self.max_steer_change = 0.04
 
-        # MPC'nin deneyeceği direksiyon komutları.
-        self.steer_candidates = [
-            -0.6,
-            -0.4,
-            -0.2,
-            -0.1,
+        # Önceki direksiyonun çevresindeki adaylar.
+        self.steer_offsets = [
+            -0.12,
+            -0.08,
+            -0.04,
             0.0,
-            0.1,
-            0.2,
-            0.4,
-            0.6,
-        ]
-
-        # MPC'nin deneyeceği ivmeler.
-        # Pozitif: hızlanma
-        # Negatif: yavaşlama
-        self.acceleration_candidates = [
-            -4.0,
-            -2.0,
-            -1.0,
-            0.0,
-            1.0,
-            2.0,
+            0.04,
+            0.08,
+            0.12,
         ]
 
         self.previous_steer = 0.0
-        self.previous_acceleration = 0.0
 
     def run_step(self, state):
         reference_path = state["reference_path"]
 
         if not reference_path:
-            return carla.VehicleControl(brake=1.0)
+            self.previous_steer = 0.0
+            return 0.0
 
         best_cost = float("inf")
-        best_steer = 0.0
-        best_acceleration = 0.0
+        best_steer = self.previous_steer
 
-        for steer in self.steer_candidates:
-            for acceleration in self.acceleration_candidates:
-                cost = self.calculate_cost(
-                    state,
-                    reference_path,
-                    steer,
-                    acceleration,
-                )
+        for steer in self._build_candidates():
+            cost = self._calculate_cost(
+                state,
+                reference_path,
+                steer,
+            )
 
-                if cost < best_cost:
-                    best_cost = cost
-                    best_steer = steer
-                    best_acceleration = acceleration
+            if cost < best_cost:
+                best_cost = cost
+                best_steer = steer
 
-        self.previous_steer = best_steer
-        self.previous_acceleration = best_acceleration
-
-        return self.create_carla_control(
-            best_steer,
-            best_acceleration,
+        # Hard steering-rate constraint.
+        steer_change = clamp(
+            best_steer - self.previous_steer,
+            -self.max_steer_change,
+            self.max_steer_change,
         )
 
-    def calculate_cost(
+        smooth_steer = clamp(
+            self.previous_steer + steer_change,
+            -self.max_steer,
+            self.max_steer,
+        )
+
+        self.previous_steer = smooth_steer
+
+        return smooth_steer
+
+    def _build_candidates(self):
+        candidates = []
+
+        for offset in self.steer_offsets:
+            steer = clamp(
+                self.previous_steer + offset,
+                -self.max_steer,
+                self.max_steer,
+            )
+
+            if steer not in candidates:
+                candidates.append(steer)
+
+        return candidates
+
+    def _calculate_cost(
         self,
         state,
         reference_path,
         steer,
-        acceleration,
     ):
         location = state["location"]
 
-        x = location.x
-        y = location.y
+        x = float(location.x)
+        y = float(location.y)
         yaw = math.radians(state["yaw"])
-        speed = state["speed_mps"]
-
-        if state["is_junction"]:
-            target_speed = self.junction_speed_mps
-        else:
-            target_speed = self.target_speed_mps
+        speed = max(float(state["speed_mps"]), 0.0)
 
         total_cost = 0.0
 
         for step in range(self.horizon):
-            x, y, yaw, speed = self.predict_state(
+            x, y, yaw = self._predict_state(
                 x,
                 y,
                 yaw,
                 speed,
                 steer,
-                acceleration,
             )
 
             reference_index = min(
@@ -131,51 +124,79 @@ class MPCController:
 
             reference = reference_path[reference_index]
 
-            position_error = (
-                (x - reference.x) ** 2
-                + (y - reference.y) ** 2
+            reference_heading = self._reference_heading(
+                reference_path,
+                reference_index,
+                x,
+                y,
             )
 
-            target_angle = math.atan2(
-                reference.y - y,
-                reference.x - x,
+            dx = x - reference.x
+            dy = y - reference.y
+
+            # Sadece şeride dik olan hata.
+            # Yol boyunca önde/geride olma direksiyonu bozmaz.
+            lateral_error = (
+                -math.sin(reference_heading) * dx
+                + math.cos(reference_heading) * dy
             )
 
             heading_error = normalize_angle(
-                target_angle - yaw
+                yaw - reference_heading
             )
 
-            speed_error = target_speed - speed
+            total_cost += 4.0 * lateral_error**2
+            total_cost += 2.5 * heading_error**2
+            total_cost += 0.10 * steer**2
 
-            total_cost += 1.0 * position_error
-            total_cost += 2.0 * heading_error**2
-            total_cost += 0.4 * speed_error**2
-            total_cost += 0.1 * steer**2
-            total_cost += 0.05 * acceleration**2
-
+        # Ani direksiyon değişikliğine güçlü ceza.
         steer_change = steer - self.previous_steer
-        acceleration_change = (
-            acceleration - self.previous_acceleration
-        )
-
-        total_cost += 0.8 * steer_change**2
-        total_cost += 0.1 * acceleration_change**2
+        total_cost += 6.0 * steer_change**2
 
         return total_cost
 
-    def predict_state(
+    def _reference_heading(
+        self,
+        reference_path,
+        index,
+        x,
+        y,
+    ):
+        if index + 1 < len(reference_path):
+            current = reference_path[index]
+            following = reference_path[index + 1]
+
+            return math.atan2(
+                following.y - current.y,
+                following.x - current.x,
+            )
+
+        current = reference_path[index]
+
+        return math.atan2(
+            current.y - y,
+            current.x - x,
+        )
+
+    def _predict_state(
         self,
         x,
         y,
         yaw,
         speed,
         steer,
-        acceleration,
     ):
         wheel_angle = steer * self.max_wheel_angle
 
-        next_x = x + speed * math.cos(yaw) * self.dt
-        next_y = y + speed * math.sin(yaw) * self.dt
+        next_x = (
+            x
+            + speed * math.cos(yaw) * self.dt
+        )
+
+        next_y = (
+            y
+            + speed * math.sin(yaw) * self.dt
+        )
 
         next_yaw = yaw + (
             speed
@@ -184,31 +205,4 @@ class MPCController:
             * self.dt
         )
 
-        next_speed = speed + acceleration * self.dt
-        next_speed = max(0.0, next_speed)
-
-        return (
-            next_x,
-            next_y,
-            next_yaw,
-            next_speed,
-        )
-
-    def create_carla_control(
-        self,
-        steer,
-        acceleration,
-    ):
-        throttle = 0.0
-        brake = 0.0
-
-        if acceleration >= 0.0:
-            throttle = acceleration / 2.0
-        else:
-            brake = abs(acceleration) / 4.0
-
-        return carla.VehicleControl(
-            throttle=clamp(throttle, 0.0, 0.7),
-            steer=clamp(steer, -0.7, 0.7),
-            brake=clamp(brake, 0.0, 1.0),
-        )
+        return next_x, next_y, next_yaw

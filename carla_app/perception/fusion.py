@@ -1,68 +1,213 @@
 """
-Kamera (YOLO bbox) + radar füzyonu.
+Kamera bbox ve radar eslestirmesi.
 
-YOLO sadece 2D bbox verir, mesafe/hız bilgisi yoktur. Bu modül,
-bbox merkezinin acisal konumunu (bearing) kamera intrinsiklerinden
-hesaplar ve ayni yondeki radar noktalariyla eslestirerek her
-tespite gercek mesafe (range) ve goreli hiz (relative velocity)
-kazandirir.
-
-Varsayimlar (Faz 1 checkpoint'inde dogrulanmali):
-- camera_front_wide ve radar_front_long ikisi de yaw=0 (arac
-  ileri yonune hizali), bu yuzden azimuth/bearing dogrudan
-  karsilastirilabilir. Kucuk pitch farki (-4 derece kamera,
-  0 derece radar) yatay bearing'i etkilemez.
-- CARLA radar azimuth isareti: pozitif = sag. Bbox bearing de
-  ayni isaret kuralinda hesaplaniyor (pikselin goruntu merkezine
-  gore sagda olmasi -> pozitif bearing). Sahnede sagdaki/soldaki
-  bir aracla test edip bu isaretin tutarli oldugunu dogrula.
-- CARLA radar "velocity": nesnenin sensore gore radyal hizi.
-  Isaretin "yaklasiyor" mu "uzaklasiyor" mu anlamina geldigini
-  bilinen bir sahnede (durgun ego + yaklasan arac) dogrula ve
-  gerekirse asagidaki fonksiyonlari isaret ters cevirecek sekilde
-  guncelle.
+Eslestirme:
+- bbox'in tam acisal genisligini kullanir
+- radar noktalarini derinlige gore cluster'lar
+- minimum tek nokta yerine dusuk yuzdelik kullanir
+- median radar hizi ve acisi kullanir
 """
 
 import math
 
 
-def camera_focal_length_px(image_width, fov_deg):
+def camera_focal_length_px(
+    image_width,
+    fov_deg,
+):
     fov_rad = math.radians(fov_deg)
-    return image_width / (2.0 * math.tan(fov_rad / 2.0))
 
-
-def bbox_bearing_deg(bbox, image_width, fov_deg):
-    x1, _, x2, _ = bbox
-    bbox_center_x = (x1 + x2) / 2.0
-    image_center_x = image_width / 2.0
-    focal_length = camera_focal_length_px(image_width, fov_deg)
-    return math.degrees(
-        math.atan((bbox_center_x - image_center_x) / focal_length)
+    return image_width / (
+        2.0
+        * math.tan(fov_rad / 2.0)
     )
+
+
+def pixel_bearing_deg(
+    pixel_x,
+    image_width,
+    fov_deg,
+):
+    image_center_x = (
+        image_width / 2.0
+    )
+
+    focal_length = (
+        camera_focal_length_px(
+            image_width,
+            fov_deg,
+        )
+    )
+
+    return math.degrees(
+        math.atan(
+            (
+                pixel_x
+                - image_center_x
+            )
+            / focal_length
+        )
+    )
+
+
+def bbox_bearing_deg(
+    bbox,
+    image_width,
+    fov_deg,
+):
+    x1, _, x2, _ = bbox
+
+    return pixel_bearing_deg(
+        (x1 + x2) / 2.0,
+        image_width,
+        fov_deg,
+    )
+
+
+def bbox_bearing_interval_deg(
+    bbox,
+    image_width,
+    fov_deg,
+):
+    x1, _, x2, _ = bbox
+
+    left = pixel_bearing_deg(
+        x1,
+        image_width,
+        fov_deg,
+    )
+
+    right = pixel_bearing_deg(
+        x2,
+        image_width,
+        fov_deg,
+    )
+
+    return (
+        min(left, right),
+        max(left, right),
+    )
+
+
+def _median(values):
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+
+    if len(ordered) % 2:
+        return ordered[middle]
+
+    return 0.5 * (
+        ordered[middle - 1]
+        + ordered[middle]
+    )
+
+
+def _cluster_by_depth(
+    points,
+    maximum_gap_m=2.5,
+):
+    if not points:
+        return []
+
+    ordered = sorted(
+        points,
+        key=lambda point: (
+            point["depth_m"]
+        ),
+    )
+
+    clusters = [[ordered[0]]]
+
+    for point in ordered[1:]:
+        previous_depth = (
+            clusters[-1][-1][
+                "depth_m"
+            ]
+        )
+
+        adaptive_gap = max(
+            maximum_gap_m,
+            0.05 * previous_depth,
+        )
+
+        if (
+            point["depth_m"]
+            - previous_depth
+            > adaptive_gap
+        ):
+            clusters.append([point])
+        else:
+            clusters[-1].append(point)
+
+    return clusters
 
 
 def _summarize_matches(points):
     if not points:
         return None
 
-    depths = [point["depth_m"] for point in points]
-    velocities = sorted(point["relative_velocity_mps"] for point in points)
+    clusters = _cluster_by_depth(
+        points
+    )
 
-    # En yakin nokta genelde tampon/govde donusu -> hedefin on
-    # yuzeyine en iyi mesafe tahmini budur.
-    closest_index = depths.index(min(depths))
+    multi_point_clusters = [
+        cluster
+        for cluster in clusters
+        if len(cluster) >= 2
+    ]
 
-    count = len(velocities)
-    middle = count // 2
-    if count % 2 == 1:
-        median_velocity = velocities[middle]
-    else:
-        median_velocity = 0.5 * (velocities[middle - 1] + velocities[middle])
+    usable_clusters = (
+        multi_point_clusters
+        or clusters
+    )
+
+    cluster = min(
+        usable_clusters,
+        key=lambda item: _median(
+            [
+                point["depth_m"]
+                for point in item
+            ]
+        ),
+    )
+
+    depths = sorted(
+        point["depth_m"]
+        for point in cluster
+    )
+
+    # En yakin tek outlier yerine
+    # cluster'in dusuk yuzdeligi.
+    percentile_index = int(
+        round(
+            0.25
+            * (len(depths) - 1)
+        )
+    )
+
+    range_m = depths[
+        percentile_index
+    ]
 
     return {
-        "range_m": depths[closest_index],
-        "relative_velocity_mps": median_velocity,
-        "matched_points": count,
+        "range_m": range_m,
+        "bearing_deg": _median(
+            [
+                point["azimuth_deg"]
+                for point in cluster
+            ]
+        ),
+        "relative_velocity_mps": (
+            _median(
+                [
+                    point[
+                        "relative_velocity_mps"
+                    ]
+                    for point in cluster
+                ]
+            )
+        ),
+        "matched_points": len(cluster),
     }
 
 
@@ -74,84 +219,146 @@ def fuse_detections_with_radar(
     image_width,
     camera_fov_deg,
     fixed_delta_seconds,
-    angular_gate_deg=3.0,
+    angular_padding_deg=0.75,
 ):
-    """
-    detections: PerceptionSystem.detect(...)['vehicles'] listesi
-                (her biri 'bbox' iceren dict).
-    detection_frame_id: perception_result['frame_id'] -> YOLO'nun
-                hangi kamera frame'ini isledigini soyler.
-    radar_points: sensors.processors.radar_to_list(...) formatinda
-                  liste (depth_m, relative_velocity_mps, azimuth_deg,
-                  altitude_deg).
-    radar_frame_id: bu radar paketinin frame numarasi (RadarStream
-                herhangi bir bekleme yapmadigi icin, cagrildigi anki
-                "en guncel" frame'dir).
-    fixed_delta_seconds: simulasyon tick suresi (config.py), frame
-                farkini saniyeye cevirmek icin.
-
-    YOLO worker asenkron ve gecikmeli calistigi icin
-    (perception_every_n_frames + inference suresi), detection_frame_id
-    genelde radar_frame_id'den birkac tick GERIDE kalir. Bu fark
-    dikkate alinmazsa, "su anki" radar mesafesi "birkac tick onceki"
-    bbox ile eslestirilmis olur -> araç hizli hareket ediyorsa
-    (ornegin 20 m/s, 3 tick = 150ms -> ~3m) sistematik hata olusur.
-
-    Duzeltme: radar mesafesini, olcum aninda bilinen goreli hizla,
-    detection'in ait oldugu (daha eski) ana geri ekstrapole ediyoruz:
-        delta_t = (radar_frame_id - detection_frame_id) * dt
-        range_adjusted = range_raw - relative_velocity * delta_t
-
-    Donen liste, her tespite asagidaki alanlari ekler:
-        bearing_deg, has_range, range_m (duzeltilmis),
-        raw_range_m (ham radar olcumu), delta_t_s,
-        relative_velocity_mps, radar_points_matched
-    """
     delta_t = 0.0
-    if detection_frame_id is not None and radar_frame_id is not None:
-        delta_frames = radar_frame_id - detection_frame_id
-        delta_t = delta_frames * fixed_delta_seconds
+
+    if (
+        detection_frame_id is not None
+        and radar_frame_id is not None
+    ):
+        delta_frames = (
+            radar_frame_id
+            - detection_frame_id
+        )
+
+        delta_t = max(
+            0.0,
+            delta_frames
+            * fixed_delta_seconds,
+        )
 
     fused = []
 
     for detection in detections:
-        bearing = bbox_bearing_deg(
-            detection["bbox"], image_width, camera_fov_deg
+        bbox_bearing = (
+            bbox_bearing_deg(
+                detection["bbox"],
+                image_width,
+                camera_fov_deg,
+            )
+        )
+
+        (
+            left_bearing,
+            right_bearing,
+        ) = bbox_bearing_interval_deg(
+            detection["bbox"],
+            image_width,
+            camera_fov_deg,
+        )
+
+        left_bearing -= (
+            angular_padding_deg
+        )
+        right_bearing += (
+            angular_padding_deg
         )
 
         candidates = [
             point
             for point in radar_points
-            if abs(point["azimuth_deg"] - bearing) <= angular_gate_deg
+            if (
+                left_bearing
+                <= point["azimuth_deg"]
+                <= right_bearing
+                and abs(
+                    point.get(
+                        "altitude_deg",
+                        0.0,
+                    )
+                )
+                <= 6.0
+                and 0.5
+                < point["depth_m"]
+                <= 100.0
+            )
         ]
 
-        match = _summarize_matches(candidates)
+        match = _summarize_matches(
+            candidates
+        )
 
-        fused_detection = dict(detection)
-        fused_detection["bearing_deg"] = bearing
-        fused_detection["delta_t_s"] = delta_t
+        fused_detection = dict(
+            detection
+        )
+
+        fused_detection[
+            "bbox_bearing_deg"
+        ] = bbox_bearing
+
+        fused_detection[
+            "delta_t_s"
+        ] = delta_t
 
         if match is None:
-            fused_detection["has_range"] = False
-            fused_detection["range_m"] = None
-            fused_detection["raw_range_m"] = None
-            fused_detection["relative_velocity_mps"] = None
-            fused_detection["radar_points_matched"] = 0
+            fused_detection.update(
+                {
+                    "bearing_deg": (
+                        bbox_bearing
+                    ),
+                    "has_range": False,
+                    "range_m": None,
+                    "raw_range_m": None,
+                    "relative_velocity_mps": (
+                        None
+                    ),
+                    "radar_points_matched": 0,
+                }
+            )
         else:
-            raw_range = match["range_m"]
-            relative_velocity = match["relative_velocity_mps"]
-            adjusted_range = raw_range - relative_velocity * delta_t
-            # Negatif/anlamsiz mesafeye karsi guvenlik payi -
-            # ekstrapolasyon buyuk sapma verirse (ornegin isaret
-            # yanlissa) burada fark edilir.
-            adjusted_range = max(adjusted_range, 0.0)
+            raw_range = match[
+                "range_m"
+            ]
 
-            fused_detection["has_range"] = True
-            fused_detection["range_m"] = adjusted_range
-            fused_detection["raw_range_m"] = raw_range
-            fused_detection["relative_velocity_mps"] = relative_velocity
-            fused_detection["radar_points_matched"] = match["matched_points"]
+            relative_velocity = match[
+                "relative_velocity_mps"
+            ]
 
-        fused.append(fused_detection)
+            adjusted_range = max(
+                0.0,
+                raw_range
+                - relative_velocity
+                * delta_t,
+            )
+
+            fused_detection.update(
+                {
+                    "bearing_deg": (
+                        match[
+                            "bearing_deg"
+                        ]
+                    ),
+                    "has_range": True,
+                    "range_m": (
+                        adjusted_range
+                    ),
+                    "raw_range_m": (
+                        raw_range
+                    ),
+                    "relative_velocity_mps": (
+                        relative_velocity
+                    ),
+                    "radar_points_matched": (
+                        match[
+                            "matched_points"
+                        ]
+                    ),
+                }
+            )
+
+        fused.append(
+            fused_detection
+        )
 
     return fused

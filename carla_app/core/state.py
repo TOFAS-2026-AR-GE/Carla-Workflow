@@ -3,7 +3,16 @@ import math
 import carla
 
 
-def build_reference_path(start_waypoint, point_count=10, spacing=0.5):
+def build_reference_path(
+    start_waypoint,
+    point_count=80,
+    spacing=1.0,
+):
+    """
+    RouteManager kullanilmayan yerler icin
+    geriye uyumlu basit yol uretici.
+    """
+
     reference_path = []
     current_waypoint = start_waypoint
 
@@ -13,13 +22,40 @@ def build_reference_path(start_waypoint, point_count=10, spacing=0.5):
         if not next_waypoints:
             break
 
-        current_waypoint = next_waypoints[0]
-        reference_path.append(current_waypoint.transform.location)
+        current_yaw = math.radians(
+            current_waypoint.transform.rotation.yaw
+        )
+
+        def heading_difference(waypoint):
+            candidate_yaw = math.radians(
+                waypoint.transform.rotation.yaw
+            )
+            difference = candidate_yaw - current_yaw
+
+            return abs(
+                math.atan2(
+                    math.sin(difference),
+                    math.cos(difference),
+                )
+            )
+
+        current_waypoint = min(
+            next_waypoints,
+            key=heading_difference,
+        )
+
+        reference_path.append(
+            current_waypoint.transform.location
+        )
 
     return reference_path
 
 
-def read_vehicle_state(world, vehicle):
+def read_vehicle_state(
+    world,
+    vehicle,
+    route_manager=None,
+):
     transform = vehicle.get_transform()
     velocity = vehicle.get_velocity()
 
@@ -29,21 +65,36 @@ def read_vehicle_state(world, vehicle):
         + velocity.z**2
     )
 
-    waypoint = world.get_map().get_waypoint(
-        transform.location,
-        project_to_road=True,
-        lane_type=carla.LaneType.Driving,
-    )
+    if route_manager is not None:
+        waypoint, reference_path = route_manager.update(
+            transform.location
+        )
+    else:
+        waypoint = world.get_map().get_waypoint(
+            transform.location,
+            project_to_road=True,
+            lane_type=carla.LaneType.Driving,
+        )
+
+        if waypoint is None:
+            raise RuntimeError(
+                "Arac icin surus seridi bulunamadi."
+            )
+
+        reference_path = build_reference_path(
+            waypoint
+        )
 
     if waypoint is None:
-        raise RuntimeError("Arac icin surus seridi bulunamadi.")
+        raise RuntimeError(
+            "Kalici rota uzerinde waypoint bulunamadi."
+        )
 
-    reference_path = build_reference_path(waypoint)
-
-    if reference_path:
-        next_location = reference_path[0]
-    else:
-        next_location = None
+    next_location = (
+        reference_path[0]
+        if reference_path
+        else None
+    )
 
     return {
         "location": transform.location,
@@ -59,7 +110,10 @@ def read_vehicle_state(world, vehicle):
     }
 
 
-def serializable_vehicle_state(state, control):
+def serializable_vehicle_state(
+    state,
+    control,
+):
     location = state["location"]
 
     return {

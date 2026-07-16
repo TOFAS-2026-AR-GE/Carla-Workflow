@@ -1,4 +1,4 @@
-"""Top-level vehicle controller."""
+"""Direksiyon, hiz, arac takip ve acil freni bir araya getirir."""
 
 import carla
 
@@ -11,7 +11,7 @@ from carla_app.controller.vehicle.stanley_controller import StanleyController
 
 
 class VehicleController:
-    """Combine path tracking, speed planning, IDM and independent AEB."""
+    """Rota takibi, hiz plani, IDM ve bagimsiz AEB'yi birlikte calistirir."""
 
     def __init__(self, dt=0.05, cruise_speed_kmh=60.0):
         self.lateral = StanleyController(dt)
@@ -27,8 +27,8 @@ class VehicleController:
             lateral_info=lateral_info,
         )
 
-        # Raw one-point radar data belongs only to AEB. Normal IDM following
-        # uses the camera/radar track or a confirmed radar cluster.
+        # Tek bir ham radar noktasi sadece AEB'ye gider. Normal IDM takibi,
+        # kamera-radar takibini veya dogrulanmis radar kumesini kullanir.
         control_lead = lead_vehicle
         throttle, brake, longitudinal_info = self.longitudinal.run_step(
             state,

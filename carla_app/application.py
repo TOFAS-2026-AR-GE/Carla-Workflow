@@ -1,4 +1,4 @@
-"""CARLA application lifecycle and main simulation loop."""
+"""CARLA uygulamasinin acilis, ana dongu ve kapanis islemleri."""
 
 import math
 
@@ -19,7 +19,7 @@ from carla_app.visualization.viewer import PerceptionViewer
 
 
 class CarlaApplication:
-    """Run perception and control in CARLA synchronous mode."""
+    """Algilama ve kontrol akisini CARLA senkron modunda calistirir."""
 
     def __init__(self):
         self.settings = Settings.load()
@@ -139,7 +139,7 @@ class CarlaApplication:
 
                 if frame_id % status_every_frames == 0:
                     print(
-                        self._status_message(
+                        self.status_message(
                             frame_id=frame_id,
                             camera_frame_id=camera_frame_id,
                             state=state,
@@ -160,7 +160,7 @@ class CarlaApplication:
                 ):
                     break
 
-                if self._runtime_limit_reached(first_frame_id, frame_id, dt):
+                if self.runtime_limit_reached(first_frame_id, frame_id, dt):
                     print("[INFO] MAX_RUNTIME_SECONDS sinirina ulasildi.")
                     break
 
@@ -170,10 +170,10 @@ class CarlaApplication:
             print(f"[ERROR] {type(error).__name__}: {error}")
             raise
         finally:
-            self._cleanup("viewer", viewer, "close")
-            self._cleanup("perception worker", worker, "stop")
-            self._cleanup("sensors", sensors, "stop")
-            self._cleanup("traffic", traffic, "stop")
+            self.cleanup("viewer", viewer, "close")
+            self.cleanup("perception worker", worker, "stop")
+            self.cleanup("sensors", sensors, "stop")
+            self.cleanup("traffic", traffic, "stop")
 
             if vehicle is not None:
                 try:
@@ -182,17 +182,17 @@ class CarlaApplication:
                 except Exception as error:
                     print(f"[WARN] Ego arac silinemedi: {error}")
 
-            self._cleanup("CARLA session", session, "close")
+            self.cleanup("CARLA session", session, "close")
 
-    def _runtime_limit_reached(self, first_frame_id, frame_id, dt):
+    def runtime_limit_reached(self, first_frame_id, frame_id, dt):
         limit = self.settings.max_runtime_seconds
         if limit <= 0.0:
             return False
         elapsed_simulation_seconds = (int(frame_id) - int(first_frame_id)) * dt
         return elapsed_simulation_seconds >= limit
 
-    @staticmethod
-    def _status_message(
+    def status_message(
+        self,
         frame_id,
         camera_frame_id,
         state,
@@ -258,8 +258,7 @@ class CarlaApplication:
 
         return message
 
-    @staticmethod
-    def _cleanup(name, instance, method_name):
+    def cleanup(self, name, instance, method_name):
         if instance is None:
             return
         try:

@@ -1,4 +1,4 @@
-"""Associate camera bounding boxes with front-radar detections."""
+"""On kamera kutularini on radar noktalariyla eslestirir."""
 
 import math
 
@@ -37,8 +37,8 @@ def median(values):
     return 0.5 * (ordered[middle - 1] + ordered[middle])
 
 
-def _cluster_by_depth(points, minimum_gap_m=2.5):
-    """Split angularly matched radar returns into separate depth layers."""
+def cluster_by_depth(points, minimum_gap_m=2.5):
+    """Ayni aciya dusen radar noktalarini mesafe katmanlarina ayirir."""
     if not points:
         return []
 
@@ -56,8 +56,9 @@ def _cluster_by_depth(points, minimum_gap_m=2.5):
     return clusters
 
 
-def _summarize_nearest_cluster(points):
-    clusters = _cluster_by_depth(points)
+def summarize_nearest_cluster(points):
+    """En yakin kararli radar kumesinin mesafe, aci ve hizini ozetler."""
+    clusters = cluster_by_depth(points)
     if not clusters:
         return None
 
@@ -91,11 +92,11 @@ def fuse_detections_with_radar(
     fixed_delta_seconds,
     angular_padding_deg=0.75,
 ):
-    """Add metric radar range and velocity to each camera detection.
+    """Her kamera tespitine radar mesafesi ve bagil hizi ekler.
 
-    Radar points already belong to ``radar_frame_id``. Their range must not be
-    extrapolated a second time. Frame age is used only to widen the angular
-    association gate for an older camera box.
+    Radar noktasi zaten ``radar_frame_id`` karesine aittir; mesafesi ikinci
+    kez ileri tasinmaz. Kare yasi yalnizca eski kamera kutusunun aci eslestirme
+    payini bir miktar genisletmek icin kullanilir.
     """
     frame_delta = 0
     if detection_frame_id is not None and radar_frame_id is not None:
@@ -122,7 +123,7 @@ def fuse_detections_with_radar(
             and abs(point.get("altitude_deg", 0.0)) <= 6.0
             and 0.5 < point["depth_m"] <= 100.0
         ]
-        match = _summarize_nearest_cluster(candidates)
+        match = summarize_nearest_cluster(candidates)
         item = dict(detection)
         item["bbox_bearing_deg"] = center_bearing
         item["delta_t_s"] = delta_t
@@ -143,9 +144,8 @@ def fuse_detections_with_radar(
                     "bearing_deg": match["bearing_deg"],
                     "has_range": True,
                     "range_m": match["range_m"],
-                    # Preserve CARLA's signed radial velocity. The controller
-                    # uses the observed sign directly: negative is closing and
-                    # positive is pulling away in the live sensor stream.
+                    # CARLA'nin bagil hiz isaretini koru. Canli akista negatif
+                    # deger yaklasmayi, pozitif deger uzaklasmayi gosterir.
                     "relative_velocity_mps": match["radar_velocity_mps"],
                     "radar_points_matched": match["matched_points"],
                 }

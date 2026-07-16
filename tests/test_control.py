@@ -23,6 +23,7 @@ def straight_state(speed_mps=0.0, y=0.0):
         "speed_kmh": float(speed_mps) * 3.6,
         "reference_path": [location(x) for x in range(81)],
         "lane_width": 3.5,
+        "vehicle_half_width_m": 0.95,
         "road_id": 1,
         "lane_id": -1,
         "is_junction": False,
@@ -65,6 +66,14 @@ class StanleyControllerTests(unittest.TestCase):
         steer = controller.run_step(curved_state())
         self.assertGreater(controller.last_info["curvature_1pm"], 0.0)
         self.assertGreater(steer, 0.0)
+
+    def test_lane_edge_increases_centering_correction(self):
+        controller = StanleyController(dt=0.05)
+        state = straight_state(speed_mps=8.0)
+
+        corrected_error = controller.calculate_lane_edge_error(0.70, state)
+
+        self.assertGreater(corrected_error, 0.70)
 
     def test_closed_loop_curve_tracking_stays_near_the_path(self):
         controller = StanleyController(dt=0.05)
@@ -127,10 +136,40 @@ class SpeedPlannerTests(unittest.TestCase):
         speed, info = planner.run_step(curved_state(radius_m=20.0))
         self.assertAlmostEqual(info["curvature_1pm"], 1.0 / 20.0, places=3)
         self.assertLess(info["desired_speed_mps"], planner.cruise_speed_mps)
-        self.assertAlmostEqual(
-            planner.cruise_speed_mps - speed,
-            planner.maximum_speed_decrease_mps2 * planner.dt,
+        self.assertAlmostEqual(speed, info["desired_speed_mps"])
+
+    def test_safety_speed_drop_is_not_delayed(self):
+        planner = CurvatureSpeedPlanner(dt=0.05, cruise_speed_kmh=80.0)
+        speed, info = planner.run_step(
+            straight_state(speed_mps=15.0),
+            lateral_info={
+                "cross_track_error_m": 0.70,
+                "heading_error_rad": math.radians(24.0),
+            },
         )
+
+        self.assertAlmostEqual(speed, 8.0 / 3.6)
+        self.assertEqual(speed, info["desired_speed_mps"])
+
+    def test_high_speed_preview_sees_curve_beyond_thirty_five_metres(self):
+        planner = CurvatureSpeedPlanner(dt=0.05, cruise_speed_kmh=80.0)
+        path = [location(x) for x in range(41)]
+        radius_m = 20.0
+        for index in range(1, 41):
+            angle = index / radius_m
+            path.append(
+                location(
+                    40.0 + radius_m * math.sin(angle),
+                    radius_m * (1.0 - math.cos(angle)),
+                )
+            )
+        state = straight_state(speed_mps=80.0 / 3.6)
+        state["reference_path"] = path
+
+        speed, info = planner.run_step(state)
+
+        self.assertGreater(info["curvature_1pm"], 0.0)
+        self.assertLess(speed, planner.cruise_speed_mps)
 
     def test_large_lane_error_sets_recovery_speed(self):
         planner = CurvatureSpeedPlanner(dt=0.05)
@@ -431,6 +470,42 @@ class EmergencyBrakeTests(unittest.TestCase):
 
 
 class LeadVehicleTrackerTests(unittest.TestCase):
+    def test_front_camera_and_radar_create_one_fused_track(self):
+        tracker = LeadVehicleTracker(0.05, 800, 90.0)
+        state = straight_state(speed_mps=8.0)
+        radar_points = [
+            {
+                "depth_m": 20.0 + offset,
+                "azimuth_deg": offset,
+                "altitude_deg": 0.0,
+                "relative_velocity_mps": -2.0,
+            }
+            for offset in (-0.2, 0.0, 0.2)
+        ]
+
+        lead = None
+        for frame_id in (1, 2, 3):
+            perception = {
+                "frame_id": frame_id,
+                "vehicles": [
+                    {
+                        "bbox": (350, 180, 450, 420),
+                        "confidence": 0.90,
+                        "class_name": "vehicle",
+                    }
+                ],
+            }
+            lead = tracker.update(
+                frame_id,
+                state,
+                perception,
+                frame_id,
+                radar_points,
+            )
+
+        self.assertIsNotNone(lead)
+        self.assertEqual(lead["source"], "camera_radar_track")
+
     def test_logged_bumper_radar_ground_returns_are_rejected(self):
         tracker = LeadVehicleTracker(
             0.05,
@@ -504,7 +579,7 @@ class LeadVehicleTrackerTests(unittest.TestCase):
             "source": "radar_direct",
             "radar_points": 5,
         }
-        lead = tracker._choose_safest_lead(tracked_lead, radar_lead)
+        lead = tracker.choose_safest_lead(tracked_lead, radar_lead)
         self.assertEqual(lead["track_id"], tracked_lead["track_id"])
         self.assertEqual(lead["source"], "camera_radar_track")
         self.assertAlmostEqual(lead["distance_m"], 4.8)
@@ -574,6 +649,23 @@ class LeadVehicleTrackerTests(unittest.TestCase):
                 "relative_velocity_mps": -8.0,
             }
         ]
+        tracker.update(1, state, None, 1, points)
+        self.assertIsNone(tracker.get_emergency_obstacle())
+
+    def test_roadside_point_just_inside_lane_edge_is_rejected(self):
+        tracker = LeadVehicleTracker(0.05, 800, 90.0)
+        state = straight_state(speed_mps=8.0)
+        lateral_m = 1.55
+        depth_m = math.hypot(9.0, lateral_m)
+        points = [
+            {
+                "depth_m": depth_m,
+                "azimuth_deg": math.degrees(math.atan2(lateral_m, 9.0)),
+                "altitude_deg": 0.0,
+                "relative_velocity_mps": -8.0,
+            }
+        ]
+
         tracker.update(1, state, None, 1, points)
         self.assertIsNone(tracker.get_emergency_obstacle())
 

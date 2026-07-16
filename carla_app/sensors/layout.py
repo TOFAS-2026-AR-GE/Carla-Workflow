@@ -210,9 +210,9 @@ def build_sensor_layout(
         max(0.38, 0.52 * half_height),
     )
 
-    # The long-range radar must see vehicle bodies near the horizon, not the
-    # road a few metres ahead. Mount it around hood height and aim it slightly
-    # upward. Its exact height scales with the current vehicle's bounding box.
+    # Uzun menzil radari birkac metre ondeki yolu degil, ufka yakin arac
+    # govdelerini gormelidir. Kaput seviyesine yerlestirilir ve hafif yukari
+    # bakar. Yukseklik secilen aracin boyutuna gore otomatik hesaplanir.
     front_radar_height_above_ground = min(
         1.15,
         max(0.85, 0.70 * (2.0 * half_height)),

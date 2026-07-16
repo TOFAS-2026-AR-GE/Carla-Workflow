@@ -170,7 +170,7 @@ class Tracker:
 
     def __init__(self, gate_distance_m=5.0, max_misses=5):
         self.tracks = []
-        self._next_id = 1
+        self.next_id = 1
         self.gate_distance_m = gate_distance_m  # eslesme icin izin verilen max mesafe
         self.max_misses = max_misses  # bu kadar kayiptan sonra track silinir
 
@@ -217,12 +217,12 @@ class Tracker:
         for mi, meas in enumerate(measurements):
             if mi in used_measurements:
                 continue
-            new_track = Track(self._next_id, meas["x"], meas["y"], meas["class_name"])
+            new_track = Track(self.next_id, meas["x"], meas["y"], meas["class_name"])
             new_track.last_range_m = meas.get("range_m")
             new_track.last_bearing_deg = meas.get("bearing_deg")
             new_track.last_relative_velocity_mps = meas.get("relative_velocity_mps")
             self.tracks.append(new_track)
-            self._next_id += 1
+            self.next_id += 1
 
         # 5) Cok uzun suredir eslesmeyenleri temizle.
         self.tracks = [t for t in self.tracks if t.miss_count <= self.max_misses]

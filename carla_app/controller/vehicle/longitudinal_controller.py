@@ -1,4 +1,4 @@
-"""Longitudinal control based on the Intelligent Driver Model (IDM)."""
+"""Intelligent Driver Model (IDM) tabanli gaz ve fren kontrolu."""
 
 import math
 
@@ -8,19 +8,19 @@ def clamp(value, minimum, maximum):
 
 
 class LongitudinalController:
-    """Continuous cruise and car-following control with a standstill hold."""
+    """Sabit hiz, arac takip ve durdugu yerde fren tutma kontrolunu yapar."""
 
     def __init__(self, dt=0.05):
         self.dt = float(dt)
 
-        # IDM parameters. Each value has a physical meaning.
+        # IDM ayarlari. Her sayinin fiziksel bir anlami vardir.
         self.standstill_gap_m = 2.0
         self.time_headway_s = 1.2
         self.maximum_acceleration_mps2 = 1.5
         self.comfortable_deceleration_mps2 = 2.0
         self.acceleration_exponent = 4.0
 
-        # CARLA actuator limits and comfort limits.
+        # CARLA pedal sinirlari ve konfor sinirlari.
         self.maximum_deceleration_mps2 = 5.0
         self.acceleration_jerk_mps3 = 3.0
         self.braking_jerk_mps3 = 6.0
@@ -36,8 +36,8 @@ class LongitudinalController:
         self.maximum_brake = 0.90
         self.previous_acceleration_mps2 = 0.0
 
-        # A mechanical brake hold is the only discrete stop-and-go state.
-        # Normal approach and restart acceleration always come from IDM.
+        # Dur-kalk icindeki tek kesikli durum mekanik fren tutmadir.
+        # Normal yaklasma ve yeniden kalkis ivmesini her zaman IDM hesaplar.
         self.hold_speed_mps = 0.15
         self.hold_distance_m = 2.30
         self.hold_lead_speed_mps = 0.20
@@ -49,15 +49,15 @@ class LongitudinalController:
         self.release_evidence_ticks = 0
         self.restart_ticks_remaining = 0
 
-        # Two continuous observations are enough for normal ACC. AEB remains
-        # independent and can react to the first critical radar return.
+        # Normal adaptif hiz kontrolu icin iki ardisik olcum yeterlidir.
+        # AEB bagimsizdir ve ilk kritik radar donusune tepki verebilir.
         self.minimum_lead_ticks = 2
         self.lead_ticks = 0
         self.last_track_id = None
         self.last_raw_distance_m = None
 
-        # Asymmetric alpha-beta style input filtering. A closer measurement is
-        # accepted faster than a farther camera/radar source switch.
+        # Yakinlasan olcum hemen, uzaklasan kaynak degisimi daha yavas kabul
+        # edilir. Bu sayede kamera-radar gecisleri gaz-fren sicrama uretmez.
         self.filtered_distance_m = None
         self.filtered_lead_speed_mps = None
 
@@ -65,23 +65,25 @@ class LongitudinalController:
         ego_speed = max(0.0, float(state["speed_mps"]))
         target_speed = max(0.1, float(target_speed))
 
-        raw_lead = self._validate_lead(lead_vehicle)
-        lead_confirmed = self._confirm_lead(raw_lead)
-        lead = self._filter_lead(raw_lead, ego_speed)
+        raw_lead = self.validate_lead(lead_vehicle)
+        lead_confirmed = self.confirm_lead(raw_lead)
+        lead = self.filter_lead(raw_lead, ego_speed)
 
-        free_acceleration = self._free_road_acceleration(ego_speed, target_speed)
+        free_acceleration = self.calculate_free_road_acceleration(
+            ego_speed, target_speed
+        )
         desired_acceleration = free_acceleration
         desired_gap = None
         interaction_ratio = None
         lead_is_far = False
 
         if lead is not None and lead_confirmed:
-            desired_gap = self._idm_desired_gap(
+            desired_gap = self.calculate_idm_gap(
                 ego_speed=ego_speed,
                 relative_speed=lead["relative_speed_mps"],
             )
             interaction_ratio = desired_gap / max(lead["distance_m"], 0.25)
-            lead_is_far = self._lead_is_far(
+            lead_is_far = self.lead_is_far(
                 distance=lead["distance_m"],
                 desired_gap=desired_gap,
                 relative_speed=lead["relative_speed_mps"],
@@ -102,7 +104,7 @@ class LongitudinalController:
         measured_lead_speed = (
             lead["measured_lead_speed_mps"] if lead is not None else None
         )
-        self._update_hold(
+        self.update_hold(
             ego_speed=ego_speed,
             lead=lead,
             measured_lead_speed=measured_lead_speed,
@@ -114,8 +116,10 @@ class LongitudinalController:
             throttle, brake = 0.0, self.hold_brake
             mode = "HOLD"
         else:
-            acceleration = self._limit_jerk(desired_acceleration)
-            throttle, brake = self._to_pedals(acceleration, ego_speed)
+            acceleration = self.limit_jerk(desired_acceleration)
+            throttle, brake = self.convert_acceleration_to_pedals(
+                acceleration, ego_speed
+            )
 
             if self.restart_ticks_remaining > 0:
                 self.restart_ticks_remaining -= 1
@@ -151,19 +155,19 @@ class LongitudinalController:
         return throttle, brake, info
 
     def notify_emergency_stop(self):
-        """Remove stale acceleration memory while AEB owns the pedals."""
+        """AEB pedallari yonetirken eski ivme hafizasini temizler."""
         self.previous_acceleration_mps2 = 0.0
         self.restart_ticks_remaining = 0
 
-    def _free_road_acceleration(self, ego_speed, target_speed):
+    def calculate_free_road_acceleration(self, ego_speed, target_speed):
         speed_ratio = ego_speed / target_speed
         return self.maximum_acceleration_mps2 * (
             1.0 - speed_ratio**self.acceleration_exponent
         )
 
-    def _idm_desired_gap(self, ego_speed, relative_speed):
-        # Controller convention is lead_speed - ego_speed. IDM uses the
-        # opposite sign: positive closing_speed means ego is approaching.
+    def calculate_idm_gap(self, ego_speed, relative_speed):
+        # Projedeki bagil hiz, on_arac_hizi - ego_hizi seklindedir.
+        # IDM ise pozitif yaklasma hizi kullanir; bu nedenle isaret terslenir.
         closing_speed = -relative_speed
         braking_scale = 2.0 * math.sqrt(
             self.maximum_acceleration_mps2 * self.comfortable_deceleration_mps2
@@ -173,12 +177,11 @@ class LongitudinalController:
         )
         return self.standstill_gap_m + max(0.0, dynamic_part)
 
-    @staticmethod
-    def _lead_is_far(distance, desired_gap, relative_speed):
+    def lead_is_far(self, distance, desired_gap, relative_speed):
         closing_speed = max(0.0, -relative_speed)
         return distance > max(30.0, 3.0 * desired_gap) and closing_speed < 1.0
 
-    def _update_hold(self, ego_speed, lead, measured_lead_speed):
+    def update_hold(self, ego_speed, lead, measured_lead_speed):
         if lead is None:
             self.release_evidence_ticks = 0
             return
@@ -209,7 +212,7 @@ class LongitudinalController:
             self.release_evidence_ticks = 0
             self.restart_ticks_remaining = 0
 
-    def _confirm_lead(self, lead):
+    def confirm_lead(self, lead):
         if lead is None:
             self.lead_ticks = 0
             self.last_track_id = None
@@ -226,7 +229,7 @@ class LongitudinalController:
         self.last_raw_distance_m = lead["distance_m"]
         return self.lead_ticks >= self.minimum_lead_ticks
 
-    def _filter_lead(self, lead, ego_speed):
+    def filter_lead(self, lead, ego_speed):
         if lead is None:
             self.filtered_distance_m = None
             self.filtered_lead_speed_mps = None
@@ -262,7 +265,7 @@ class LongitudinalController:
         filtered["measured_lead_speed_mps"] = measured_lead_speed
         return filtered
 
-    def _limit_jerk(self, desired_acceleration):
+    def limit_jerk(self, desired_acceleration):
         jerk_limit = (
             self.acceleration_jerk_mps3
             if desired_acceleration >= self.previous_acceleration_mps2
@@ -277,7 +280,7 @@ class LongitudinalController:
         self.previous_acceleration_mps2 += change
         return self.previous_acceleration_mps2
 
-    def _to_pedals(self, acceleration, ego_speed):
+    def convert_acceleration_to_pedals(self, acceleration, ego_speed):
         throttle = (
             self.rolling_resistance_throttle
             + acceleration / self.throttle_acceleration_mps2
@@ -299,8 +302,7 @@ class LongitudinalController:
 
         return 0.0, 0.0
 
-    @staticmethod
-    def _validate_lead(lead_vehicle):
+    def validate_lead(self, lead_vehicle):
         if lead_vehicle is None:
             return None
 

@@ -1,10 +1,10 @@
-"""Independent time-to-collision emergency braking supervisor."""
+"""Carpisma suresine gore bagimsiz acil fren denetimi."""
 
 import math
 
 
 class EmergencyBrakeSupervisor:
-    """Request full braking only when a collision risk is confirmed."""
+    """Yalnizca carpisma riski dogrulanirsa tam fren ister."""
 
     def __init__(self):
         self.stopping_clearance_m = 2.0
@@ -19,27 +19,30 @@ class EmergencyBrakeSupervisor:
     def evaluate_candidates(self, *obstacles):
         candidates = []
         for obstacle in obstacles:
-            metrics = self._metrics(obstacle)
+            metrics = self.calculate_metrics(obstacle)
             if metrics is not None:
                 candidates.append((obstacle, metrics))
 
         if not candidates:
             self.hazard_count = 0
-            return False, self._empty_info()
+            return False, self.empty_info()
 
-        obstacle, metrics = min(candidates, key=lambda item: self._priority(item[1]))
-        emergency, info = self._evaluate_metrics(metrics)
+        obstacle, metrics = min(
+            candidates,
+            key=lambda item: self.calculate_risk_priority(item[1]),
+        )
+        emergency, info = self.evaluate_metrics(metrics)
         info["target_source"] = obstacle.get("source", "unknown")
         return emergency, info
 
     def evaluate(self, obstacle):
-        metrics = self._metrics(obstacle)
+        metrics = self.calculate_metrics(obstacle)
         if metrics is None:
             self.hazard_count = 0
-            return False, self._empty_info()
-        return self._evaluate_metrics(metrics)
+            return False, self.empty_info()
+        return self.evaluate_metrics(metrics)
 
-    def _evaluate_metrics(self, metrics):
+    def evaluate_metrics(self, metrics):
         immediate_hazard = (
             metrics["distance_m"] <= self.immediate_distance_m
             or metrics["ttc_s"] <= self.immediate_ttc_s
@@ -63,7 +66,7 @@ class EmergencyBrakeSupervisor:
             "hazard_count": self.hazard_count,
         }
 
-    def _metrics(self, obstacle):
+    def calculate_metrics(self, obstacle):
         if not isinstance(obstacle, dict):
             return None
         try:
@@ -87,7 +90,7 @@ class EmergencyBrakeSupervisor:
             "required_deceleration_mps2": required_deceleration,
         }
 
-    def _priority(self, metrics):
+    def calculate_risk_priority(self, metrics):
         immediate = (
             metrics["distance_m"] <= self.immediate_distance_m
             or metrics["ttc_s"] <= self.immediate_ttc_s
@@ -101,8 +104,7 @@ class EmergencyBrakeSupervisor:
         risk_level = 0 if immediate else 1 if ordinary else 2
         return risk_level, metrics["ttc_s"], metrics["distance_m"]
 
-    @staticmethod
-    def _empty_info():
+    def empty_info(self):
         return {
             "ttc_s": None,
             "required_deceleration_mps2": None,

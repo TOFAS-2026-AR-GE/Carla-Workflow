@@ -84,6 +84,9 @@ def read_vehicle_state(
         "road_id": waypoint.road_id,
         "lane_id": waypoint.lane_id,
         "lane_width": waypoint.lane_width,
+        # Aracin yarim genisligi, serit merkezinden ne kadar
+        # uzaklasabilecegimizi hesaplarken kullanilir.
+        "vehicle_half_width_m": float(vehicle.bounding_box.extent.y),
         "is_junction": waypoint.is_junction,
     }
 
@@ -104,6 +107,7 @@ def serializable_vehicle_state(
         "road_id": int(state["road_id"]),
         "lane_id": int(state["lane_id"]),
         "lane_width": float(state["lane_width"]),
+        "vehicle_half_width_m": float(state.get("vehicle_half_width_m", 0.95)),
         "is_junction": bool(state["is_junction"]),
         "control": {
             "throttle": float(control.throttle),

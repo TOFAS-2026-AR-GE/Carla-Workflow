@@ -107,14 +107,22 @@ paketini açar ve kayıtları `data/runs/` altında oluşturur.
   hiçbir zaman birlikte verilmez.
 - Kamera ve radar mesafeleri kaynak değiştirirken yakın olan radar ölçümü
   korunur; daha uzağa sıçrayan ölçümler yavaş filtrelenir.
+- Normal hedef kaynağı ön kamera ve radarın birlikte oluşturduğu
+  `camera_radar_track` kaynağıdır. Kamera aracın bbox'ını ve kimliğini, radar
+  ise gerçek mesafeyi ve bağıl hızı verir. `radar_direct`, kamera geçici olarak
+  hedefi kaçırdığında kullanılan iki tick doğrulamalı yedek kaynaktır.
 - Ön uzun menzil radarı kaput seviyesinde ve hafif yukarı bakar. Her dönüşün
   tahmini yerden yüksekliği hesaplanır; yol yüzeyine çarpan ışınlar kamera
   füzyonu, normal takip ve AEB'den önce tek noktada elenir.
 - Radar bağıl hızında negatif değer yaklaşmayı, pozitif değer uzaklaşmayı gösterir.
 - Uzak ve yaklaşmayan araç yalnızca gözlemlenir (`LEAD_FAR`). Yaklaşma hızı
   yüksekse IDM uzak mesafede de erken ve yumuşak biçimde yavaşlayabilir.
-- Radar-only engel normalde iki ardışık tick doğrulanmadan ACC'ye verilmez.
+- Yalnız radar ile görülen engel normalde iki ardışık tick doğrulanmadan
+  ACC'ye verilmez.
   Çok yakın veya TTC'si kritik engelde güvenlik için beklenmez.
+- Normal takip ve AEB adayları, şerit genişliğiyle birlikte gerçek araç
+  genişliğinden hesaplanan sürüş koridorundan geçer. Kaldırım, yol kenarı ve
+  komşu şeritte kalan radar noktaları takip aracı olarak seçilmez.
 - CARLA GPU kamera callback'i birkaç tick gecikse bile gerçek kamera frame'i
   inference'a verilir; dünya frame'iyle tam eşleşmeyen görüntü artık atılmaz.
 - Ham ön radar, bbox veya tracker oluşmasa bile kısa menzilde bağımsız AEB
@@ -123,13 +131,32 @@ paketini açar ve kayıtları `data/runs/` altında oluşturur.
   zemin olarak elenen radar dönüşü sayısıdır.
 - Durum satırındaki `ctrl_gap`, filtrelenip boylamsal kontrolcüde kullanılan
   gerçek takip mesafesidir; `lead` ise takip katmanının ham seçimini gösterir.
-- Stanley kontrolcüsü ön aksın rota başlık ve yanal hatasını kullanır. Direksiyon
-  komutu hata filtresi, hız tabanlı limit ve değişim hızı limitiyle yumuşatılır.
+- Stanley kontrolcüsü ön kontrol noktasının rota başlık ve yanal hatasını
+  kullanır. Araç gövdesi şerit kenarına yaklaşınca merkezleme düzeltmesi artar;
+  küçük viraj önbeslemesi dönüşe daha erken başlamaya yardım eder.
 - Viraj hedef hızı `v = sqrt(a_y / eğrilik)` bağıntısıyla belirlenir. Rota
-  hatası büyüdüğünde araç kontrollü toparlanabilmek için ayrıca yavaşlar.
+  hatası büyüdüğünde araç kontrollü toparlanabilmek için ayrıca yavaşlar. Hıza
+  göre yaklaşık üç saniyelik yol taranır. Güvenlik amaçlı hız düşüşü gecikmeden
+  uygulanır; yalnızca tekrar hızlanma yumuşak biçimde sınırlandırılır.
 - AEB normal takipten bağımsızdır. En tehlikeli kamera/radar adayının TTC'sini
   ve 2 metre boşlukta durmak için gereken yavaşlamayı izler; kritik durumda
   normal kontrolü geçersiz kılıp tam fren uygular.
+
+## Kodun sade kontrol akışı
+
+1. `application.py`, kamera ve radar verisini aynı simülasyon tick'inde toplar.
+2. `lead_vehicle.py`, zemini ve yan engelleri eler; kamera bbox'ı ile radar
+   mesafesini birleştirerek takip edilecek aracı seçer.
+3. `stanley_controller.py`, rota merkezinde kalacak direksiyonu hesaplar.
+4. `speed_planner.py`, düz yol, yaklaşan viraj ve şerit hatasına göre hedef
+   hızı hesaplar.
+5. `longitudinal_controller.py`, IDM ile gaz veya fren değerini üretir.
+6. `safety_supervisor.py`, kritik TTC durumunda diğer bütün istekleri geçersiz
+   kılıp tam fren uygular.
+
+Kontrol akışındaki yardımcı metotların adları doğrudan yaptıkları işi anlatır.
+Örneğin `filter_ground_returns`, `inside_driving_corridor`,
+`calculate_idm_gap` ve `limit_speed_increase` isimleri kullanılmaktadır.
 
 Kontrol denklemlerinin temel kaynakları:
 
@@ -144,7 +171,9 @@ python -m unittest discover -s tests -v
 python -m compileall -q carla_app main.py scripts tests
 ```
 
-Testler; Stanley yönünü ve rate limitini, viraj hızını, gönderilen düşük hız
+Testler; Stanley yönünü ve direksiyon değişim limitini, viraj hızını, güvenli
+hız düşüşünün gecikmemesini, gönderilen düşük hız
 logunun tekrarını, gürültülü ölçümde tek seferde 2 metreye duruşu, hızlı
 kalkışı, IDM takibini, acil freni, radar doğrulamasını, komşu şerit reddini,
-kamera-radar füzyonunu ve levha hatasının araç bbox'ını bozmamasını kapsar.
+kaldırım kenarı reddini, kamera-radar füzyonunu ve levha hatasının araç
+bbox'ını bozmamasını kapsar.

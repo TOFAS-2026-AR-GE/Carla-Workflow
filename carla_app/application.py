@@ -11,6 +11,7 @@ from carla_app.perception.system import PerceptionSystem
 from carla_app.perception.worker import PerceptionWorker
 from carla_app.sensors.manager import SensorManager
 from carla_app.visualization.viewer import PerceptionViewer
+from carla_app.controller.vehicle.mpc_controller import MPCController
 
 
 class CarlaApplication:
@@ -42,7 +43,7 @@ class CarlaApplication:
             sensors = SensorManager(self.settings)
             sensors.start(world, vehicle)
 
-            controller = LaneFollowController(scenario.fixed_delta_seconds)
+            controller = MPCController(scenario.fixed_delta_seconds)
             perception = PerceptionSystem(self.settings)
             worker = PerceptionWorker(perception)
             viewer = PerceptionViewer()

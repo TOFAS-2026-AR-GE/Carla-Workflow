@@ -65,18 +65,21 @@ class CarlaApplication:
                 ):
                     worker.submit(frame_id, rgb_image)
 
-                # --- Faz 1 dogrulama: kamera+radar fuzyonu ---
-                # Kontrolcuye HENUZ baglanmadi, sadece dogruluk
-                # kontrolu icin periyodik konsol ciktisi.
+                # kamera+radar fuzyonu ---
                 if frame_id % 20 == 0:
                     perception_result = worker.get_latest()
-                    _, radar_points = sensors.get_radar("radar_front_long")
+                    radar_frame_id, radar_points = sensors.get_radar(
+                        "radar_front_long"
+                    )
                     if perception_result is not None and radar_points:
                         fused = fuse_detections_with_radar(
                             perception_result["vehicles"],
+                            perception_result["frame_id"],
                             radar_points,
+                            radar_frame_id,
                             self.settings.camera_width,
                             self.settings.camera_fov,
+                            self.settings.fixed_delta_seconds,
                         )
                         for item in fused:
                             if item["has_range"]:
@@ -84,6 +87,8 @@ class CarlaApplication:
                                     f"[FUSION] {item['class_name']} "
                                     f"bearing={item['bearing_deg']:+.1f} deg "
                                     f"range={item['range_m']:.1f} m "
+                                    f"(raw={item['raw_range_m']:.1f} m, "
+                                    f"dt={item['delta_t_s'] * 1000:.0f} ms) "
                                     f"rel_v={item['relative_velocity_mps']:+.1f} m/s "
                                     f"(radar_pts={item['radar_points_matched']})"
                                 )

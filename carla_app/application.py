@@ -6,6 +6,7 @@ from carla_app.core.spectator import update_spectator
 from carla_app.core.state import read_vehicle_state, serializable_vehicle_state
 from carla_app.core.traffic import Traffic
 from carla_app.core.vehicle import spawn_ego_vehicle
+from carla_app.perception.fusion import fuse_detections_with_radar
 from carla_app.perception.system import PerceptionSystem
 from carla_app.perception.worker import PerceptionWorker
 from carla_app.sensors.manager import SensorManager
@@ -63,6 +64,29 @@ class CarlaApplication:
                     and frame_id % self.settings.perception_every_n_frames == 0
                 ):
                     worker.submit(frame_id, rgb_image)
+
+                # --- Faz 1 dogrulama: kamera+radar fuzyonu ---
+                # Kontrolcuye HENUZ baglanmadi, sadece dogruluk
+                # kontrolu icin periyodik konsol ciktisi.
+                if frame_id % 20 == 0:
+                    perception_result = worker.get_latest()
+                    _, radar_points = sensors.get_radar("radar_front_long")
+                    if perception_result is not None and radar_points:
+                        fused = fuse_detections_with_radar(
+                            perception_result["vehicles"],
+                            radar_points,
+                            self.settings.camera_width,
+                            self.settings.camera_fov,
+                        )
+                        for item in fused:
+                            if item["has_range"]:
+                                print(
+                                    f"[FUSION] {item['class_name']} "
+                                    f"bearing={item['bearing_deg']:+.1f} deg "
+                                    f"range={item['range_m']:.1f} m "
+                                    f"rel_v={item['relative_velocity_mps']:+.1f} m/s "
+                                    f"(radar_pts={item['radar_points_matched']})"
+                                )
                 """
                 sensors.save_if_needed(
                     frame_id,

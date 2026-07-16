@@ -9,6 +9,7 @@ from carla_app.sensors.processors import (
 )
 from carla_app.sensors.stream import (
     CameraStream,
+    RadarStream,
 )
 from carla_app.sensors.sync import (
     SensorSync,
@@ -34,6 +35,7 @@ class SensorManager:
         self.camera_stream = CameraStream(
             max_frames=12
         )
+        self.radar_stream = RadarStream()
 
         self.writer = DatasetWriter(
             settings.output_folder
@@ -73,6 +75,7 @@ class SensorManager:
             layout=self.layout,
             sync=self.sync,
             camera_stream=self.camera_stream,
+            radar_stream=self.radar_stream,
         )
 
         manifest = self.layout.to_manifest(
@@ -112,6 +115,15 @@ class SensorManager:
             frame_id,
             timeout=0.5,
         )
+
+    def get_radar(
+        self,
+        sensor_name="radar_front_long",
+    ):
+        # (frame_id, points) dondurur. Frame beklemeden en
+        # son gelen radar paketini verir; kontrol dongusu
+        # icin dusuk gecikme onemli.
+        return self.radar_stream.get_latest(sensor_name)
 
     def save_if_needed(
         self,

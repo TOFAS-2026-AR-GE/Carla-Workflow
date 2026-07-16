@@ -6,7 +6,7 @@ from carla_app.sensors.layout import (
     SensorLayout,
     SensorSpec,
 )
-from carla_app.sensors.processors import image_to_rgb
+from carla_app.sensors.processors import image_to_rgb, radar_to_list
 
 
 def _set_supported_attributes(
@@ -53,6 +53,7 @@ def _listen(
     spec: SensorSpec,
     sync,
     camera_stream,
+    radar_stream,
 ) -> None:
     if spec.kind == "camera":
 
@@ -72,6 +73,19 @@ def _listen(
         actor.listen(camera_callback)
         return
 
+    if spec.kind == "radar":
+
+        def radar_callback(data, sensor_name=spec.name):
+            sync.push(sensor_name, data.frame, data)
+            radar_stream.push(
+                sensor_name,
+                data.frame,
+                radar_to_list(data),
+            )
+
+        actor.listen(radar_callback)
+        return
+
     actor.listen(
         lambda data, sensor_name=spec.name: sync.push(
             sensor_name,
@@ -87,6 +101,7 @@ def spawn_layout(
     layout: SensorLayout,
     sync,
     camera_stream,
+    radar_stream,
 ) -> List[object]:
     actors = []
 
@@ -103,6 +118,7 @@ def spawn_layout(
                 spec,
                 sync,
                 camera_stream,
+                radar_stream,
             )
 
             actors.append(actor)

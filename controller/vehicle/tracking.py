@@ -1,278 +1,240 @@
 """
-Coklu nesne takibi (multi-object tracking).
+Coklu nesne takibi (multi-object tracking) - Kalman filtresi.
 
-fusion.py bize her tick icin bagimsiz, "hafizasiz" olcumler verir
-(range, bearing, relative_velocity). Bu modul bu olcumleri zaman
-icinde birbirine baglayarak:
-  - gurultuyu filtreler (Kalman filtresi, sabit hiz modeli),
-  - her nesneye kalici bir ID verir,
-  - gelecek pozisyonu tahmin etmeyi mumkun kilar (MPC'nin ihtiyaci).
+NE ISE YARAR?
+fusion.py her tick bagimsiz, gurultulu bir olcum verir (mesafe, aci).
+Bu modul, ayni araci frame'ler arasinda takip ederek ona sabit bir ID
+verir ve gurultulu olcumleri "arac fizik kurallarina gore hareket
+eder" varsayimiyla yumusatip, hizini da tahmin eder.
 
-Tasarim karari: track state'i EGO-GORELI degil, DUNYA (world-frame)
-koordinatinda tutuluyor. Sebep: ego'nun kendi manevralari (viraj,
-hizlanma) ego-goreli cercevede "sabit hiz" varsayimini bozar; dunya
-çerçevesinde diger aracin kendi hareketi gercekten sabit hiza daha
-yakindir. Kontrol katmaninda (MPC), o anki ego pozuyla tekrar
-ego-goreli çevrilecek.
+NASIL CALISIR? (Kalman filtresi, sade anlatim)
+Her eksen (x ve y) icin ayri ayri, 2 sayidan olusan bir durum tutariz:
+[pozisyon, hiz]. Iki adim var:
 
-Bagimlilik: sadece numpy + math. CARLA import edilmiyor (test
-edilebilirlik icin), world-frame donusumu için ego pozu disaridan
-(application.py'den, read_vehicle_state cikisindan) parametre olarak
-geliyor.
+  1) TAHMIN (predict): Yeni olcum gelmeden once, "simdiye kadarki
+     hizima gore su an muhtemelen neredeyim" diye pozisyonu ilerletiriz.
+     Bununla birlikte "ne kadar emin oldugumuzu" (belirsizlik) da
+     buyuturuz - zaman gectikce daha az eminizdir.
+
+  2) GUNCELLEME (update): Gercek bir olcum geldiginde, tahminimiz ile
+     olcum arasindaki farka bakariz. Bu farki ne kadar ciddiye
+     alacagimizi (KAZANC) modelin ve olcumun ne kadar guvenilir
+     oldugunu karsilastirarak HESAPLARIZ (sabit bir sayi degil,
+     her adimda yeniden hesaplanir) - bu, Kalman filtresini basit
+     "eski deger + orandan bir kismi ekle" yontemlerinden ayiran asil
+     fark: kazanc otomatik ayarlanir.
+
+Eksenler (x,y) birbirinden bagimsiz varsayilir (aralarindaki capraz
+belirsizlik ihmal edilir) - bu kucuk bir basitlestirme ama pratikte
+performansi neredeyse hic etkilemez, karsiliginda kod cok daha
+okunabilir olur.
 """
 
 import math
 
-import numpy as np
 
-
-def polar_to_world(range_m, bearing_deg, ego_x, ego_y, ego_yaw_deg):
+class Axis1DKalman:
     """
-    Ego-goreli kutupsal olcumu (range, bearing) dunya kartezyenine
-    cevirir. CARLA konvansiyonu: x=ileri, y=sag, yaw saat yonunde
-    pozitif (derece).
-    """
-    bearing_rad = math.radians(bearing_deg)
-    yaw_rad = math.radians(ego_yaw_deg)
-
-    x_local = range_m * math.cos(bearing_rad)
-    y_local = range_m * math.sin(bearing_rad)
-
-    world_x = ego_x + x_local * math.cos(yaw_rad) - y_local * math.sin(yaw_rad)
-    world_y = ego_y + x_local * math.sin(yaw_rad) + y_local * math.cos(yaw_rad)
-
-    return world_x, world_y
-
-
-class KalmanTrack:
-    """
-    Sabit hiz (constant velocity) modelli tek bir nesne takibi.
-    State: [x, y, vx, vy] (dunya cercevesi, metre ve m/s).
+    Tek bir eksen (x veya y) icin sabit-hiz modelli Kalman filtresi.
+    State: pozisyon (pos) ve hiz (vel). Belirsizlik 3 sayiyla tutulur:
+    p_pp (pozisyon belirsizligi), p_vv (hiz belirsizligi), p_pv
+    (ikisi arasindaki iliski).
     """
 
-    def __init__(
-        self,
-        track_id,
-        x,
-        y,
-        class_name,
-        process_noise=1.5,
-        measurement_noise=1.5,
-    ):
+    def __init__(self, position, process_noise=1.0, measurement_noise=1.5):
+        self.pos = position
+        self.vel = 0.0
+
+        # Baslangicta pozisyonu biliyoruz (olcumden geldi) ama hizi
+        # bilmiyoruz -> hiz belirsizligini yuksek baslatiyoruz.
+        self.p_pp = 2.0
+        self.p_pv = 0.0
+        self.p_vv = 8.0
+
+        self.q = process_noise        # model ne kadar "kararsiz" (surec gurultusu)
+        self.r = measurement_noise    # sensor ne kadar gurultulu (olcum gurultusu)
+
+    def predict(self, dt):
+        # 1) Pozisyonu hiza gore ilerlet, hiz sabit kalir.
+        self.pos += self.vel * dt
+
+        # 2) Belirsizligi de ilerlet (zaman gectikce daha az eminiz).
+        p_pp = self.p_pp + 2 * dt * self.p_pv + dt * dt * self.p_vv
+        p_pv = self.p_pv + dt * self.p_vv
+        p_vv = self.p_vv
+
+        # 3) Ustune "model tahmini de mukemmel degil" gurultusu ekle.
+        self.p_pp = p_pp + self.q * dt**4 / 4
+        self.p_pv = p_pv + self.q * dt**3 / 2
+        self.p_vv = p_vv + self.q * dt**2
+
+    def update(self, measured_position):
+        # Tahmin ile gercek olcum arasindaki fark.
+        residual = measured_position - self.pos
+
+        # Kazanc: belirsizligimiz (p_pp) buyukse olcume daha cok
+        # guven; sensor gurultusu (r) buyukse olcume daha az guven.
+        # Bu oran HER ADIMDA yeniden hesaplanir - Kalman'i "basit
+        # sabit oranli düzeltme" yontemlerinden ayiran asil nokta budur.
+        innovation_var = self.p_pp + self.r
+        k_pos = self.p_pp / innovation_var
+        k_vel = self.p_pv / innovation_var
+
+        self.pos += k_pos * residual
+        self.vel += k_vel * residual
+
+        # Olcum geldigi icin belirsizlik azalir.
+        new_p_pp = (1 - k_pos) * self.p_pp
+        new_p_pv = (1 - k_pos) * self.p_pv
+        new_p_vv = self.p_vv - k_vel * self.p_pv
+
+        self.p_pp, self.p_pv, self.p_vv = new_p_pp, new_p_pv, new_p_vv
+
+
+class Track:
+    """
+    Tek bir aracin takibi. Icinde x ve y icin ayri birer
+    Axis1DKalman calisir (birbirinden bagimsiz).
+    """
+
+    def __init__(self, track_id, x, y, class_name,
+                 process_noise=1.0, measurement_noise=1.5):
         self.id = track_id
         self.class_name = class_name
 
-        self.state = np.array([x, y, 0.0, 0.0])
-        # Baslangicta konum bilgisi var ama hiz bilinmiyor ->
-        # hiz bilesenlerinde belirsizlik yuksek baslatiliyor.
-        self.P = np.diag([2.0, 2.0, 8.0, 8.0])
+        self.kx = Axis1DKalman(x, process_noise, measurement_noise)
+        self.ky = Axis1DKalman(y, process_noise, measurement_noise)
 
-        self.process_noise = process_noise
-        self.measurement_noise = measurement_noise
+        self.hit_count = 1       # kac kere gercek olcumle eslesti
+        self.miss_count = 0      # ust uste kac kere eslesmedi
+        self.confirmed = False   # yeterince eslesince "guvenilir" sayilir
 
-        self.hits = 1
-        self.misses = 0
-        self.age = 0
-        self.confirmed = False
-
-        # Son eslesen ham olcum - debug/log icin saklaniyor.
+        # Debug/log icin son ham olcum.
         self.last_range_m = None
         self.last_bearing_deg = None
         self.last_relative_velocity_mps = None
 
     def predict(self, dt):
-        transition = np.array(
-            [
-                [1.0, 0.0, dt, 0.0],
-                [0.0, 1.0, 0.0, dt],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ]
-        )
+        self.kx.predict(dt)
+        self.ky.predict(dt)
 
-        # "White noise acceleration" surec gurultusu modeli:
-        # aracin ivmesi ongorulemez kucuk bir gurultu olarak
-        # modellenir, bu da dt buyudukce belirsizligi artirir.
-        q = self.process_noise
-        process_covariance = q * np.array(
-            [
-                [dt**4 / 4, 0.0, dt**3 / 2, 0.0],
-                [0.0, dt**4 / 4, 0.0, dt**3 / 2],
-                [dt**3 / 2, 0.0, dt**2, 0.0],
-                [0.0, dt**3 / 2, 0.0, dt**2],
-            ]
-        )
+    def update(self, measured_x, measured_y):
+        self.kx.update(measured_x)
+        self.ky.update(measured_y)
 
-        self.state = transition @ self.state
-        self.P = transition @ self.P @ transition.T + process_covariance
-        self.age += 1
-
-    def update(self, x, y):
-        measurement_matrix = np.array(
-            [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-            ]
-        )
-        measurement_covariance = np.eye(2) * self.measurement_noise
-
-        measurement = np.array([x, y])
-        innovation = measurement - measurement_matrix @ self.state
-        innovation_covariance = (
-            measurement_matrix @ self.P @ measurement_matrix.T
-            + measurement_covariance
-        )
-        kalman_gain = (
-            self.P
-            @ measurement_matrix.T
-            @ np.linalg.inv(innovation_covariance)
-        )
-
-        self.state = self.state + kalman_gain @ innovation
-        self.P = (
-            np.eye(4) - kalman_gain @ measurement_matrix
-        ) @ self.P
-
-        self.hits += 1
-        self.misses = 0
-        if self.hits >= 3:
+        self.hit_count += 1
+        self.miss_count = 0
+        if self.hit_count >= 3:
             self.confirmed = True
 
     def mark_missed(self):
-        self.misses += 1
+        self.miss_count += 1
 
     @property
     def x(self):
-        return float(self.state[0])
+        return self.kx.pos
 
     @property
     def y(self):
-        return float(self.state[1])
+        return self.ky.pos
 
     @property
     def vx(self):
-        return float(self.state[2])
+        return self.kx.vel
 
     @property
     def vy(self):
-        return float(self.state[3])
+        return self.ky.vel
 
     @property
     def speed_mps(self):
-        return float(math.hypot(self.state[2], self.state[3]))
+        return math.hypot(self.vx, self.vy)
 
-    def predicted_position(self, horizon_s):
-        # MPC'nin ileri ufuk (t+horizon) icin kullanacagi basit
-        # dogrusal projeksiyon.
-        return (
-            self.x + self.vx * horizon_s,
-            self.y + self.vy * horizon_s,
-        )
+    def predicted_position(self, seconds_ahead):
+        """MPC'nin soracagi soru: 'bu arac X saniye sonra nerede olur?'"""
+        return (self.x + self.vx * seconds_ahead,
+                self.y + self.vy * seconds_ahead)
+
+
+def polar_to_world(range_m, bearing_deg, ego_x, ego_y, ego_yaw_deg):
+    """Ego-goreli (mesafe, aci) olcumunu dunya koordinatina (x,y) cevirir."""
+    bearing_rad = math.radians(bearing_deg)
+    yaw_rad = math.radians(ego_yaw_deg)
+
+    x_local = range_m * math.cos(bearing_rad)   # ego'ya gore ileri
+    y_local = range_m * math.sin(bearing_rad)   # ego'ya gore sag
+
+    world_x = ego_x + x_local * math.cos(yaw_rad) - y_local * math.sin(yaw_rad)
+    world_y = ego_y + x_local * math.sin(yaw_rad) + y_local * math.cos(yaw_rad)
+    return world_x, world_y
 
 
 class Tracker:
     """
-    Track yasam dongusunu (olustur / guncelle / sil) ve
-    olcum-track eslestirmesini (nearest-neighbor + gating) yonetir.
+    Tum track'leri yonetir: yeni olcumleri en yakin track'e
+    eslestirir, eslesmeyen olcumler icin yeni track acar, uzun
+    suredir eslesmeyen track'leri siler.
     """
 
-    def __init__(
-        self,
-        gate_distance_m=5.0,
-        max_misses=5,
-        process_noise=1.5,
-        measurement_noise=1.5,
-    ):
+    def __init__(self, gate_distance_m=5.0, max_misses=5):
         self.tracks = []
         self._next_id = 1
-
-        self.gate_distance_m = gate_distance_m
-        self.max_misses = max_misses
-        self.process_noise = process_noise
-        self.measurement_noise = measurement_noise
+        self.gate_distance_m = gate_distance_m   # eslesme icin izin verilen max mesafe
+        self.max_misses = max_misses             # bu kadar kayiptan sonra track silinir
 
     def step(self, dt, measurements):
         """
-        measurements: [{x, y, class_name, range_m, bearing_deg,
-                         relative_velocity_mps}, ...] (dunya
-                         cercevesi x,y - donusumu cagiran taraf yapar)
-
-        Her cagrida once tum track'ler predict edilir (dt kadar
-        ileri), sonra varsa yeni olcumlerle guncellenir. Bu sayede
-        yeni algi verisi olmasa bile (ornegin YOLO henuz yeni frame
-        islememisse) track'ler fizik modeliyle "kaymaya" devam eder.
+        measurements: [{"x":.., "y":.., "class_name":.., "range_m":..,
+                         "bearing_deg":.., "relative_velocity_mps":..}, ...]
+        Olcum yoksa bos liste verilebilir - track'ler yine de predict
+        edilir (fizik modeliyle "kaymaya" devam eder).
         """
+        # 1) Once herkesi bir adim ileri tasi.
         for track in self.tracks:
             track.predict(dt)
 
-        unmatched_tracks = set(range(len(self.tracks)))
-        unmatched_measurements = set(range(len(measurements)))
+        # 2) En yakin ciftlerden baslayarak olcum-track eslestir.
+        used_tracks, used_measurements = set(), set()
+        pairs = []
+        for ti, track in enumerate(self.tracks):
+            for mi, meas in enumerate(measurements):
+                dist = math.hypot(track.x - meas["x"], track.y - meas["y"])
+                if dist <= self.gate_distance_m:
+                    pairs.append((dist, ti, mi))
+        pairs.sort(key=lambda p: p[0])
 
-        candidate_pairs = []
-        for track_index, track in enumerate(self.tracks):
-            for meas_index, meas in enumerate(measurements):
-                distance = math.hypot(
-                    track.x - meas["x"], track.y - meas["y"]
-                )
-                if distance <= self.gate_distance_m:
-                    candidate_pairs.append(
-                        (distance, track_index, meas_index)
-                    )
+        for _, ti, mi in pairs:
+            if ti in used_tracks or mi in used_measurements:
+                continue
+            used_tracks.add(ti)
+            used_measurements.add(mi)
 
-        # Greedy nearest-neighbor: en yakin eslesmeden basla,
-        # her track/olcum sadece bir kere kullanilsin.
-        candidate_pairs.sort(key=lambda item: item[0])
-
-        assignments = []
-        for _, track_index, meas_index in candidate_pairs:
-            if (
-                track_index in unmatched_tracks
-                and meas_index in unmatched_measurements
-            ):
-                assignments.append((track_index, meas_index))
-                unmatched_tracks.discard(track_index)
-                unmatched_measurements.discard(meas_index)
-
-        for track_index, meas_index in assignments:
-            meas = measurements[meas_index]
-            track = self.tracks[track_index]
-
+            track, meas = self.tracks[ti], measurements[mi]
             track.update(meas["x"], meas["y"])
             track.class_name = meas["class_name"]
             track.last_range_m = meas.get("range_m")
             track.last_bearing_deg = meas.get("bearing_deg")
-            track.last_relative_velocity_mps = meas.get(
-                "relative_velocity_mps"
-            )
+            track.last_relative_velocity_mps = meas.get("relative_velocity_mps")
 
-        for track_index in unmatched_tracks:
-            self.tracks[track_index].mark_missed()
+        # 3) Eslesmeyen track'lerin kayip sayacini arttir.
+        for ti, track in enumerate(self.tracks):
+            if ti not in used_tracks:
+                track.mark_missed()
 
-        for meas_index in unmatched_measurements:
-            meas = measurements[meas_index]
-            new_track = KalmanTrack(
-                self._next_id,
-                meas["x"],
-                meas["y"],
-                meas["class_name"],
-                process_noise=self.process_noise,
-                measurement_noise=self.measurement_noise,
-            )
+        # 4) Eslesmeyen olcumler icin yeni track ac.
+        for mi, meas in enumerate(measurements):
+            if mi in used_measurements:
+                continue
+            new_track = Track(self._next_id, meas["x"], meas["y"], meas["class_name"])
             new_track.last_range_m = meas.get("range_m")
             new_track.last_bearing_deg = meas.get("bearing_deg")
-            new_track.last_relative_velocity_mps = meas.get(
-                "relative_velocity_mps"
-            )
+            new_track.last_relative_velocity_mps = meas.get("relative_velocity_mps")
             self.tracks.append(new_track)
             self._next_id += 1
 
-        self.tracks = [
-            track
-            for track in self.tracks
-            if track.misses <= self.max_misses
-        ]
-
+        # 5) Cok uzun suredir eslesmeyenleri temizle.
+        self.tracks = [t for t in self.tracks if t.miss_count <= self.max_misses]
         return self.tracks
 
     def confirmed_tracks(self):
-        return [track for track in self.tracks if track.confirmed]
+        return [t for t in self.tracks if t.confirmed]

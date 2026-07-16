@@ -72,6 +72,7 @@ ENABLE_DATA_RECORDING=false
 
 STATUS_PERIOD_SECONDS=2.0
 MAX_RUNTIME_SECONDS=0
+MAXIMUM_SPEED_KMH=60
 ```
 
 - `VEHICLE_DEVICE=auto`: CUDA varsa `0`, yoksa `cpu` seçer.
@@ -81,6 +82,8 @@ MAX_RUNTIME_SECONDS=0
 - Dataset kaydı kapalıyken sadece kontrol için gereken iki sensör çalışır.
 - `MAX_RUNTIME_SECONDS=0` sınırsız interaktif kullanım demektir. Otomatik test
   için örneğin `30` verilebilir.
+- `MAXIMUM_SPEED_KMH=60`: düz ve boş yoldaki şehir içi üst hız hedefidir.
+  Viraj, şerit toparlama, öndeki araç ve AEB bu değeri güvenlik için düşürebilir.
 
 Dataset kaydı gerektiğinde `ENABLE_DATA_RECORDING=true` yap. Bu mod tam sensör
 paketini açar ve kayıtları `data/runs/` altında oluşturur.
@@ -104,6 +107,9 @@ paketini açar ve kayıtları `data/runs/` altında oluşturur.
   hiçbir zaman birlikte verilmez.
 - Kamera ve radar mesafeleri kaynak değiştirirken yakın olan radar ölçümü
   korunur; daha uzağa sıçrayan ölçümler yavaş filtrelenir.
+- Ön uzun menzil radarı kaput seviyesinde ve hafif yukarı bakar. Her dönüşün
+  tahmini yerden yüksekliği hesaplanır; yol yüzeyine çarpan ışınlar kamera
+  füzyonu, normal takip ve AEB'den önce tek noktada elenir.
 - Radar bağıl hızında negatif değer yaklaşmayı, pozitif değer uzaklaşmayı gösterir.
 - Uzak ve yaklaşmayan araç yalnızca gözlemlenir (`LEAD_FAR`). Yaklaşma hızı
   yüksekse IDM uzak mesafede de erken ve yumuşak biçimde yavaşlayabilir.
@@ -113,6 +119,8 @@ paketini açar ve kayıtları `data/runs/` altında oluşturur.
   inference'a verilir; dünya frame'iyle tam eşleşmeyen görüntü artık atılmaz.
 - Ham ön radar, bbox veya tracker oluşmasa bile kısa menzilde bağımsız AEB
   girdisi üretir.
+- Durum satırında `radar=ham/kullanılabilir` gösterilir. `ground=N`, o tick'te
+  zemin olarak elenen radar dönüşü sayısıdır.
 - Durum satırındaki `ctrl_gap`, filtrelenip boylamsal kontrolcüde kullanılan
   gerçek takip mesafesidir; `lead` ise takip katmanının ham seçimini gösterir.
 - Stanley kontrolcüsü ön aksın rota başlık ve yanal hatasını kullanır. Direksiyon

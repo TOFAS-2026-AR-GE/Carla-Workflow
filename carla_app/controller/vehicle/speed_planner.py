@@ -10,12 +10,15 @@ def clamp(value, minimum, maximum):
 class CurvatureSpeedPlanner:
     """Choose a comfortable speed while keeping the route recoverable."""
 
-    def __init__(self, dt=0.05):
+    def __init__(self, dt=0.05, cruise_speed_kmh=60.0):
         self.dt = float(dt)
-        self.cruise_speed_mps = 30.0 / 3.6
-        self.minimum_curve_speed_mps = 10.0 / 3.6
-        self.maximum_lateral_acceleration_mps2 = 1.8
-        self.maximum_speed_increase_mps2 = 1.0
+        self.cruise_speed_mps = max(10.0, float(cruise_speed_kmh)) / 3.6
+        self.minimum_curve_speed_mps = min(
+            15.0 / 3.6,
+            self.cruise_speed_mps,
+        )
+        self.maximum_lateral_acceleration_mps2 = 2.0
+        self.maximum_speed_increase_mps2 = 1.5
         self.maximum_speed_decrease_mps2 = 3.0
         self.previous_target_speed_mps = self.cruise_speed_mps
 

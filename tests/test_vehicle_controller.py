@@ -144,7 +144,19 @@ class VehicleControllerIntegrationTests(unittest.TestCase):
         self.assertEqual(control.brake, 1.0)
         self.assertEqual(info["safety"]["target_source"], "camera_radar_track")
 
-    def test_closer_raw_radar_range_stabilizes_longitudinal_lead(self):
+    def test_harmless_raw_radar_point_does_not_change_normal_following_gap(self):
+        controller = VehicleController(dt=0.05)
+        state = {
+            "location": location(0.0),
+            "yaw": 0.0,
+            "speed_mps": 2.0,
+            "speed_kmh": 7.2,
+            "reference_path": [location(x) for x in range(81)],
+            "lane_width": 3.5,
+            "road_id": 1,
+            "lane_id": -1,
+            "is_junction": False,
+        }
         tracked_lead = {
             "track_id": 4,
             "distance_m": 7.1,
@@ -158,12 +170,18 @@ class VehicleControllerIntegrationTests(unittest.TestCase):
             "source": "radar_emergency",
         }
 
-        lead = VehicleController._longitudinal_lead(tracked_lead, near_radar)
+        _, info = controller.run_step(
+            state,
+            lead_vehicle=tracked_lead,
+            emergency_obstacle=near_radar,
+        )
 
-        self.assertEqual(lead["track_id"], tracked_lead["track_id"])
-        self.assertAlmostEqual(lead["distance_m"], 3.9)
-        self.assertAlmostEqual(lead["relative_speed_mps"], -0.9)
-        self.assertEqual(lead["source"], "camera_radar_track+radar_near")
+        self.assertEqual(info["longitudinal_lead"], tracked_lead)
+        self.assertAlmostEqual(
+            info["longitudinal"]["raw_lead_distance_m"],
+            tracked_lead["distance_m"],
+        )
+        self.assertNotEqual(info["mode"], "EMERGENCY")
 
 
 if __name__ == "__main__":

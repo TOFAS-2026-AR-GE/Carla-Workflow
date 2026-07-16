@@ -66,11 +66,17 @@ class CarlaApplication:
             perception = PerceptionSystem(self.settings)
             worker = PerceptionWorker(perception)
             viewer = PerceptionViewer()
-            controller = VehicleController(dt)
+            controller = VehicleController(
+                dt,
+                cruise_speed_kmh=self.settings.maximum_speed_kmh,
+            )
+            radar_geometry = sensors.layout.front_radar_geometry
             lead_tracker = LeadVehicleTracker(
                 dt=dt,
                 image_width=self.settings.camera_width,
                 camera_fov_deg=self.settings.camera_fov,
+                radar_height_m=radar_geometry["height_above_ground_m"],
+                radar_pitch_deg=radar_geometry["pitch_deg"],
             )
 
             status_every_frames = max(
@@ -115,6 +121,7 @@ class CarlaApplication:
                     radar_frame_id=radar_frame_id,
                     radar_points=radar_points,
                 )
+                radar_diagnostics = lead_tracker.get_radar_diagnostics()
                 emergency_obstacle = lead_tracker.get_emergency_obstacle()
                 control, control_info = controller.run_step(
                     state,
@@ -139,6 +146,7 @@ class CarlaApplication:
                             perception_result=perception_result,
                             radar_frame_id=radar_frame_id,
                             radar_points=radar_points,
+                            radar_diagnostics=radar_diagnostics,
                             lead_vehicle=lead_vehicle,
                             control_info=control_info,
                         )
@@ -191,6 +199,7 @@ class CarlaApplication:
         perception_result,
         radar_frame_id,
         radar_points,
+        radar_diagnostics,
         lead_vehicle,
         control_info,
     ):
@@ -214,8 +223,13 @@ class CarlaApplication:
             f"brake={float(control_info['brake']):.2f} "
             f"camera={camera_frame_id} "
             f"bbox={len(vehicles)} age={perception_age} "
-            f"radar={len(radar_points)}@{radar_frame_id}"
+            f"radar={len(radar_points)}/"
+            f"{int(radar_diagnostics.get('usable_points', 0))}@{radar_frame_id}"
         )
+
+        ground_rejected = int(radar_diagnostics.get("ground_rejected", 0))
+        if ground_rejected:
+            message += f" ground={ground_rejected}"
 
         lateral = control_info.get("lateral", {})
         cross_track_error = float(lateral.get("cross_track_error_m", 0.0))

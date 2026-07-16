@@ -1,7 +1,5 @@
 """Top-level vehicle controller."""
 
-import math
-
 import carla
 
 from carla_app.controller.vehicle.longitudinal_controller import (
@@ -15,9 +13,9 @@ from carla_app.controller.vehicle.stanley_controller import StanleyController
 class VehicleController:
     """Combine path tracking, speed planning, IDM and independent AEB."""
 
-    def __init__(self, dt=0.05):
+    def __init__(self, dt=0.05, cruise_speed_kmh=60.0):
         self.lateral = StanleyController(dt)
-        self.speed_planner = CurvatureSpeedPlanner(dt)
+        self.speed_planner = CurvatureSpeedPlanner(dt, cruise_speed_kmh)
         self.longitudinal = LongitudinalController(dt)
         self.safety = EmergencyBrakeSupervisor()
 
@@ -29,7 +27,9 @@ class VehicleController:
             lateral_info=lateral_info,
         )
 
-        control_lead = self._longitudinal_lead(lead_vehicle, emergency_obstacle)
+        # Raw one-point radar data belongs only to AEB. Normal IDM following
+        # uses the camera/radar track or a confirmed radar cluster.
+        control_lead = lead_vehicle
         throttle, brake, longitudinal_info = self.longitudinal.run_step(
             state,
             control_lead,
@@ -65,42 +65,3 @@ class VehicleController:
             "longitudinal_lead": control_lead,
         }
         return control, info
-
-    @staticmethod
-    def _longitudinal_lead(lead_vehicle, emergency_obstacle):
-        """Use the nearest valid range while retaining the tracked identity."""
-        lead = VehicleController._valid_obstacle(lead_vehicle)
-        radar = VehicleController._valid_obstacle(emergency_obstacle)
-        if radar is None:
-            return lead_vehicle if lead is not None else None
-        if lead is None:
-            return emergency_obstacle
-        if radar["distance_m"] >= lead["distance_m"]:
-            return lead_vehicle
-
-        merged = dict(lead_vehicle)
-        merged["distance_m"] = radar["distance_m"]
-        merged["relative_speed_mps"] = min(
-            lead["relative_speed_mps"],
-            radar["relative_speed_mps"],
-        )
-        merged["source"] = f"{merged.get('source', 'tracked')}+radar_near"
-        return merged
-
-    @staticmethod
-    def _valid_obstacle(obstacle):
-        if not isinstance(obstacle, dict):
-            return None
-        try:
-            distance = float(obstacle["distance_m"])
-            relative_speed = float(obstacle["relative_speed_mps"])
-        except (KeyError, TypeError, ValueError):
-            return None
-        if not math.isfinite(distance) or not math.isfinite(relative_speed):
-            return None
-        if distance <= 0.0:
-            return None
-        return {
-            "distance_m": distance,
-            "relative_speed_mps": relative_speed,
-        }

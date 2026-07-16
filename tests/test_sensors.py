@@ -22,6 +22,7 @@ carla.AttachmentType = getattr(
 if "cv2" not in sys.modules:
     sys.modules["cv2"] = types.ModuleType("cv2")
 
+from carla_app.sensors import layout as layout_module  # noqa: E402
 from carla_app.sensors.manager import SensorManager  # noqa: E402
 from carla_app.sensors.stream import CameraStream  # noqa: E402
 
@@ -53,6 +54,41 @@ class CameraStreamTests(unittest.TestCase):
 
 
 class SensorManagerTests(unittest.TestCase):
+    def test_front_radar_is_mounted_high_and_aimed_above_the_road(self):
+        vehicle = types.SimpleNamespace(
+            bounding_box=types.SimpleNamespace(
+                location=types.SimpleNamespace(x=0.0, y=0.0, z=0.75),
+                extent=types.SimpleNamespace(x=2.35, y=0.95, z=0.75),
+            )
+        )
+
+        def fake_location(x=0.0, y=0.0, z=0.0):
+            return types.SimpleNamespace(x=x, y=y, z=z)
+
+        def fake_rotation(roll=0.0, pitch=0.0, yaw=0.0):
+            return types.SimpleNamespace(roll=roll, pitch=pitch, yaw=yaw)
+
+        def fake_transform(location, rotation):
+            return types.SimpleNamespace(location=location, rotation=rotation)
+
+        with (
+            patch.object(layout_module.carla, "Location", side_effect=fake_location),
+            patch.object(layout_module.carla, "Rotation", side_effect=fake_rotation),
+            patch.object(layout_module.carla, "Transform", side_effect=fake_transform),
+        ):
+            sensor_layout = layout_module.build_sensor_layout(
+                vehicle=vehicle,
+                camera_width=800,
+                camera_height=600,
+                front_wide_fov=90.0,
+                fixed_delta_seconds=0.05,
+            )
+
+        geometry = sensor_layout.front_radar_geometry
+        self.assertGreaterEqual(geometry["height_above_ground_m"], 0.85)
+        self.assertAlmostEqual(geometry["pitch_deg"], 2.0)
+        self.assertEqual(sensor_layout.front_radar.attributes["vertical_fov"], "6.0")
+
     def test_live_control_spawns_only_primary_camera_and_front_radar(self):
         settings = types.SimpleNamespace(
             enable_data_recording=False,

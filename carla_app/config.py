@@ -57,6 +57,7 @@ class Settings:
     enable_data_recording: bool
     status_period_seconds: float
     max_runtime_seconds: float
+    maximum_speed_kmh: float
 
     @classmethod
     def load(cls) -> "Settings":
@@ -108,6 +109,10 @@ class Settings:
             max_runtime_seconds=max(
                 0.0,
                 float(get("MAX_RUNTIME_SECONDS", "0")),
+            ),
+            maximum_speed_kmh=max(
+                10.0,
+                float(get("MAXIMUM_SPEED_KMH", "60.0")),
             ),
         )
 

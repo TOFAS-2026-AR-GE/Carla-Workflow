@@ -36,11 +36,28 @@ class LeadVehicleTracker:
     frame or is temporarily unavailable.
     """
 
-    def __init__(self, dt, image_width, camera_fov_deg):
+    def __init__(
+        self,
+        dt,
+        image_width,
+        camera_fov_deg,
+        radar_height_m=1.0,
+        radar_pitch_deg=2.0,
+    ):
         self.dt = float(dt)
         self.image_width = int(image_width)
         self.camera_fov_deg = float(camera_fov_deg)
         self.max_perception_age_frames = max(1, int(round(0.5 / self.dt)))
+
+        self.radar_height_m = max(0.1, float(radar_height_m))
+        self.radar_pitch_deg = float(radar_pitch_deg)
+        self.minimum_obstacle_height_m = 0.25
+        self.radar_diagnostics = {
+            "raw_points": 0,
+            "usable_points": 0,
+            "ground_rejected": 0,
+            "invalid_rejected": 0,
+        }
 
         self.tracker = Tracker(
             gate_distance_m=5.0,
@@ -65,6 +82,7 @@ class LeadVehicleTracker:
         radar_frame_id,
         radar_points,
     ):
+        radar_points = self._filter_ground_returns(radar_points)
         measurements = self._build_camera_radar_measurements(
             current_frame_id=current_frame_id,
             state=state,
@@ -81,6 +99,9 @@ class LeadVehicleTracker:
         )
         return self._choose_safest_lead(tracked_lead, radar_lead)
 
+    def get_radar_diagnostics(self):
+        return dict(self.radar_diagnostics)
+
     def get_emergency_obstacle(self):
         """Return the closest raw-radar hazard in the ego corridor.
 
@@ -90,6 +111,42 @@ class LeadVehicleTracker:
         if self.emergency_obstacle is None:
             return None
         return dict(self.emergency_obstacle)
+
+    def _filter_ground_returns(self, radar_points):
+        """Reject ray hits below the minimum physical obstacle height."""
+        usable_points = []
+        ground_rejected = 0
+        invalid_rejected = 0
+
+        for point in radar_points or []:
+            try:
+                depth = float(point["depth_m"])
+                altitude = float(point.get("altitude_deg", 0.0))
+            except (KeyError, TypeError, ValueError):
+                invalid_rejected += 1
+                continue
+
+            if not math.isfinite(depth) or not math.isfinite(altitude) or depth <= 0.0:
+                invalid_rejected += 1
+                continue
+
+            elevation = math.radians(self.radar_pitch_deg + altitude)
+            hit_height = self.radar_height_m + depth * math.sin(elevation)
+            if hit_height < self.minimum_obstacle_height_m:
+                ground_rejected += 1
+                continue
+
+            usable_point = dict(point)
+            usable_point["estimated_hit_height_m"] = float(hit_height)
+            usable_points.append(usable_point)
+
+        self.radar_diagnostics = {
+            "raw_points": len(radar_points or []),
+            "usable_points": len(usable_points),
+            "ground_rejected": ground_rejected,
+            "invalid_rejected": invalid_rejected,
+        }
+        return usable_points
 
     def _build_camera_radar_measurements(
         self,
@@ -247,7 +304,7 @@ class LeadVehicleTracker:
 
             if range_m is None or bearing_deg is None or radar_velocity is None:
                 continue
-            if len(cluster) < 2 and range_m > 6.0:
+            if len(cluster) < 2:
                 continue
             if len(cluster) < 3 and range_m > 35.0:
                 continue

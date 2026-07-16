@@ -63,10 +63,25 @@ class SensorLayout:
     def control_specs(self) -> Tuple[SensorSpec, ...]:
         """Sensors required by the live controller and perception viewer."""
         primary_camera = next(camera for camera in self.cameras if camera.primary)
-        front_radar = next(
-            radar for radar in self.radars if radar.name == "radar_front_long"
+        return primary_camera, self.front_radar
+
+    @property
+    def front_radar(self) -> SensorSpec:
+        return next(radar for radar in self.radars if radar.name == "radar_front_long")
+
+    @property
+    def front_radar_geometry(self) -> Dict[str, float]:
+        """Geometry needed to reject radar rays that intersect the road."""
+        bottom_z = (
+            self.vehicle_geometry["bounding_box_center_z_m"]
+            - self.vehicle_geometry["half_height_m"]
         )
-        return primary_camera, front_radar
+        return {
+            "height_above_ground_m": float(
+                self.front_radar.transform.location.z - bottom_z
+            ),
+            "pitch_deg": float(self.front_radar.transform.rotation.pitch),
+        }
 
     @property
     def primary_camera_name(self) -> str:
@@ -194,6 +209,15 @@ def build_sensor_layout(
         0.55,
         max(0.38, 0.52 * half_height),
     )
+
+    # The long-range radar must see vehicle bodies near the horizon, not the
+    # road a few metres ahead. Mount it around hood height and aim it slightly
+    # upward. Its exact height scales with the current vehicle's bounding box.
+    front_radar_height_above_ground = min(
+        1.15,
+        max(0.85, 0.70 * (2.0 * half_height)),
+    )
+    front_radar_z = bottom_z + front_radar_height_above_ground
 
     roof_z = top_z + 0.16
 
@@ -402,12 +426,13 @@ def build_sensor_layout(
             transform=_transform(
                 front_x,
                 float(center.y),
-                bumper_z,
+                front_radar_z,
                 yaw=0.0,
+                pitch=2.0,
             ),
             attributes=_radar_attributes(
                 horizontal_fov=30.0,
-                vertical_fov=12.0,
+                vertical_fov=6.0,
                 sensor_range=150.0,
                 points_per_second=6000,
             ),

@@ -114,8 +114,13 @@ class SpeedPlannerTests(unittest.TestCase):
     def test_straight_road_keeps_cruise_speed(self):
         planner = CurvatureSpeedPlanner(dt=0.05)
         speed, info = planner.run_step(straight_state(speed_mps=8.0))
-        self.assertAlmostEqual(speed, 30.0 / 3.6)
+        self.assertAlmostEqual(speed, 60.0 / 3.6)
         self.assertAlmostEqual(info["curvature_1pm"], 0.0)
+
+    def test_cruise_speed_can_be_configured_in_kmh(self):
+        planner = CurvatureSpeedPlanner(dt=0.05, cruise_speed_kmh=50.0)
+        speed, _ = planner.run_step(straight_state(speed_mps=8.0))
+        self.assertAlmostEqual(speed, 50.0 / 3.6)
 
     def test_curve_reduces_speed_with_a_rate_limit(self):
         planner = CurvatureSpeedPlanner(dt=0.05)
@@ -150,6 +155,23 @@ class LongitudinalControllerTests(unittest.TestCase):
         self.assertEqual(info["mode"], "CRUISE")
         self.assertGreater(throttle, 0.0)
         self.assertEqual(brake, 0.0)
+
+    def test_free_road_converges_to_sixty_kmh(self):
+        controller = LongitudinalController(dt=0.05)
+        speed = 0.0
+
+        for _ in range(500):
+            throttle, brake, _ = controller.run_step(
+                straight_state(speed_mps=speed),
+                lead_vehicle=None,
+                target_speed=60.0 / 3.6,
+            )
+            acceleration = 2.8 * throttle - 5.0 * brake
+            if speed > 0.02:
+                acceleration -= 0.12
+            speed = max(0.0, speed + acceleration * controller.dt)
+
+        self.assertAlmostEqual(speed * 3.6, 60.0, delta=1.0)
 
     def test_far_non_closing_lead_does_not_cause_braking(self):
         controller = LongitudinalController(dt=0.05)
@@ -310,6 +332,33 @@ class LongitudinalControllerTests(unittest.TestCase):
         self.assertGreaterEqual(distance, 1.9)
         self.assertLessEqual(distance, 2.35)
 
+    def test_sixty_kmh_approach_stops_near_two_metres(self):
+        controller = LongitudinalController(dt=0.05)
+        speed = 60.0 / 3.6
+        distance = 60.0
+
+        for _ in range(500):
+            throttle, brake, info = controller.run_step(
+                straight_state(speed_mps=speed),
+                {
+                    "track_id": 11,
+                    "distance_m": distance,
+                    "relative_speed_mps": -speed,
+                },
+                60.0 / 3.6,
+            )
+            acceleration = 2.8 * throttle - 5.0 * brake
+            if speed > 0.02:
+                acceleration -= 0.12
+            speed = max(0.0, speed + acceleration * controller.dt)
+            distance -= speed * controller.dt
+            if info["mode"] == "HOLD" and speed <= 0.02:
+                break
+
+        self.assertEqual(info["mode"], "HOLD")
+        self.assertGreaterEqual(distance, 1.9)
+        self.assertLessEqual(distance, 2.20)
+
     def test_moving_lead_converges_without_repeated_pedal_chatter(self):
         controller = LongitudinalController(dt=0.05)
         lead_speed = 1.0
@@ -382,6 +431,61 @@ class EmergencyBrakeTests(unittest.TestCase):
 
 
 class LeadVehicleTrackerTests(unittest.TestCase):
+    def test_logged_bumper_radar_ground_returns_are_rejected(self):
+        tracker = LeadVehicleTracker(
+            0.05,
+            800,
+            90.0,
+            radar_height_m=0.40,
+            radar_pitch_deg=0.0,
+        )
+        state = straight_state(speed_mps=0.94)
+        ground_points = [
+            {
+                "depth_m": depth,
+                "azimuth_deg": azimuth,
+                "altitude_deg": -6.0,
+                "relative_velocity_mps": -0.94,
+            }
+            for depth, azimuth in ((3.8, -0.2), (3.9, 0.0), (4.0, 0.2))
+        ]
+
+        first = tracker.update(1, state, None, 1, ground_points)
+        second = tracker.update(2, state, None, 2, ground_points)
+        diagnostics = tracker.get_radar_diagnostics()
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertIsNone(tracker.get_emergency_obstacle())
+        self.assertEqual(diagnostics["usable_points"], 0)
+        self.assertEqual(diagnostics["ground_rejected"], 3)
+
+    def test_vehicle_height_radar_returns_remain_available(self):
+        tracker = LeadVehicleTracker(
+            0.05,
+            800,
+            90.0,
+            radar_height_m=1.0,
+            radar_pitch_deg=2.0,
+        )
+        state = straight_state(speed_mps=8.0)
+        vehicle_points = [
+            {
+                "depth_m": 20.0 + offset,
+                "azimuth_deg": offset,
+                "altitude_deg": -1.0,
+                "relative_velocity_mps": -3.0,
+            }
+            for offset in (-0.3, 0.0, 0.3)
+        ]
+
+        tracker.update(1, state, None, 1, vehicle_points)
+        lead = tracker.update(2, state, None, 2, vehicle_points)
+
+        self.assertIsNotNone(lead)
+        self.assertEqual(lead["source"], "radar_direct")
+        self.assertEqual(tracker.get_radar_diagnostics()["ground_rejected"], 0)
+
     def test_camera_identity_uses_closer_radar_range(self):
         tracker = LeadVehicleTracker(0.05, 800, 90.0)
         tracked_lead = {

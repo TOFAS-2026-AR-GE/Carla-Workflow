@@ -88,13 +88,16 @@ class PersistentRouteManager:
         # aracın arkasında iki yol noktası bırak.
         search_count = min(25, len(self.waypoints))
 
-        nearest_index = min(
-            range(search_count),
-            key=lambda index: self.distance_between(
+        nearest_index = 0
+        nearest_distance = math.inf
+        for index in range(search_count):
+            distance = self.distance_between(
                 vehicle_location,
                 self.waypoints[index].transform.location,
-            ),
-        )
+            )
+            if distance < nearest_distance:
+                nearest_index = index
+                nearest_distance = distance
 
         if nearest_index > 2:
             del self.waypoints[: nearest_index - 2]
@@ -157,7 +160,9 @@ class PersistentRouteManager:
         else:
             previous_heading = math.radians(last.transform.rotation.yaw)
 
-        def candidate_score(candidate):
+        best_candidate = None
+        best_score = math.inf
+        for candidate in candidates:
             location = candidate.transform.location
             last_location = last.transform.location
 
@@ -179,12 +184,12 @@ class PersistentRouteManager:
                 if candidate.lane_id != last.lane_id:
                     lane_penalty += 0.35
 
-            return heading_change + lane_penalty
+            score = heading_change + lane_penalty
+            if score < best_score:
+                best_candidate = candidate
+                best_score = score
 
-        return min(
-            candidates,
-            key=candidate_score,
-        )
+        return best_candidate
 
     def current_waypoint(self, vehicle_location):
         if not self.waypoints:
@@ -195,16 +200,23 @@ class PersistentRouteManager:
             len(self.waypoints),
         )
 
-        return min(
-            self.waypoints[:search_count],
-            key=lambda waypoint: self.distance_between(
+        nearest_waypoint = None
+        nearest_distance = math.inf
+        for waypoint in self.waypoints[:search_count]:
+            distance = self.distance_between(
                 vehicle_location,
                 waypoint.transform.location,
-            ),
-        )
+            )
+            if distance < nearest_distance:
+                nearest_waypoint = waypoint
+                nearest_distance = distance
+        return nearest_waypoint
 
     def reference_locations(self):
-        return [waypoint.transform.location for waypoint in self.waypoints]
+        locations = []
+        for waypoint in self.waypoints:
+            locations.append(waypoint.transform.location)
+        return locations
 
     def distance_to_route(self, vehicle_location):
         if not self.waypoints:
@@ -215,13 +227,15 @@ class PersistentRouteManager:
             len(self.waypoints),
         )
 
-        return min(
-            self.distance_between(
+        nearest_distance = math.inf
+        for waypoint in self.waypoints[:search_count]:
+            distance = self.distance_between(
                 vehicle_location,
                 waypoint.transform.location,
             )
-            for waypoint in self.waypoints[:search_count]
-        )
+            if distance < nearest_distance:
+                nearest_distance = distance
+        return nearest_distance
 
     def distance_between(self, first, second):
         return math.hypot(

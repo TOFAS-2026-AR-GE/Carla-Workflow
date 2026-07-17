@@ -25,7 +25,10 @@ def main():
         / "models/signs/class_names.json",
     }
 
-    missing = [source for source in mappings if not source.is_file()]
+    missing = []
+    for source in mappings:
+        if not source.is_file():
+            missing.append(source)
     if missing:
         print("Eksik kaynak dosyalari:")
         for path in missing:

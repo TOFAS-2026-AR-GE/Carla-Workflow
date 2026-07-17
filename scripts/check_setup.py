@@ -5,7 +5,7 @@ from importlib.util import find_spec
 from carla_app.config import Settings
 
 PACKAGES = ["carla", "cv2", "numpy", "yaml", "ultralytics", "dotenv"]
-settings = Settings.load()
+settings = Settings()
 model_paths = [settings.vehicle_model]
 if settings.enable_sign_detection:
     PACKAGES.append("onnxruntime")

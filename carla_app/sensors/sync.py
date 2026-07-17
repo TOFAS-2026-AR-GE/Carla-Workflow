@@ -50,5 +50,9 @@ class SensorSync:
             self.frames.clear()
 
     def _remove_older(self, frame_id):
-        for old_id in [item for item in self.frames if item < frame_id]:
+        old_frame_ids = []
+        for item in self.frames:
+            if item < frame_id:
+                old_frame_ids.append(item)
+        for old_id in old_frame_ids:
             del self.frames[old_id]

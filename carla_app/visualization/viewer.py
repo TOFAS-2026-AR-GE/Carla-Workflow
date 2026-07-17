@@ -67,9 +67,10 @@ class PerceptionViewer:
         )
 
         if errors:
-            error_text = " | ".join(
-                f"{name}: {message}" for name, message in errors.items()
-            )
+            error_parts = []
+            for name, message in errors.items():
+                error_parts.append(f"{name}: {message}")
+            error_text = " | ".join(error_parts)
             cv2.rectangle(frame, (0, 32), (frame.shape[1], 62), (20, 20, 180), -1)
             cv2.putText(
                 frame,
@@ -101,14 +102,16 @@ class PerceptionViewer:
         except cv2.error:
             return False
 
-    @staticmethod
-    def _read_key():
+    def _read_key(self):
         key = cv2.waitKey(1) & 0xFF
         return key not in (27, ord("q"), ord("Q"))
 
-    @staticmethod
-    def _draw(frame, detection, color, prefix):
-        x1, y1, x2, y2 = [int(value) for value in detection["bbox"]]
+    def _draw(self, frame, detection, color, prefix):
+        box = detection["bbox"]
+        x1 = int(box[0])
+        y1 = int(box[1])
+        x2 = int(box[2])
+        y2 = int(box[3])
         confidence = float(detection.get("confidence", 0.0))
         class_name = str(detection.get("class_name", "unknown"))
         label = f"{prefix} {class_name} {confidence:.2f}"

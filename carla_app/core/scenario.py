@@ -1,23 +1,31 @@
 """YAML senaryo dosyasındaki harita, zaman ve trafik ayarlarını okur."""
 
-from dataclasses import dataclass
-from pathlib import Path
-
 import yaml
 
 
-@dataclass(frozen=True)
 class Scenario:
-    map_name: str | None
-    synchronous_mode: bool
-    fixed_delta_seconds: float
-    traffic_manager_port: int
-    npc_count: int
-    safe_distance_m: float
-    speed_difference_percent: float
+    """Senaryo dosyasından okunan değerleri normal sınıf alanlarında tutar."""
+
+    def __init__(
+        self,
+        map_name,
+        synchronous_mode,
+        fixed_delta_seconds,
+        traffic_manager_port,
+        npc_count,
+        safe_distance_m,
+        speed_difference_percent,
+    ):
+        self.map_name = map_name
+        self.synchronous_mode = synchronous_mode
+        self.fixed_delta_seconds = fixed_delta_seconds
+        self.traffic_manager_port = traffic_manager_port
+        self.npc_count = npc_count
+        self.safe_distance_m = safe_distance_m
+        self.speed_difference_percent = speed_difference_percent
 
 
-def load_scenario(path: Path, default_delta: float) -> Scenario:
+def load_scenario(path, default_delta):
     if not path.is_file():
         raise FileNotFoundError(f"Senaryo bulunamadi: {path}")
 

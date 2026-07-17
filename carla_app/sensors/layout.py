@@ -62,59 +62,54 @@ class SensorLayout:
         self.radars = radars
         self.vehicle_geometry = vehicle_geometry
 
-    @property
-    def all_specs(self):
-        """Kayıt modunda açılacak bütün sensörleri verir."""
-        return self.cameras + (self.lidar, self.gnss, self.imu) + self.radars
+        # Sık kullanılan değerler bir kez bulunur ve normal sınıf alanlarında
+        # tutulur. Böylece bu sınıfı okuyan kişi gizli özellik yöntemlerini
+        # takip etmek zorunda kalmaz.
+        self.all_specs = self.cameras + (
+            self.lidar,
+            self.gnss,
+            self.imu,
+        ) + self.radars
 
-    @property
-    def sensor_names(self):
-        return [sensor.name for sensor in self.all_specs]
+        self.sensor_names = []
+        for sensor in self.all_specs:
+            self.sensor_names.append(sensor.name)
 
-    @property
-    def control_specs(self):
-        """Canlı araç kontrolünün gerçekten kullandığı iki sensörü verir."""
         primary_camera = None
         for camera in self.cameras:
             if camera.primary:
                 primary_camera = camera
                 break
-
         if primary_camera is None:
             raise RuntimeError("Birincil kamera tanımlanmamış.")
 
-        return primary_camera, self.front_radar
-
-    @property
-    def front_radar(self):
+        self.primary_camera_name = primary_camera.name
+        self.front_radar = None
         for radar in self.radars:
             if radar.name == "radar_front_long":
-                return radar
-        raise RuntimeError("Ön uzun menzil radarı tanımlanmamış.")
+                self.front_radar = radar
+                break
+        if self.front_radar is None:
+            raise RuntimeError("Ön uzun menzil radarı tanımlanmamış.")
 
-    @property
-    def front_radar_geometry(self):
-        """Zemin dönüşlerini elemek için gereken radar yüksekliğini verir."""
+        self.control_specs = (primary_camera, self.front_radar)
         bottom_z = (
             self.vehicle_geometry["bounding_box_center_z_m"]
             - self.vehicle_geometry["half_height_m"]
         )
-        return {
+        self.front_radar_geometry = {
             "height_above_ground_m": float(
                 self.front_radar.transform.location.z - bottom_z
             ),
             "pitch_deg": float(self.front_radar.transform.rotation.pitch),
         }
 
-    @property
-    def primary_camera_name(self):
-        for camera in self.cameras:
-            if camera.primary:
-                return camera.name
-        raise RuntimeError("Birincil kamera tanımlanmamış.")
-
     def to_manifest(self, vehicle_type_id):
         """Sensör yerleşimini veri kaydının kalibrasyon dosyasına hazırlar."""
+        sensors = []
+        for sensor in self.all_specs:
+            sensors.append(sensor.to_dict())
+
         return {
             "profile": "cost_effective_360_research_vehicle_v1",
             "vehicle_type_id": vehicle_type_id,
@@ -134,7 +129,7 @@ class SensorLayout:
                 "imu": 1,
                 "total": len(self.all_specs),
             },
-            "sensors": [sensor.to_dict() for sensor in self.all_specs],
+            "sensors": sensors,
         }
 
 

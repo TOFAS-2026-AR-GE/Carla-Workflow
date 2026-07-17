@@ -30,17 +30,18 @@ class CameraStream:
 
         with self.condition:
             while True:
-                available = [
-                    frame_id for frame_id in self.frames if frame_id <= world_frame_id
-                ]
+                available = []
+                for frame_id in self.frames:
+                    if frame_id <= world_frame_id:
+                        available.append(frame_id)
                 if available:
                     camera_frame_id = max(available)
                     image = self.frames[camera_frame_id]
-                    for old_id in [
-                        frame_id
-                        for frame_id in self.frames
-                        if frame_id <= camera_frame_id
-                    ]:
+                    old_frame_ids = []
+                    for frame_id in self.frames:
+                        if frame_id <= camera_frame_id:
+                            old_frame_ids.append(frame_id)
+                    for old_id in old_frame_ids:
                         del self.frames[old_id]
                     return camera_frame_id, image
 

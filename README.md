@@ -7,6 +7,11 @@ riskinde acil fren uygular.
 Kodun ana ilkesi şudur: her dosya tek bir iş yapar ve ana araç döngüsü bu
 parçaları açık bir sırayla çağırır.
 
+Canlı uygulama kodunda `dataclass`, `property`, `staticmethod`, `classmethod`,
+`lambda` ve iç içe liste üreteçleri kullanılmaz. Sınıflar yalnızca ilişkili
+durumu tutmak için, fonksiyonlar ise tek bir açık işi yapmak için kullanılır.
+Tekrarlanan işlemler görünür `for` döngüleriyle yazılmıştır.
+
 ## Sistem akışı
 
 Her CARLA karesinde aşağıdaki sıra izlenir:
@@ -136,6 +141,32 @@ tamamen kaldırılmıştır.
 | `longitudinal_controller.py` | Ego hızı, hedef hız ve ön araç | Birbirini dışlayan gaz veya fren |
 | `safety_supervisor.py` | Ön araç ve ham radar tehlikesi | Acil fren gerekli mi bilgisi |
 | `vehicle_controller.py` | Bütün kontrol girdileri | CARLA `VehicleControl` komutu |
+
+## Kullanılan algoritmalar
+
+Aşağıdaki tablo algoritmanın adını, genel tanımını ve bu projedeki gerçek
+uygulamasını birlikte gösterir.
+
+| Algoritma | Basit tanımı | Bu projede nasıl uygulandı? |
+|---|---|---|
+| Kalıcı referans rota | Araç anlık olarak çizgiden ayrılsa bile takip edilen yolun değişmemesini sağlar. | `route_manager.py` aracın önünde yaklaşık 80 metrelik yol noktası tutar. Geçilen noktaları siler, rotayı ileri uzatır ve yalnızca araç 20 çevrim boyunca rotadan 8 metreden fazla uzak kalırsa rotayı yeniden kurar. |
+| YOLO araç tespiti | Kamera görüntüsünde araçların bulunduğu dikdörtgen alanları bulur. | `vehicle_detector.py` ön RGB görüntüsünü YOLO modeline verir. Yalnızca araç sınıflarını kabul eder ve her sonuç için sınıf, güven ve görüntü kutusu üretir. |
+| Açısal kamera-radar birleştirme | Kamera kutusunun görüş açısı ile aynı açıdaki radar noktalarını eşleştirir. | `fusion.py` kutunun sol ve sağ kenarını dereceye çevirir. Bu açı aralığındaki radar noktalarını seçer; kamera verisi birkaç kare eskiyse küçük bir açı payı ekler. |
+| Uyarlamalı radar kümeleme | Birbirine yakın radar noktalarını aynı fiziksel hedef altında toplar. | `fusion.py` aynı kamera kutusundaki noktaları derinliğe göre, `lead_vehicle.py` ise önden gelen noktaları iki boyutlu uzaklığa göre kümeler. Uzak hedeflerde izin verilen küme aralığı kontrollü biçimde büyür. |
+| Sabit hızlı Kalman filtresi | Gürültülü konum ölçümünü hareket tahminiyle birleştirip konum ve hız üretir. | `tracking.py` X ve Y eksenlerini ayrı ayrı izler. Her çevrim önce son hıza göre tahmin yapar, sonra yeni kamera-radar ölçümüyle tahmini düzeltir. |
+| En yakın komşu eşleştirme | Yeni ölçümü kendisine en yakın mevcut araç takibiyle eşleştirir. | `tracking.py` ölçüm ile takip arasındaki bütün uygun uzaklıkları hesaplar. En yakın çiftten başlar; 5 metreden uzak çiftleri kabul etmez ve uzun süre görülmeyen takibi siler. |
+| Zamansal doğrulama ve histerezis | Tek bir gürültülü ölçümle hedef değiştirmeyi önler. | `lead_vehicle.py` doğrudan radar hedefini normal takibe vermeden önce iki yeni karede görür. Benzer mesafedeki iki araç arasında geçiş yapmak için yeni aracın en az 2 metre daha avantajlı olmasını ister. |
+| Stanley direksiyon kontrolü | Araç yönü ile şerit merkezine olan yanal hatayı tek direksiyon komutunda birleştirir. | `stanley_controller.py` aracın önündeki kontrol noktasını rotaya izdüşürür. Başlık hatası, yanal hata ve küçük bir viraj ileri beslemesi kullanır; direksiyon büyüklüğünü ve değişim hızını araç hızına göre sınırlar. |
+| Eğrilik tabanlı hız planlama | Viraj keskinleştikçe izin verilen hızı rahat yanal ivmeye göre düşürür. | `speed_planner.py` hız yükseldikçe 35-75 metre ileriyi tarar. Yol eğriliğinden `hız = karekök(yanal ivme / eğrilik)` hesabını yapar. Şerit hatası büyürse ayrıca toparlanma hızı ister. |
+| IDM araç takip kontrolü | Hedef hıza giderken ön araçla hıza bağlı güvenli zaman ve mesafe bırakır. | `longitudinal_controller.py` 2 metre duruş boşluğu, 1,2 saniye zaman aralığı, ego hızı ve yaklaşma hızından istenen ivmeyi hesaplar. Sonuç pozitifse gaz, yeterince negatifse fren üretir. |
+| İvme değişim sınırı | Gaz veya fren isteğinin bir çevrimde aniden sıçramasını önler. | `longitudinal_controller.py` istenen ivme değişimini hızlanmada 3, frenlemede 6 m/s³ ile sınırlar. Gaz ve fren aynı çevrimde birlikte verilmez. |
+| Üstel ölçüm yumuşatma | Yeni ölçüm ile önceki değeri belirli oranlarda birleştirir. | `lead_vehicle.py` radar mesafesi ve bağıl hızını, `longitudinal_controller.py` ise kontrolcünün kullandığı ön araç mesafesini yumuşatır. Yakınlaşan ölçüm güvenlik için uzaklaşan ölçümden daha hızlı kabul edilir. |
+| TTC ve gerekli yavaşlama ile acil fren | Mesafe kapanma süresini ve çarpışmayı önlemek için gereken yavaşlamayı hesaplar. | `safety_supervisor.py` takip hedefi ile ham radar tehlikesinden daha riskli olanı seçer. Kritik olmayan tek radar noktasını yeterli saymaz; aynı tehlikeyi ikinci yeni karede de görünce tam fren uygular. |
+
+Bu algoritmaların çağrılma sırası `vehicle_controller.py` içinde açıktır:
+önce direksiyon, sonra viraj hedef hızı, ardından normal gaz-fren ve en son
+bağımsız acil fren denetimi çalışır. Acil fren kararı çıkarsa normal gaz
+silinir ve fren doğrudan `1.0` yapılır.
 
 ### Direksiyon
 

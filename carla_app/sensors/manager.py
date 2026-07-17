@@ -56,7 +56,10 @@ class SensorManager:
             self.writer.write_manifest(manifest)
             print(f"[OK] Veri kaydı sensörleri aktif: {len(active_specs)} sensör")
         else:
-            names = ", ".join(spec.name for spec in active_specs)
+            sensor_names = []
+            for spec in active_specs:
+                sensor_names.append(spec.name)
+            names = ", ".join(sensor_names)
             print(f"[OK] Yalnızca kontrol sensörleri aktif: {names}")
 
     def get_rgb(self, frame_id):

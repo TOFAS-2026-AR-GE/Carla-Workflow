@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from carla_app.visualization.sensor_layout import (  # noqa: E402
+from carla_app.visualization.sensor_layout import (
     build_web_view_data,
     render_web_view,
 )
@@ -103,7 +103,7 @@ def main():
             "'pip install -r requirements.txt' çalıştır."
         ) from error
 
-    settings = Settings.load()
+    settings = Settings()
     client = carla.Client(settings.host, settings.port)
     client.set_timeout(min(5.0, max(1.0, settings.timeout)))
 
@@ -123,7 +123,10 @@ def main():
     )
     active_names = active_sensor_names(world, vehicle)
     data = build_web_view_data(layout, active_names, vehicle.type_id)
-    active_count = sum(sensor["active"] for sensor in data["sensors"])
+    active_count = 0
+    for sensor in data["sensors"]:
+        if sensor["active"]:
+            active_count += 1
 
     output = args.output.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)

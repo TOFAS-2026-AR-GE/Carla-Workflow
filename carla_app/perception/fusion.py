@@ -3,6 +3,11 @@
 import math
 
 
+def radar_depth(point):
+    """Radar noktasının sıralamada kullanılacak mesafesini verir."""
+    return point["depth_m"]
+
+
 def camera_focal_length_px(image_width, fov_deg):
     fov_rad = math.radians(float(fov_deg))
     return float(image_width) / (2.0 * math.tan(fov_rad / 2.0))
@@ -42,7 +47,8 @@ def cluster_by_depth(points, minimum_gap_m=2.5):
     if not points:
         return []
 
-    ordered = sorted(points, key=lambda point: point["depth_m"])
+    ordered = list(points)
+    ordered.sort(key=radar_depth)
     clusters = [[ordered[0]]]
 
     for point in ordered[1:]:
@@ -62,23 +68,37 @@ def summarize_nearest_cluster(points):
     if not clusters:
         return None
 
-    multi_point_clusters = [cluster for cluster in clusters if len(cluster) >= 2]
+    multi_point_clusters = []
+    for cluster in clusters:
+        if len(cluster) >= 2:
+            multi_point_clusters.append(cluster)
     usable_clusters = multi_point_clusters or clusters
-    cluster = min(
-        usable_clusters,
-        key=lambda item: median([point["depth_m"] for point in item]),
-    )
+    selected_cluster = None
+    selected_distance = None
+    for cluster in usable_clusters:
+        cluster_depths = []
+        for point in cluster:
+            cluster_depths.append(point["depth_m"])
+        distance = median(cluster_depths)
+        if selected_distance is None or distance < selected_distance:
+            selected_cluster = cluster
+            selected_distance = distance
 
-    depths = sorted(point["depth_m"] for point in cluster)
+    depths = []
+    bearings = []
+    velocities = []
+    for point in selected_cluster:
+        depths.append(point["depth_m"])
+        bearings.append(point["azimuth_deg"])
+        velocities.append(point["relative_velocity_mps"])
+    depths.sort()
     lower_quartile_index = int(round(0.25 * (len(depths) - 1)))
 
     return {
         "range_m": depths[lower_quartile_index],
-        "bearing_deg": median([point["azimuth_deg"] for point in cluster]),
-        "radar_velocity_mps": median(
-            [point["relative_velocity_mps"] for point in cluster]
-        ),
-        "matched_points": len(cluster),
+        "bearing_deg": median(bearings),
+        "radar_velocity_mps": median(velocities),
+        "matched_points": len(selected_cluster),
     }
 
 
@@ -116,13 +136,13 @@ def fuse_detections_with_radar(
         left -= total_padding
         right += total_padding
 
-        candidates = [
-            point
-            for point in radar_points
-            if left <= point["azimuth_deg"] <= right
-            and abs(point.get("altitude_deg", 0.0)) <= 6.0
-            and 0.5 < point["depth_m"] <= 100.0
-        ]
+        candidates = []
+        for point in radar_points:
+            inside_box = left <= point["azimuth_deg"] <= right
+            valid_height = abs(point.get("altitude_deg", 0.0)) <= 6.0
+            valid_depth = 0.5 < point["depth_m"] <= 100.0
+            if inside_box and valid_height and valid_depth:
+                candidates.append(point)
         match = summarize_nearest_cluster(candidates)
         item = dict(detection)
         item["bbox_bearing_deg"] = center_bearing

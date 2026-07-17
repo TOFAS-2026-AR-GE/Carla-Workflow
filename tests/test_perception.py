@@ -14,6 +14,7 @@ if "ultralytics" not in sys.modules:
     sys.modules["ultralytics"] = ultralytics
 
 from carla_app.perception.fusion import fuse_detections_with_radar
+from carla_app.perception.sign_detector import TrafficSignDetector
 from carla_app.perception.system import PerceptionSystem
 from carla_app.perception.vehicle_detector import VehicleDetector
 from carla_app.sensors.processors import image_to_rgb
@@ -28,16 +29,13 @@ class VehicleDetectorTests(unittest.TestCase):
             3: "traffic_light_green",
             9: "vehicle",
         }
-        self.assertEqual(
-            VehicleDetector._find_vehicle_class_ids(names),
-            [0, 1, 9],
-        )
+        detector = VehicleDetector.__new__(VehicleDetector)
+        self.assertEqual(detector._find_vehicle_class_ids(names), [0, 1, 9])
 
     def test_unknown_classes_are_not_silently_treated_as_vehicles(self):
-        self.assertEqual(
-            VehicleDetector._find_vehicle_class_ids({0: "person", 1: "sign"}),
-            [],
-        )
+        detector = VehicleDetector.__new__(VehicleDetector)
+        names = {0: "person", 1: "sign"}
+        self.assertEqual(detector._find_vehicle_class_ids(names), [])
 
     def test_predict_uses_configured_low_threshold_and_vehicle_classes(self):
         captured = {}
@@ -58,6 +56,52 @@ class VehicleDetectorTests(unittest.TestCase):
 
         self.assertEqual(captured["conf"], 0.05)
         self.assertEqual(captured["classes"], [0, 1, 9])
+
+
+class TrafficSignDetectorTests(unittest.TestCase):
+    def test_detector_options_are_passed_openly_to_the_model(self):
+        captured = {}
+
+        class FakeModel:
+            def predict(self, **arguments):
+                captured.update(arguments)
+                return []
+
+        detector = TrafficSignDetector.__new__(TrafficSignDetector)
+        detector.detector = FakeModel()
+        detector.detector_confidence = 0.25
+        detector.detector_iou = 0.50
+        detector.detector_image_size = 512
+        detector.device = "cpu"
+
+        image = np.zeros((20, 30, 3), dtype=np.uint8)
+        detector._predict_detector(image)
+
+        self.assertEqual(captured["source"].shape, (20, 30, 3))
+        self.assertEqual(captured["conf"], 0.25)
+        self.assertEqual(captured["iou"], 0.50)
+        self.assertEqual(captured["imgsz"], 512)
+        self.assertEqual(captured["device"], "cpu")
+
+    def test_classifier_options_are_passed_openly_to_the_model(self):
+        captured = {}
+
+        class FakeModel:
+            def predict(self, **arguments):
+                captured.update(arguments)
+                return []
+
+        detector = TrafficSignDetector.__new__(TrafficSignDetector)
+        detector.classifier = FakeModel()
+        detector.classifier_image_size = 96
+        detector.device = "cpu"
+
+        image = np.zeros((20, 30, 3), dtype=np.uint8)
+        detector._predict_classifier(image)
+
+        self.assertEqual(captured["source"].shape, (20, 30, 3))
+        self.assertEqual(captured["imgsz"], 96)
+        self.assertEqual(captured["device"], "cpu")
 
 
 class PerceptionSystemTests(unittest.TestCase):

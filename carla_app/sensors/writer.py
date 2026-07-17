@@ -2,17 +2,13 @@
 
 import json
 from datetime import datetime
-from pathlib import Path
 
 import cv2
 import numpy as np
 
 
 class DatasetWriter:
-    def __init__(
-        self,
-        output_folder: Path,
-    ):
+    def __init__(self, output_folder):
         run_name = datetime.now().strftime("run_%Y%m%d_%H%M%S")
 
         self.run_folder = output_folder / run_name
@@ -67,11 +63,11 @@ class DatasetWriter:
 
         print(f"[OK] Sensor manifesti: {manifest_path}")
 
-    @staticmethod
     def _write_rgb(
-        path: Path,
+        self,
+        path,
         rgb_image,
-    ) -> None:
+    ):
         bgr_image = cv2.cvtColor(
             rgb_image,
             cv2.COLOR_RGB2BGR,

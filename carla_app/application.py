@@ -22,7 +22,7 @@ class CarlaApplication:
     """Sensör, algılama ve kontrol parçalarını doğru sırayla çalıştırır."""
 
     def __init__(self):
-        self.settings = Settings.load()
+        self.settings = Settings()
         self.dt = None
         self.session = None
         self.world = None

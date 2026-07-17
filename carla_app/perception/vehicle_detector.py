@@ -54,9 +54,9 @@ class VehicleDetector:
                 f"Model siniflari: {self.model_names}"
             )
 
-        selected_names = {
-            class_id: self.model_names[class_id] for class_id in self.vehicle_class_ids
-        }
+        selected_names = {}
+        for class_id in self.vehicle_class_ids:
+            selected_names[class_id] = self.model_names[class_id]
         print(
             f"[OK] Vehicle modeli: device={self.device}, "
             f"classes={selected_names}, conf={self.confidence:.2f}"
@@ -85,7 +85,10 @@ class VehicleDetector:
                 continue
 
             coordinates = box.xyxy[0].detach().cpu().tolist()
-            x1, y1, x2, y2 = [int(round(value)) for value in coordinates]
+            x1 = int(round(coordinates[0]))
+            y1 = int(round(coordinates[1]))
+            x2 = int(round(coordinates[2]))
+            y2 = int(round(coordinates[3]))
             x1 = max(0, min(x1, image_width - 1))
             x2 = max(0, min(x2, image_width - 1))
             y1 = max(0, min(y1, image_height - 1))
@@ -109,19 +112,8 @@ class VehicleDetector:
         return detections
 
     def _predict(self, bgr_image):
-        arguments = {
-            "source": bgr_image,
-            "conf": self.confidence,
-            "iou": 0.45,
-            "imgsz": self.image_size,
-            "device": self.device,
-            "classes": self.vehicle_class_ids,
-            "verbose": False,
-            "max_det": 100,
-        }
-
         try:
-            return self.model.predict(**arguments)
+            return self._predict_on_device(bgr_image, self.device)
         except (RuntimeError, ValueError) as error:
             if self.device == "cpu":
                 raise
@@ -132,11 +124,22 @@ class VehicleDetector:
             )
             self.device = "cpu"
             move_model_to_cpu(self.model)
-            arguments["device"] = "cpu"
-            return self.model.predict(**arguments)
+            return self._predict_on_device(bgr_image, "cpu")
 
-    @staticmethod
-    def _validate_image(rgb_image):
+    def _predict_on_device(self, bgr_image, device):
+        """YOLO çağrısını bütün seçenekleri görünür biçimde yapar."""
+        return self.model.predict(
+            source=bgr_image,
+            conf=self.confidence,
+            iou=0.45,
+            imgsz=self.image_size,
+            device=device,
+            classes=self.vehicle_class_ids,
+            verbose=False,
+            max_det=100,
+        )
+
+    def _validate_image(self, rgb_image):
         if rgb_image is None:
             raise ValueError("VehicleDetector bos kamera goruntusu aldi.")
         if not isinstance(rgb_image, np.ndarray):
@@ -147,27 +150,36 @@ class VehicleDetector:
                 f"gelen shape: {rgb_image.shape}"
             )
 
-    @classmethod
-    def _find_vehicle_class_ids(cls, names):
+    def _find_vehicle_class_ids(self, names):
         selected = []
 
         for class_id, class_name in names.items():
             normalized = (
                 str(class_name).strip().lower().replace("-", " ").replace("_", " ")
             )
-            words = set(normalized.split())
+            words = normalized.split()
 
-            if normalized in cls.VEHICLE_NAMES or words & cls.VEHICLE_NAMES:
-                selected.append(int(class_id))
+            vehicle_word_found = False
+            for word in words:
+                if word in self.VEHICLE_NAMES:
+                    vehicle_word_found = True
+                    break
 
-        return sorted(set(selected))
+            if normalized in self.VEHICLE_NAMES or vehicle_word_found:
+                number = int(class_id)
+                if number not in selected:
+                    selected.append(number)
 
-    @staticmethod
-    def _normalize_names(names):
+        selected.sort()
+        return selected
+
+    def _normalize_names(self, names):
+        normalized = {}
         if isinstance(names, dict):
-            return {
-                int(class_id): str(class_name) for class_id, class_name in names.items()
-            }
+            for class_id, class_name in names.items():
+                normalized[int(class_id)] = str(class_name)
+            return normalized
         if isinstance(names, (list, tuple)):
-            return {index: str(class_name) for index, class_name in enumerate(names)}
-        return {}
+            for index, class_name in enumerate(names):
+                normalized[index] = str(class_name)
+        return normalized

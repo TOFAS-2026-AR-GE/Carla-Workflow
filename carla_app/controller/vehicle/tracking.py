@@ -86,6 +86,10 @@ class Track:
 
         self.kx = Axis1DKalman(x, process_noise, measurement_noise)
         self.ky = Axis1DKalman(y, process_noise, measurement_noise)
+        self.x = x
+        self.y = y
+        self.vx = 0.0
+        self.vy = 0.0
 
         self.hit_count = 1  # Gerçek ölçümle kaç kez eşleşti.
         self.miss_count = 0  # Üst üste kaç kez eşleşmedi.
@@ -100,10 +104,12 @@ class Track:
     def predict(self, dt):
         self.kx.predict(dt)
         self.ky.predict(dt)
+        self.copy_filter_values()
 
     def update(self, measured_x, measured_y):
         self.kx.update(measured_x)
         self.ky.update(measured_y)
+        self.copy_filter_values()
 
         self.hit_count += 1
         self.miss_count = 0
@@ -113,21 +119,12 @@ class Track:
     def mark_missed(self):
         self.miss_count += 1
 
-    @property
-    def x(self):
-        return self.kx.pos
-
-    @property
-    def y(self):
-        return self.ky.pos
-
-    @property
-    def vx(self):
-        return self.kx.vel
-
-    @property
-    def vy(self):
-        return self.ky.vel
+    def copy_filter_values(self):
+        """Kalman sonucunu dışarıdan okunabilen basit alanlara kopyalar."""
+        self.x = self.kx.pos
+        self.y = self.ky.pos
+        self.vx = self.kx.vel
+        self.vy = self.ky.vel
 
 
 def polar_to_world(range_m, bearing_deg, ego_x, ego_y, ego_yaw_deg):
@@ -149,8 +146,10 @@ class Tracker:
     def __init__(self, gate_distance_m=5.0, max_misses=5):
         self.tracks = []
         self.next_id = 1
-        self.gate_distance_m = gate_distance_m  # eslesme icin izin verilen max mesafe
-        self.max_misses = max_misses  # bu kadar kayiptan sonra track silinir
+        # Bir ölçümün mevcut takiple eşleşebileceği en büyük uzaklık.
+        self.gate_distance_m = gate_distance_m
+        # Takip bu kadar çevrim kaybolduktan sonra silinir.
+        self.max_misses = max_misses
 
     def step(self, dt, measurements):
         """Bir çevrim tahmin, eşleştirme, güncelleme ve temizleme yapar.
@@ -163,14 +162,17 @@ class Tracker:
             track.predict(dt)
 
         # 2) En yakın çiftlerden başlayarak ölçüm ile takibi eşleştir.
-        used_tracks, used_measurements = set(), set()
+        used_tracks = set()
+        used_measurements = set()
         pairs = []
         for ti, track in enumerate(self.tracks):
             for mi, meas in enumerate(measurements):
                 dist = math.hypot(track.x - meas["x"], track.y - meas["y"])
                 if dist <= self.gate_distance_m:
                     pairs.append((dist, ti, mi))
-        pairs.sort(key=lambda p: p[0])
+        # Üçlüler önce mesafeye göre sıralanır. Eşitlikte takip ve ölçüm
+        # sırası kullanılır; gizli bir sıralama kuralı yoktur.
+        pairs.sort()
 
         for _, ti, mi in pairs:
             if ti in used_tracks or mi in used_measurements:
@@ -204,5 +206,9 @@ class Tracker:
             self.next_id += 1
 
         # 5) Uzun süredir eşleşmeyen takipleri temizle.
-        self.tracks = [t for t in self.tracks if t.miss_count <= self.max_misses]
+        remaining_tracks = []
+        for track in self.tracks:
+            if track.miss_count <= self.max_misses:
+                remaining_tracks.append(track)
+        self.tracks = remaining_tracks
         return self.tracks

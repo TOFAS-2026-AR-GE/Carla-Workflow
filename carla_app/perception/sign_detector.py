@@ -35,13 +35,7 @@ class TrafficSignDetector:
     def detect(self, rgb_image):
         bgr_image = np.ascontiguousarray(rgb_image[:, :, ::-1])
         height, width = bgr_image.shape[:2]
-        result = self._predict(
-            self.detector,
-            source=bgr_image,
-            conf=self.detector_confidence,
-            iou=self.detector_iou,
-            imgsz=self.detector_image_size,
-        )[0]
+        result = self._predict_detector(bgr_image)[0]
 
         detections = []
         if result.boxes is None:
@@ -70,11 +64,7 @@ class TrafficSignDetector:
         return detections
 
     def _classify(self, crop):
-        result = self._predict(
-            self.classifier,
-            source=crop,
-            imgsz=self.classifier_image_size,
-        )[0]
+        result = self._predict_classifier(crop)[0]
         if result.probs is None:
             return -1, "unknown", 0.0
 
@@ -85,8 +75,7 @@ class TrafficSignDetector:
             return -1, "unknown", confidence
         return class_id, name, confidence
 
-    @staticmethod
-    def _crop_box(x1, y1, x2, y2, width, height, padding=0.25):
+    def _crop_box(self, x1, y1, x2, y2, width, height, padding=0.25):
         box_width = x2 - x1
         box_height = y2 - y1
         side = max(box_width, box_height)
@@ -100,27 +89,63 @@ class TrafficSignDetector:
             min(height, int(center_y + side / 2)),
         )
 
-    @staticmethod
-    def _load_names(path):
+    def _load_names(self, path):
         with open(path, "r", encoding="utf-8") as file:
             data = json.load(file)
-        return {int(key): str(value) for key, value in data.items()}
+        names = {}
+        for key, value in data.items():
+            names[int(key)] = str(value)
+        return names
 
-    def _predict(self, model, **arguments):
-        arguments.update(device=self.device, verbose=False)
-
+    def _predict_detector(self, image):
+        """Levha bulma modelini çalıştırır; gerekirse bir kez CPU'ya geçer."""
         try:
-            return model.predict(**arguments)
-        except (RuntimeError, ValueError) as error:
-            if self.device == "cpu":
-                raise
-
-            print(
-                f"[WARN] Sign GPU inference basarisiz ({error}); "
-                "CPU ile yeniden deneniyor."
+            return self.detector.predict(
+                source=image,
+                conf=self.detector_confidence,
+                iou=self.detector_iou,
+                imgsz=self.detector_image_size,
+                device=self.device,
+                verbose=False,
             )
-            self.device = "cpu"
-            move_model_to_cpu(self.detector)
-            move_model_to_cpu(self.classifier)
-            arguments["device"] = "cpu"
-            return model.predict(**arguments)
+        except (RuntimeError, ValueError) as error:
+            self._switch_to_cpu(error)
+            return self.detector.predict(
+                source=image,
+                conf=self.detector_confidence,
+                iou=self.detector_iou,
+                imgsz=self.detector_image_size,
+                device="cpu",
+                verbose=False,
+            )
+
+    def _predict_classifier(self, image):
+        """Levha sınıflandırma modelini çalıştırır; gerekirse CPU'ya geçer."""
+        try:
+            return self.classifier.predict(
+                source=image,
+                imgsz=self.classifier_image_size,
+                device=self.device,
+                verbose=False,
+            )
+        except (RuntimeError, ValueError) as error:
+            self._switch_to_cpu(error)
+            return self.classifier.predict(
+                source=image,
+                imgsz=self.classifier_image_size,
+                device="cpu",
+                verbose=False,
+            )
+
+    def _switch_to_cpu(self, error):
+        """İki levha modelini CPU'ya taşır."""
+        if self.device == "cpu":
+            raise error
+
+        print(
+            f"[WARN] Sign GPU inference basarisiz ({error}); "
+            "CPU ile yeniden deneniyor."
+        )
+        self.device = "cpu"
+        move_model_to_cpu(self.detector)
+        move_model_to_cpu(self.classifier)

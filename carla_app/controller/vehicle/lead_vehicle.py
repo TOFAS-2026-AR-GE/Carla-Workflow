@@ -304,11 +304,12 @@ class LeadVehicleTracker:
             state,
             radar_frame_id,
         )
-        raw_candidate = min(
-            candidates,
-            key=lambda item: item["distance_m"],
-            default=None,
-        )
+        raw_candidate = None
+        for candidate in candidates:
+            if raw_candidate is None:
+                raw_candidate = candidate
+            elif candidate["distance_m"] < raw_candidate["distance_m"]:
+                raw_candidate = candidate
 
         if raw_candidate is None:
             self.radar_candidate = None
@@ -343,9 +344,13 @@ class LeadVehicleTracker:
         ego_location = state["location"]
 
         for cluster in self.cluster_radar_points(radar_points):
-            depths = [point["depth_m"] for point in cluster]
-            bearings = [point["azimuth_deg"] for point in cluster]
-            velocities = [point["relative_velocity_mps"] for point in cluster]
+            depths = []
+            bearings = []
+            velocities = []
+            for point in cluster:
+                depths.append(point["depth_m"])
+                bearings.append(point["azimuth_deg"])
+                velocities.append(point["relative_velocity_mps"])
             range_m = percentile(depths, 0.2)
             bearing_deg = median(bearings)
             radar_velocity = median(velocities)
@@ -418,8 +423,13 @@ class LeadVehicleTracker:
             except (KeyError, TypeError, ValueError):
                 continue
 
-            values = (depth, azimuth, altitude, radar_velocity)
-            if not all(math.isfinite(value) for value in values):
+            values_are_finite = (
+                math.isfinite(depth)
+                and math.isfinite(azimuth)
+                and math.isfinite(altitude)
+                and math.isfinite(radar_velocity)
+            )
+            if not values_are_finite:
                 continue
             if not 0.5 < depth <= 20.0:
                 continue
@@ -472,14 +482,22 @@ class LeadVehicleTracker:
                 }
             )
 
-        return min(
-            candidates,
-            key=lambda candidate: (
+        selected = None
+        for candidate in candidates:
+            if selected is None:
+                selected = candidate
+                continue
+            candidate_priority = (
                 candidate["ttc_s"],
                 candidate["distance_m"],
-            ),
-            default=None,
-        )
+            )
+            selected_priority = (
+                selected["ttc_s"],
+                selected["distance_m"],
+            )
+            if candidate_priority < selected_priority:
+                selected = candidate
+        return selected
 
     def cluster_radar_points(self, radar_points):
         """Birbirine yakın radar noktalarını aynı fiziksel hedefte toplar."""
@@ -533,7 +551,10 @@ class LeadVehicleTracker:
                     cluster_indexes.add(neighbour)
                     stack.append(neighbour)
 
-            clusters.append([prepared[index] for index in cluster_indexes])
+            cluster = []
+            for index in cluster_indexes:
+                cluster.append(prepared[index])
+            clusters.append(cluster)
 
         return clusters
 
@@ -620,10 +641,9 @@ class LeadVehicleTracker:
                 lead["radar_points"] = radar_lead["radar_points"]
             return lead
 
-        return min(
-            (tracked_lead, radar_lead),
-            key=lambda candidate: candidate["distance_m"],
-        )
+        if tracked_lead["distance_m"] <= radar_lead["distance_m"]:
+            return tracked_lead
+        return radar_lead
 
     def select_with_hysteresis(self, candidates):
         """Benzer mesafedeki iki hedef arasında sürekli geçişi önler."""
@@ -631,13 +651,16 @@ class LeadVehicleTracker:
             self.selected_track_id = None
             return None
 
-        candidates.sort(key=lambda candidate: candidate["distance_m"])
         nearest = candidates[0]
         current = None
         for candidate in candidates:
+            if candidate["distance_m"] < nearest["distance_m"]:
+                nearest = candidate
             if candidate["track_id"] == self.selected_track_id:
-                current = candidate
-                break
+                if current is None:
+                    current = candidate
+                elif candidate["distance_m"] < current["distance_m"]:
+                    current = candidate
 
         if current is None:
             selected = nearest

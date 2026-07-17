@@ -2,13 +2,10 @@
 
 import carla
 
-from carla_app.config import Settings
-from carla_app.core.scenario import Scenario
-
-
 class CarlaSession:
     """CARLA istemcisi ile senkron dünya ayarlarının yaşam döngüsü."""
-    def __init__(self, settings: Settings, scenario: Scenario):
+
+    def __init__(self, settings, scenario):
         self.settings = settings
         self.scenario = scenario
         self.client = None

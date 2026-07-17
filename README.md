@@ -47,6 +47,32 @@ bash run_cpu.sh
 Doğrudan `python main.py` da kullanılabilir. OpenCV penceresinde `Q`, `ESC`
 veya pencerenin X düğmesi uygulamayı güvenli biçimde kapatır.
 
+## Kolay görsel sensör ekranı (önerilen)
+
+RViz ve ROS kurmadan, sensörleri doğrudan araba şekli üzerinde görmek için
+tarayıcı ekranını kullan. Ekran aracın gerçek CARLA ölçüsünü kullanır ve üstten
+ve yandan görünümü birlikte gösterir. Sensöre tıklayınca konumu, yönü, görüş
+açısı ve menzili açılır.
+
+CARLA sunucusu ve normal uygulama çalışırken ikinci terminalde:
+
+```bash
+cd ~/Desktop/Carla-Workflow-Modular
+bash run_sensor_viewer.sh
+```
+
+Tarayıcı otomatik açılır. ROS kurulumu, `source /opt/ros/...` veya RViz
+gerekmez. Dolu/parlak işaretler gerçekten çalışan sensörleri, saydam işaretler
+tasarımdaki fakat o anda çalıştırılmayan sensörleri gösterir. Üstteki kutularla
+sensör türleri ve planlanan sensörler açılıp kapatılabilir.
+
+Tarayıcı otomatik açılmazsa:
+
+```bash
+bash run_sensor_viewer.sh --no-browser
+xdg-open /tmp/carla_sensor_layout.html
+```
+
 ## RViz sensör yerleşimi
 
 `scripts/rviz_sensor_layout.py`, araç boyutundan hesaplanan 27 sensörün

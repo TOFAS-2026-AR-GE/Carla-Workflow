@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CARLA Sensör Yerleşimi</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #10141c;
+      --panel: #191f2a;
+      --line: #30394a;
+      --text: #edf2f8;
+      --muted: #9aa8ba;
+      --active: #74e69b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      padding: 20px 24px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #141923;
+    }
+    h1 { margin: 0 0 6px; font-size: 23px; }
+    header p { margin: 0; color: var(--muted); }
+    .summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .stat {
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #1b2230;
+      font-size: 13px;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--line);
+      background: #151b25;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #d5dde8;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .toggle input { accent-color: #62b9ff; }
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    main {
+      display: grid;
+      grid-template-columns: minmax(520px, 1.25fr) minmax(400px, 0.85fr);
+      gap: 16px;
+      padding: 16px;
+      align-items: start;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .panel-title {
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--line);
+      color: #dbe5f2;
+      font-weight: 650;
+      font-size: 14px;
+    }
+    .panel-title small {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-weight: 400;
+      font-size: 11px;
+    }
+    .views { display: grid; grid-template-columns: 1fr; gap: 16px; }
+    svg { display: block; width: 100%; background: #111722; }
+    .right-column { display: grid; gap: 16px; }
+    .details { padding: 15px; min-height: 185px; }
+    .details h2 { margin: 0 0 5px; font-size: 18px; }
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 99px;
+      font-size: 11px;
+      margin-bottom: 11px;
+      background: #293244;
+      color: #cbd5e2;
+    }
+    .badge.active { background: #153c2a; color: #8df2b3; }
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      font-size: 13px;
+    }
+    .detail-item {
+      padding: 8px;
+      background: #141a24;
+      border-radius: 7px;
+    }
+    .detail-item span { display: block; color: var(--muted); font-size: 11px; }
+    .sensor-list {
+      max-height: 510px;
+      overflow: auto;
+      padding: 8px;
+    }
+    .sensor-row {
+      display: grid;
+      grid-template-columns: 12px 1fr auto;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 9px;
+      border-radius: 7px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .sensor-row:hover, .sensor-row.selected { background: #252e3d; }
+    .sensor-row.planned { opacity: 0.55; }
+    .sensor-row small { color: var(--muted); }
+    .sensor-shape { cursor: pointer; transition: opacity .15s, filter .15s; }
+    .sensor-shape:hover { filter: drop-shadow(0 0 6px currentColor); }
+    .planned-shape { opacity: 0.28; stroke-dasharray: 5 4; }
+    .active-shape { opacity: 0.88; }
+    .car-body { fill: #687386; stroke: #bac4d3; stroke-width: 2; opacity: .62; }
+    .car-glass { fill: #202c3b; stroke: #8392a7; stroke-width: 1.5; }
+    .wheel { fill: #090c11; stroke: #596477; stroke-width: 1; }
+    .orientation { fill: #c7d2e2; font-size: 12px; font-weight: 700; }
+    .empty { color: var(--muted); padding: 18px; text-align: center; }
+    @media (max-width: 1050px) {
+      main { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CARLA Sensör Yerleşimi</h1>
+    <p id="vehicleName"></p>
+    <div class="summary" id="summary"></div>
+  </header>
+
+  <div class="toolbar" id="toolbar"></div>
+
+  <main>
+    <div class="views">
+      <section class="panel">
+        <div class="panel-title">
+          Üstten görünüm — aracın önü yukarı bakıyor
+          <small>Görüş konileri ekrana sığması için kısaltılmıştır; gerçek menzil sensör detayında yazılıdır.</small>
+        </div>
+        <svg id="topView" viewBox="0 0 720 800" aria-label="Üstten sensör görünümü"></svg>
+      </section>
+      <section class="panel">
+        <div class="panel-title">Yandan görünüm — aracın önü sağa bakıyor</div>
+        <svg id="sideView" viewBox="0 0 720 390" aria-label="Yandan sensör görünümü"></svg>
+      </section>
+    </div>
+
+    <div class="right-column">
+      <section class="panel">
+        <div class="panel-title">Seçili sensör</div>
+        <div class="details" id="details"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title">Sensör listesi</div>
+        <div class="sensor-list" id="sensorList"></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const layout = __SENSOR_LAYOUT_DATA__;
+    const NS = "http://www.w3.org/2000/svg";
+    const colors = {
+      camera: "#43e66f",
+      radar: "#ff5349",
+      lidar: "#3d94ff",
+      ultrasonic: "#ffd23f",
+      gnss: "#db64ff",
+      imu: "#35e4e4"
+    };
+    const labels = {
+      camera: "Kamera",
+      radar: "Radar",
+      lidar: "LiDAR",
+      ultrasonic: "Ultrasonik",
+      gnss: "GNSS",
+      imu: "IMU"
+    };
+    const enabledKinds = new Set(Object.keys(colors));
+    let showPlanned = true;
+    let selectedName = null;
+
+    function el(name, attrs = {}) {
+      const node = document.createElementNS(NS, name);
+      Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, value));
+      return node;
+    }
+
+    function visible(sensor) {
+      return Boolean(sensor) && enabledKinds.has(sensor.kind) && (showPlanned || sensor.active);
+    }
+
+    function topPoint(x, y) {
+      const scale = 68;
+      return [360 + y * scale, 405 - x * scale];
+    }
+
+    function sidePoint(x, z) {
+      const scale = 92;
+      const bottom = layout.vehicle.bounding_box_center_z_m - layout.vehicle.half_height_m;
+      return [360 + x * scale, 325 - (z - bottom) * scale];
+    }
+
+    function visualRange(sensor) {
+      if (sensor.kind === "camera") return 3.0;
+      if (sensor.kind === "radar") return 3.5;
+      if (sensor.kind === "ultrasonic") return 1.45;
+      if (sensor.kind === "lidar") return 2.35;
+      return 0.8;
+    }
+
+    function addTopCar(svg) {
+      const v = layout.vehicle;
+      const scale = 68;
+      const [cx, cy] = topPoint(v.bounding_box_center_x_m, v.bounding_box_center_y_m);
+      const width = v.width_m * scale;
+      const height = v.length_m * scale;
+      svg.appendChild(el("rect", {
+        x: cx - width / 2, y: cy - height / 2, width, height,
+        rx: Math.min(45, width * .28), class: "car-body"
+      }));
+      svg.appendChild(el("rect", {
+        x: cx - width * .38, y: cy - height * .20,
+        width: width * .76, height: height * .43,
+        rx: 24, class: "car-glass"
+      }));
+      const wheelW = 16, wheelH = height * .19;
+      [-1, 1].forEach(side => {
+        [cy - height * .28, cy + height * .28].forEach(y => {
+          svg.appendChild(el("rect", {
+            x: cx + side * (width / 2 + 2) - wheelW / 2,
+            y: y - wheelH / 2, width: wheelW, height: wheelH,
+            rx: 5, class: "wheel"
+          }));
+        });
+      });
+      const arrow = el("path", {
+        d: `M ${cx} ${cy - height / 2 - 22} l -10 14 h 20 z`,
+        fill: "#dbe6f3"
+      });
+      svg.appendChild(arrow);
+      const text = el("text", {x: cx, y: cy - height / 2 - 30, "text-anchor": "middle", class: "orientation"});
+      text.textContent = "ÖN";
+      svg.appendChild(text);
+    }
+
+    function addSideCar(svg) {
+      const v = layout.vehicle;
+      const scale = 92;
+      const bottom = v.bounding_box_center_z_m - v.half_height_m;
+      const rear = v.bounding_box_center_x_m - v.half_length_m;
+      const front = v.bounding_box_center_x_m + v.half_length_m;
+      const [rearX, groundY] = sidePoint(rear, bottom);
+      const [frontX] = sidePoint(front, bottom);
+      const roofY = sidePoint(0, bottom + v.height_m)[1];
+      const bodyPath = [
+        `M ${rearX} ${groundY}`,
+        `L ${rearX + 12} ${roofY + 65}`,
+        `L ${rearX + (frontX - rearX) * .27} ${roofY + 45}`,
+        `L ${rearX + (frontX - rearX) * .40} ${roofY}`,
+        `L ${rearX + (frontX - rearX) * .72} ${roofY + 5}`,
+        `L ${rearX + (frontX - rearX) * .86} ${roofY + 70}`,
+        `L ${frontX} ${groundY - 12}`,
+        `L ${frontX - 5} ${groundY}`,
+        "Z"
+      ].join(" ");
+      svg.appendChild(el("path", {d: bodyPath, class: "car-body"}));
+      [rearX + (frontX - rearX) * .23, rearX + (frontX - rearX) * .77].forEach(x => {
+        svg.appendChild(el("circle", {cx: x, cy: groundY, r: 24, class: "wheel"}));
+        svg.appendChild(el("circle", {cx: x, cy: groundY, r: 10, fill: "#758196"}));
+      });
+      const text = el("text", {x: frontX, y: roofY - 12, "text-anchor": "end", class: "orientation"});
+      text.textContent = "ÖN →";
+      svg.appendChild(text);
+    }
+
+    function topFov(sensor) {
+      const group = el("g", {class: `sensor-shape ${sensor.active ? "active-shape" : "planned-shape"}`});
+      const [sx, sy] = topPoint(sensor.position.x, sensor.position.y);
+      const yaw = sensor.rotation.yaw * Math.PI / 180;
+      const fov = Math.min(sensor.horizontal_fov_deg || 18, 140) * Math.PI / 180;
+      const range = visualRange(sensor);
+      const left = topPoint(
+        sensor.position.x + Math.cos(yaw - fov / 2) * range,
+        sensor.position.y + Math.sin(yaw - fov / 2) * range
+      );
+      const right = topPoint(
+        sensor.position.x + Math.cos(yaw + fov / 2) * range,
+        sensor.position.y + Math.sin(yaw + fov / 2) * range
+      );
+      const color = colors[sensor.kind];
+
+      if (["camera", "radar", "ultrasonic"].includes(sensor.kind)) {
+        group.appendChild(el("path", {
+          d: `M ${sx} ${sy} L ${left[0]} ${left[1]} L ${right[0]} ${right[1]} Z`,
+          fill: color, "fill-opacity": sensor.active ? .16 : .055,
+          stroke: color, "stroke-width": sensor.active ? 2 : 1.2
+        }));
+      } else if (sensor.kind === "lidar") {
+        group.appendChild(el("circle", {
+          cx: sx, cy: sy, r: range * 68,
+          fill: "none", stroke: color, "stroke-width": 2
+        }));
+      }
+
+      const direction = topPoint(
+        sensor.position.x + Math.cos(yaw) * .48,
+        sensor.position.y + Math.sin(yaw) * .48
+      );
+      group.appendChild(el("line", {
+        x1: sx, y1: sy, x2: direction[0], y2: direction[1],
+        stroke: color, "stroke-width": 3
+      }));
+      group.appendChild(el("circle", {
+        cx: sx, cy: sy, r: sensor.active ? 8 : 5.5,
+        fill: color, stroke: "#071019", "stroke-width": 2
+      }));
+      group.addEventListener("click", () => selectSensor(sensor.name));
+      return group;
+    }
+
+    function sideSensor(sensor) {
+      const group = el("g", {class: `sensor-shape ${sensor.active ? "active-shape" : "planned-shape"}`});
+      const [sx, sy] = sidePoint(sensor.position.x, sensor.position.z);
+      const yaw = sensor.rotation.yaw * Math.PI / 180;
+      const pitch = sensor.rotation.pitch * Math.PI / 180;
+      const length = Math.min(1.3, visualRange(sensor));
+      const dx = Math.cos(yaw) * Math.cos(pitch) * length;
+      const dz = Math.sin(pitch) * length;
+      const [ex, ey] = sidePoint(sensor.position.x + dx, sensor.position.z + dz);
+      const color = colors[sensor.kind];
+      group.appendChild(el("line", {
+        x1: sx, y1: sy, x2: ex, y2: ey,
+        stroke: color, "stroke-width": 3
+      }));
+      group.appendChild(el("circle", {
+        cx: sx, cy: sy, r: sensor.active ? 8 : 5.5,
+        fill: color, stroke: "#071019", "stroke-width": 2
+      }));
+      group.addEventListener("click", () => selectSensor(sensor.name));
+      return group;
+    }
+
+    function renderViews() {
+      const top = document.getElementById("topView");
+      const side = document.getElementById("sideView");
+      top.replaceChildren();
+      side.replaceChildren();
+      addTopCar(top);
+      addSideCar(side);
+      layout.sensors.filter(visible).forEach(sensor => {
+        top.appendChild(topFov(sensor));
+        side.appendChild(sideSensor(sensor));
+      });
+    }
+
+    function selectSensor(name) {
+      selectedName = name;
+      const sensor = layout.sensors.find(item => item.name === name);
+      const details = document.getElementById("details");
+      if (!sensor) {
+        details.innerHTML = '<div class="empty">Görselden veya listeden bir sensör seç.</div>';
+        return;
+      }
+      const range = sensor.range_m == null ? "—" : `${sensor.range_m.toFixed(1)} m`;
+      details.innerHTML = `
+        <h2 style="color:${colors[sensor.kind]}">${sensor.name}</h2>
+        <div class="badge ${sensor.active ? "active" : ""}">${sensor.active ? "AKTİF" : "PLAN"} · ${labels[sensor.kind]}</div>
+        <div class="detail-grid">
+          <div class="detail-item"><span>Konum (x, y, z)</span>${sensor.position.x.toFixed(2)}, ${sensor.position.y.toFixed(2)}, ${sensor.position.z.toFixed(2)} m</div>
+          <div class="detail-item"><span>Dönüş (roll, pitch, yaw)</span>${sensor.rotation.roll.toFixed(1)}°, ${sensor.rotation.pitch.toFixed(1)}°, ${sensor.rotation.yaw.toFixed(1)}°</div>
+          <div class="detail-item"><span>Yatay görüş alanı</span>${sensor.horizontal_fov_deg.toFixed(1)}°</div>
+          <div class="detail-item"><span>Gerçek menzil</span>${range}</div>
+          <div class="detail-item" style="grid-column:1/-1"><span>Fiziksel karşılık</span>${sensor.physical_sensor}</div>
+        </div>`;
+      renderList();
+    }
+
+    function renderList() {
+      const list = document.getElementById("sensorList");
+      list.replaceChildren();
+      const sensors = layout.sensors.filter(visible);
+      sensors.forEach(sensor => {
+        const row = document.createElement("div");
+        row.className = `sensor-row ${sensor.active ? "" : "planned"} ${sensor.name === selectedName ? "selected" : ""}`;
+        row.innerHTML = `<span class="dot" style="background:${colors[sensor.kind]}"></span><span>${sensor.name}<br><small>${labels[sensor.kind]}</small></span><small>${sensor.active ? "aktif" : "plan"}</small>`;
+        row.addEventListener("click", () => selectSensor(sensor.name));
+        list.appendChild(row);
+      });
+    }
+
+    function renderToolbar() {
+      const toolbar = document.getElementById("toolbar");
+      Object.keys(colors).forEach(kind => {
+        const label = document.createElement("label");
+        label.className = "toggle";
+        label.innerHTML = `<input type="checkbox" checked><span class="dot" style="background:${colors[kind]}"></span>${labels[kind]}`;
+        label.querySelector("input").addEventListener("change", event => {
+          event.target.checked ? enabledKinds.add(kind) : enabledKinds.delete(kind);
+          renderAll();
+        });
+        toolbar.appendChild(label);
+      });
+      const planned = document.createElement("label");
+      planned.className = "toggle";
+      planned.innerHTML = '<input type="checkbox" checked> Planlanan sensörleri göster';
+      planned.querySelector("input").addEventListener("change", event => {
+        showPlanned = event.target.checked;
+        renderAll();
+      });
+      toolbar.appendChild(planned);
+    }
+
+    function renderAll() {
+      renderViews();
+      renderList();
+      if (selectedName && !visible(layout.sensors.find(item => item.name === selectedName))) {
+        selectedName = null;
+        selectSensor(null);
+      }
+    }
+
+    const activeCount = layout.sensors.filter(sensor => sensor.active).length;
+    document.getElementById("vehicleName").textContent = layout.vehicle_type_id;
+    document.getElementById("summary").innerHTML = `
+      <span class="stat">${layout.sensors.length} toplam sensör</span>
+      <span class="stat">${activeCount} aktif</span>
+      <span class="stat">Araç: ${layout.vehicle.length_m.toFixed(2)} × ${layout.vehicle.width_m.toFixed(2)} × ${layout.vehicle.height_m.toFixed(2)} m</span>`;
+    renderToolbar();
+    selectSensor(null);
+    renderAll();
+  </script>
+</body>
+</html>

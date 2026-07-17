@@ -196,7 +196,6 @@
       camera: "#43e66f",
       radar: "#ff5349",
       lidar: "#3d94ff",
-      ultrasonic: "#ffd23f",
       gnss: "#db64ff",
       imu: "#35e4e4"
     };
@@ -204,7 +203,6 @@
       camera: "Kamera",
       radar: "Radar",
       lidar: "LiDAR",
-      ultrasonic: "Ultrasonik",
       gnss: "GNSS",
       imu: "IMU"
     };
@@ -236,7 +234,6 @@
     function visualRange(sensor) {
       if (sensor.kind === "camera") return 3.0;
       if (sensor.kind === "radar") return 3.5;
-      if (sensor.kind === "ultrasonic") return 1.45;
       if (sensor.kind === "lidar") return 2.35;
       return 0.8;
     }
@@ -322,7 +319,7 @@
       );
       const color = colors[sensor.kind];
 
-      if (["camera", "radar", "ultrasonic"].includes(sensor.kind)) {
+      if (["camera", "radar"].includes(sensor.kind)) {
         group.appendChild(el("path", {
           d: `M ${sx} ${sy} L ${left[0]} ${left[1]} L ${right[0]} ${right[1]} Z`,
           fill: color, "fill-opacity": sensor.active ? .16 : .055,

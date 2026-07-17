@@ -1,4 +1,8 @@
-"""Intelligent Driver Model (IDM) tabanli gaz ve fren kontrolu."""
+"""IDM tabanlı araç takip, gaz ve fren kontrolünü yapar.
+
+Girdi olarak ego hızı, hedef hız ve seçilen ön araç gelir. Çıktı her zaman
+birbirini dışlayan gaz veya fren değeridir; ikisi aynı anda verilmez.
+"""
 
 import math
 
@@ -8,19 +12,19 @@ def clamp(value, minimum, maximum):
 
 
 class LongitudinalController:
-    """Sabit hiz, arac takip ve durdugu yerde fren tutma kontrolunu yapar."""
+    """Sabit hız, araç takibi ve durduğu yerde fren tutmayı yönetir."""
 
     def __init__(self, dt=0.05):
         self.dt = float(dt)
 
-        # IDM ayarlari. Her sayinin fiziksel bir anlami vardir.
+        # IDM ayarları. Her sayının fiziksel bir anlamı vardır.
         self.standstill_gap_m = 2.0
         self.time_headway_s = 1.2
         self.maximum_acceleration_mps2 = 1.5
         self.comfortable_deceleration_mps2 = 2.0
         self.acceleration_exponent = 4.0
 
-        # CARLA pedal sinirlari ve konfor sinirlari.
+        # CARLA pedal sınırları ve konfor sınırları.
         self.maximum_deceleration_mps2 = 5.0
         self.acceleration_jerk_mps3 = 3.0
         self.braking_jerk_mps3 = 6.0
@@ -36,8 +40,8 @@ class LongitudinalController:
         self.maximum_brake = 0.90
         self.previous_acceleration_mps2 = 0.0
 
-        # Dur-kalk icindeki tek kesikli durum mekanik fren tutmadir.
-        # Normal yaklasma ve yeniden kalkis ivmesini her zaman IDM hesaplar.
+        # Dur-kalk içindeki tek kesikli durum mekanik fren tutmadır.
+        # Normal yaklaşma ve yeniden kalkış ivmesini her zaman IDM hesaplar.
         self.hold_speed_mps = 0.15
         self.hold_distance_m = 2.30
         self.hold_lead_speed_mps = 0.20
@@ -49,19 +53,20 @@ class LongitudinalController:
         self.release_evidence_ticks = 0
         self.restart_ticks_remaining = 0
 
-        # Normal adaptif hiz kontrolu icin iki ardisik olcum yeterlidir.
-        # AEB bagimsizdir ve ilk kritik radar donusune tepki verebilir.
+        # Normal adaptif hız kontrolü için iki ardışık ölçüm yeterlidir.
+        # Acil fren bağımsızdır ve ilk kritik radar dönüşüne tepki verebilir.
         self.minimum_lead_ticks = 2
         self.lead_ticks = 0
         self.last_track_id = None
         self.last_raw_distance_m = None
 
-        # Yakinlasan olcum hemen, uzaklasan kaynak degisimi daha yavas kabul
-        # edilir. Bu sayede kamera-radar gecisleri gaz-fren sicrama uretmez.
+        # Yakınlaşan ölçüm hemen, uzaklaşan kaynak değişimi daha yavaş kabul
+        # edilir. Bu sayede kamera-radar geçişleri gaz-fren sıçraması üretmez.
         self.filtered_distance_m = None
         self.filtered_lead_speed_mps = None
 
     def run_step(self, state, lead_vehicle, target_speed):
+        """Mevcut hız ve ön araçtan bu çevrimin gaz-fren değerini hesaplar."""
         ego_speed = max(0.0, float(state["speed_mps"]))
         target_speed = max(0.1, float(target_speed))
 
@@ -155,7 +160,7 @@ class LongitudinalController:
         return throttle, brake, info
 
     def notify_emergency_stop(self):
-        """AEB pedallari yonetirken eski ivme hafizasini temizler."""
+        """Acil fren pedalları yönetirken eski ivme hafızasını temizler."""
         self.previous_acceleration_mps2 = 0.0
         self.restart_ticks_remaining = 0
 
@@ -166,8 +171,9 @@ class LongitudinalController:
         )
 
     def calculate_idm_gap(self, ego_speed, relative_speed):
-        # Projedeki bagil hiz, on_arac_hizi - ego_hizi seklindedir.
-        # IDM ise pozitif yaklasma hizi kullanir; bu nedenle isaret terslenir.
+        """Hıza ve yaklaşma hızına göre korunması gereken mesafeyi hesaplar."""
+        # Projedeki bağıl hız, ön araç hızı eksi ego hızı biçimindedir.
+        # IDM pozitif yaklaşma hızı kullanır; bu nedenle işaret terslenir.
         closing_speed = -relative_speed
         braking_scale = 2.0 * math.sqrt(
             self.maximum_acceleration_mps2 * self.comfortable_deceleration_mps2
@@ -182,6 +188,7 @@ class LongitudinalController:
         return distance > max(30.0, 3.0 * desired_gap) and closing_speed < 1.0
 
     def update_hold(self, ego_speed, lead, measured_lead_speed):
+        """Tam duruş frenine girme veya bu frenden çıkma kararını günceller."""
         if lead is None:
             self.release_evidence_ticks = 0
             return
@@ -213,6 +220,7 @@ class LongitudinalController:
             self.restart_ticks_remaining = 0
 
     def confirm_lead(self, lead):
+        """Normal takibe vermeden önce ön aracı iki ölçümle doğrular."""
         if lead is None:
             self.lead_ticks = 0
             self.last_track_id = None
@@ -230,6 +238,7 @@ class LongitudinalController:
         return self.lead_ticks >= self.minimum_lead_ticks
 
     def filter_lead(self, lead, ego_speed):
+        """Kaynak geçişlerinde mesafe ve hız sıçramalarını yumuşatır."""
         if lead is None:
             self.filtered_distance_m = None
             self.filtered_lead_speed_mps = None
@@ -266,6 +275,7 @@ class LongitudinalController:
         return filtered
 
     def limit_jerk(self, desired_acceleration):
+        """İvmenin bir çevrimde ne kadar değişebileceğini sınırlar."""
         jerk_limit = (
             self.acceleration_jerk_mps3
             if desired_acceleration >= self.previous_acceleration_mps2
@@ -281,6 +291,7 @@ class LongitudinalController:
         return self.previous_acceleration_mps2
 
     def convert_acceleration_to_pedals(self, acceleration, ego_speed):
+        """İstenen ivmeyi aynı anda çakışmayan gaz ve frene çevirir."""
         throttle = (
             self.rolling_resistance_throttle
             + acceleration / self.throttle_acceleration_mps2
@@ -303,6 +314,7 @@ class LongitudinalController:
         return 0.0, 0.0
 
     def validate_lead(self, lead_vehicle):
+        """Geçersiz veya fiziksel sınır dışı ön araç ölçümünü reddeder."""
         if lead_vehicle is None:
             return None
 
@@ -319,8 +331,7 @@ class LongitudinalController:
         if not -30.0 <= relative_speed <= 30.0:
             return None
 
-        return {
-            **lead_vehicle,
-            "distance_m": distance,
-            "relative_speed_mps": relative_speed,
-        }
+        valid_lead = dict(lead_vehicle)
+        valid_lead["distance_m"] = distance
+        valid_lead["relative_speed_mps"] = relative_speed
+        return valid_lead

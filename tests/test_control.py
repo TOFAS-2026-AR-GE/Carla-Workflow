@@ -250,7 +250,7 @@ class LongitudinalControllerTests(unittest.TestCase):
         self.assertGreater(brake, 0.0)
 
     def test_reported_low_speed_gap_produces_throttle(self):
-        """Regression for frames 5840-6000 from the reported CARLA log."""
+        """Bildirilen CARLA kaydındaki 5840-6000 karelerini tekrarlar."""
         controller = LongitudinalController(dt=0.05)
         samples = [
             (1.0 / 3.6, 3.7, -0.26),

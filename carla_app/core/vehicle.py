@@ -1,3 +1,5 @@
+"""Kontrol edilecek ego aracını boş bir başlangıç noktasında oluşturur."""
+
 import random
 
 

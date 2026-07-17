@@ -1,3 +1,5 @@
+"""CARLA aracından kontrolcülerin kullanacağı sade durum sözlüğünü üretir."""
+
 import math
 
 import carla
@@ -8,10 +10,7 @@ def build_reference_path(
     point_count=80,
     spacing=1.0,
 ):
-    """
-    RouteManager kullanilmayan yerler icin
-    geriye uyumlu basit yol uretici.
-    """
+    """Kalıcı rota yöneticisi yoksa kısa bir referans yol üretir."""
 
     reference_path = []
     current_waypoint = start_waypoint
@@ -84,8 +83,8 @@ def read_vehicle_state(
         "road_id": waypoint.road_id,
         "lane_id": waypoint.lane_id,
         "lane_width": waypoint.lane_width,
-        # Aracin yarim genisligi, serit merkezinden ne kadar
-        # uzaklasabilecegimizi hesaplarken kullanilir.
+        # Aracın yarı genişliği, şerit merkezinden güvenli uzaklığı
+        # hesaplarken kullanılır.
         "vehicle_half_width_m": float(vehicle.bounding_box.extent.y),
         "is_junction": waypoint.is_junction,
     }

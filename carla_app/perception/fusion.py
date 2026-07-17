@@ -1,4 +1,4 @@
-"""On kamera kutularini on radar noktalariyla eslestirir."""
+"""Ön kamera kutularını ön radar noktalarıyla eşleştirir."""
 
 import math
 
@@ -38,7 +38,7 @@ def median(values):
 
 
 def cluster_by_depth(points, minimum_gap_m=2.5):
-    """Ayni aciya dusen radar noktalarini mesafe katmanlarina ayirir."""
+    """Aynı açıya düşen radar noktalarını mesafe katmanlarına ayırır."""
     if not points:
         return []
 
@@ -57,7 +57,7 @@ def cluster_by_depth(points, minimum_gap_m=2.5):
 
 
 def summarize_nearest_cluster(points):
-    """En yakin kararli radar kumesinin mesafe, aci ve hizini ozetler."""
+    """En yakın kararlı radar kümesinin mesafe, açı ve hızını özetler."""
     clusters = cluster_by_depth(points)
     if not clusters:
         return None
@@ -92,11 +92,11 @@ def fuse_detections_with_radar(
     fixed_delta_seconds,
     angular_padding_deg=0.75,
 ):
-    """Her kamera tespitine radar mesafesi ve bagil hizi ekler.
+    """Her kamera tespitine radar mesafesi ve bağıl hızı ekler.
 
-    Radar noktasi zaten ``radar_frame_id`` karesine aittir; mesafesi ikinci
-    kez ileri tasinmaz. Kare yasi yalnizca eski kamera kutusunun aci eslestirme
-    payini bir miktar genisletmek icin kullanilir.
+    Radar noktası zaten ``radar_frame_id`` karesine aittir; mesafesi ikinci
+    kez ileri taşınmaz. Kare yaşı yalnızca eski kamera kutusunun açı eşleştirme
+    payını bir miktar genişletmek için kullanılır.
     """
     frame_delta = 0
     if detection_frame_id is not None and radar_frame_id is not None:
@@ -144,8 +144,8 @@ def fuse_detections_with_radar(
                     "bearing_deg": match["bearing_deg"],
                     "has_range": True,
                     "range_m": match["range_m"],
-                    # CARLA'nin bagil hiz isaretini koru. Canli akista negatif
-                    # deger yaklasmayi, pozitif deger uzaklasmayi gosterir.
+                    # CARLA'nın bağıl hız işaretini koru. Canlı akışta negatif
+                    # değer yaklaşmayı, pozitif değer uzaklaşmayı gösterir.
                     "relative_velocity_mps": match["radar_velocity_mps"],
                     "radar_points_matched": match["matched_points"],
                 }

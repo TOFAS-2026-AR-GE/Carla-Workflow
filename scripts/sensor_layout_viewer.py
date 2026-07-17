@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CARLA sensor yerlesimini sade bir tarayici ekraninda gosterir."""
+"""CARLA sensör yerleşimini sade bir tarayıcı ekranında gösterir."""
 
 import argparse
 import sys
@@ -11,39 +11,41 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from carla_app.sensors.web_viewer import (  # noqa: E402
+from carla_app.visualization.sensor_layout import (  # noqa: E402
     build_web_view_data,
     render_web_view,
 )
 
 
 def parse_arguments():
+    """Komut satırından çıktı yolu ve bekleme süresini okur."""
     parser = argparse.ArgumentParser(
         description=(
-            "Ego aracini ve sensor konumlarini tarayicida ustten/yandan goster."
+            "Ego aracını ve sensörleri tarayıcıda üstten/yandan göster."
         )
     )
     parser.add_argument(
         "--output",
         type=Path,
         default=Path("/tmp/carla_sensor_layout.html"),
-        help="Olusturulacak HTML dosyasi",
+        help="Oluşturulacak HTML dosyası",
     )
     parser.add_argument(
         "--wait-seconds",
         type=float,
         default=30.0,
-        help="Ego aracini bekleme suresi",
+        help="Ego aracını bekleme süresi",
     )
     parser.add_argument(
         "--no-browser",
         action="store_true",
-        help="HTML dosyasini olustur ama tarayiciyi otomatik acma",
+        help="HTML dosyasını oluştur ama tarayıcıyı otomatik açma",
     )
     return parser.parse_args()
 
 
 def find_ego_vehicle(world, role_name):
+    """Verilen rol adına sahip ego aracını CARLA dünyasında bulur."""
     for vehicle in world.get_actors().filter("vehicle.*"):
         if vehicle.attributes.get("role_name") == role_name:
             return vehicle
@@ -51,6 +53,7 @@ def find_ego_vehicle(world, role_name):
 
 
 def wait_for_ego_vehicle(client, role_name, wait_seconds):
+    """Normal uygulamanın ego aracını oluşturmasını belirli süre bekler."""
     deadline = time.monotonic() + max(0.0, wait_seconds)
 
     while True:
@@ -61,15 +64,16 @@ def wait_for_ego_vehicle(client, role_name, wait_seconds):
 
         if time.monotonic() >= deadline:
             raise RuntimeError(
-                f"role_name={role_name!r} ego araci bulunamadi. "
-                "Once baska terminalde 'bash run.sh' calistir."
+                f"role_name={role_name!r} ego aracı bulunamadı. "
+                "Önce başka terminalde 'bash run.sh' çalıştır."
             )
 
-        print(f"[BEKLE] role_name={role_name} ego araci bekleniyor...")
+        print(f"[BEKLE] role_name={role_name} ego aracı bekleniyor...")
         time.sleep(0.5)
 
 
 def active_sensor_names(world, vehicle):
+    """Ego aracına gerçekten bağlı olan sensör adlarını döndürür."""
     names = set()
     for actor in world.get_actors().filter("sensor.*"):
         parent = getattr(actor, "parent", None)
@@ -84,6 +88,7 @@ def active_sensor_names(world, vehicle):
 
 
 def main():
+    """CARLA'dan yerleşimi okuyup HTML dosyasını ve tarayıcıyı açar."""
     args = parse_arguments()
 
     try:
@@ -93,9 +98,9 @@ def main():
     except ModuleNotFoundError as error:
         missing_package = error.name or "bilinmeyen paket"
         raise RuntimeError(
-            f"Python paketi {missing_package!r} bu ortamda bulunamadi. "
-            "Normal uygulamayi calistirdigin Python ortamini kullan veya "
-            "'pip install -r requirements.txt' calistir."
+            f"Python paketi {missing_package!r} bu ortamda bulunamadı. "
+            "Normal uygulamayı çalıştırdığın Python ortamını kullan veya "
+            "'pip install -r requirements.txt' çalıştır."
         ) from error
 
     settings = Settings.load()
@@ -126,16 +131,17 @@ def main():
 
     print(
         f"[HAZIR] {active_count} aktif / "
-        f"{len(layout.all_specs)} toplam sensor"
+        f"{len(layout.all_specs)} toplam sensör"
     )
     print(f"[DOSYA] {output}")
 
     if not args.no_browser:
         opened = webbrowser.open(output.as_uri())
         if opened:
-            print("[ACILDI] Sensor ekrani tarayicida acildi.")
+            print("[AÇILDI] Sensör ekranı tarayıcıda açıldı.")
         else:
-            print(f"[BILGI] Tarayici acilmadiysa calistir: xdg-open {output}")
+            print("[BİLGİ] Tarayıcı açılmadıysa şu komutu çalıştır:")
+            print(f"xdg-open {output}")
 
 
 if __name__ == "__main__":

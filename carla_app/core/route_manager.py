@@ -1,3 +1,5 @@
+"""Araç için değişmeden ilerleyen bir referans rota üretir."""
+
 import math
 
 import carla
@@ -8,12 +10,10 @@ def normalize_angle(angle):
 
 
 class PersistentRouteManager:
-    """
-    Araci her tick en yakin seride tekrar yapistirmak yerine,
-    tek ve devamli bir referans rota tutar.
+    """Aracı her çevrim en yakın şeride taşımadan sürekli rota tutar.
 
-    Arac kisa sureligine serit cizgisini gecse bile rota degismez.
-    Yalnizca rota gercekten uzun sure kaybedilirse yeniden bulunur.
+    Araç kısa süreliğine şerit çizgisini geçse bile rota değişmez. Yalnızca
+    rota uzun süre gerçekten kaybedilirse yeniden bulunur.
     """
 
     def __init__(
@@ -53,8 +53,8 @@ class PersistentRouteManager:
         else:
             self.lost_ticks = 0
 
-        # Arac komsu seride kisa sureligine gecince rota degistirme.
-        # Yalnizca eski rota uzun sure gercekten kaybedilirse tekrar bul.
+        # Araç komşu şeride kısa süreliğine geçince rota değiştirme.
+        # Yalnızca eski rota uzun süre gerçekten kaybedilirse tekrar bul.
         if self.lost_ticks >= self.recovery_ticks:
             self.initialize(vehicle_location)
             self.lost_ticks = 0
@@ -84,8 +84,8 @@ class PersistentRouteManager:
         if len(self.waypoints) < 2:
             return
 
-        # Araca en yakin bolgeyi bul.
-        # Projeksyonun kararlı kalmasi icin arkada iki waypoint birak.
+        # Araca en yakın bölgeyi bul. İzdüşümün kararlı kalması için
+        # aracın arkasında iki yol noktası bırak.
         search_count = min(25, len(self.waypoints))
 
         nearest_index = min(
@@ -99,7 +99,7 @@ class PersistentRouteManager:
         if nearest_index > 2:
             del self.waypoints[: nearest_index - 2]
 
-        # Aracin tamamen gerisinde kalmis waypoint'leri temizle.
+        # Aracın tamamen gerisinde kalmış yol noktalarını temizle.
         while len(self.waypoints) >= 3:
             first = self.waypoints[0].transform.location
             second = self.waypoints[1].transform.location
@@ -170,8 +170,8 @@ class PersistentRouteManager:
 
             lane_penalty = 0.0
 
-            # Kavsakta hedef rota henuz bulunmadigi icin
-            # geometrik olarak en yumusak devam secilir.
+            # Kavşakta hedef rota bilinmediği için geometrik olarak en
+            # yumuşak devam seçilir.
             if not last.is_junction:
                 if candidate.road_id != last.road_id:
                     lane_penalty += 0.20

@@ -1,4 +1,8 @@
-"""Direksiyon, hiz, arac takip ve acil freni bir araya getirir."""
+"""Direksiyon, hedef hız, araç takibi ve acil freni tek komutta birleştirir.
+
+Girdi olarak araç durumunu ve takip edilen ön aracı alır. Çıktı olarak
+CARLA ``VehicleControl`` nesnesi ile anlaşılır tanı bilgilerini verir.
+"""
 
 import carla
 
@@ -11,7 +15,7 @@ from carla_app.controller.vehicle.stanley_controller import StanleyController
 
 
 class VehicleController:
-    """Rota takibi, hiz plani, IDM ve bagimsiz AEB'yi birlikte calistirir."""
+    """Dört bağımsız kontrol parçasını doğru sırayla çalıştırır."""
 
     def __init__(self, dt=0.05, cruise_speed_kmh=60.0):
         self.lateral = StanleyController(dt)
@@ -20,6 +24,7 @@ class VehicleController:
         self.safety = EmergencyBrakeSupervisor()
 
     def run_step(self, state, lead_vehicle, emergency_obstacle=None):
+        """Tek çevrim için direksiyon, gaz ve fren komutunu üretir."""
         steer = self.lateral.run_step(state)
         lateral_info = self.lateral.last_info
         target_speed, speed_plan = self.speed_planner.run_step(
@@ -27,8 +32,8 @@ class VehicleController:
             lateral_info=lateral_info,
         )
 
-        # Tek bir ham radar noktasi sadece AEB'ye gider. Normal IDM takibi,
-        # kamera-radar takibini veya dogrulanmis radar kumesini kullanir.
+        # Tek bir ham radar noktası yalnızca acil frene gider. Normal takip,
+        # kamera-radar takibini veya doğrulanmış radar kümesini kullanır.
         control_lead = lead_vehicle
         throttle, brake, longitudinal_info = self.longitudinal.run_step(
             state,

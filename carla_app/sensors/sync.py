@@ -1,3 +1,5 @@
+"""Veri kaydı için bütün sensörlerin aynı karede buluşmasını bekler."""
+
 import threading
 import time
 
@@ -11,7 +13,10 @@ class SensorSync:
 
     def push(self, sensor_name, frame_id, data):
         with self.condition:
-            self.frames.setdefault(int(frame_id), {})[sensor_name] = data
+            frame_id = int(frame_id)
+            if frame_id not in self.frames:
+                self.frames[frame_id] = {}
+            self.frames[frame_id][sensor_name] = data
             while len(self.frames) > self.max_frames:
                 del self.frames[min(self.frames)]
             self.condition.notify_all()
@@ -23,7 +28,13 @@ class SensorSync:
         with self.condition:
             while True:
                 packet = self.frames.get(frame_id, {})
-                if self.sensor_names.issubset(packet):
+                packet_complete = True
+                for sensor_name in self.sensor_names:
+                    if sensor_name not in packet:
+                        packet_complete = False
+                        break
+
+                if packet_complete:
                     result = self.frames.pop(frame_id)
                     self._remove_older(frame_id)
                     return result

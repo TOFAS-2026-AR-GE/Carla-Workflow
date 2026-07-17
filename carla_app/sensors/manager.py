@@ -1,4 +1,4 @@
-"""Sensor lifecycle and access for the application."""
+"""Uygulamanın kullandığı sensörleri açar, okur ve güvenli biçimde kapatır."""
 
 from carla_app.sensors.factory import spawn_layout
 from carla_app.sensors.layout import build_sensor_layout
@@ -9,7 +9,7 @@ from carla_app.sensors.writer import DatasetWriter
 
 
 class SensorManager:
-    """Run a minimal control sensor set unless dataset recording is enabled."""
+    """Normal kullanımda yalnızca ön kamera ile ön radarı çalıştırır."""
 
     def __init__(self, settings):
         self.settings = settings
@@ -25,13 +25,14 @@ class SensorManager:
         if self.recording_enabled:
             self.writer = DatasetWriter(settings.output_folder)
 
-    def start(self, world, vehicle):
+    def start(self, world, vehicle, fixed_delta_seconds):
+        """Yerleşimi hesaplar ve seçilen çalışma modunun sensörlerini açar."""
         self.layout = build_sensor_layout(
             vehicle=vehicle,
             camera_width=self.settings.camera_width,
             camera_height=self.settings.camera_height,
             front_wide_fov=self.settings.camera_fov,
-            fixed_delta_seconds=self.settings.fixed_delta_seconds,
+            fixed_delta_seconds=fixed_delta_seconds,
         )
 
         if self.recording_enabled:
@@ -53,10 +54,10 @@ class SensorManager:
         if self.recording_enabled:
             manifest = self.layout.to_manifest(vehicle.type_id)
             self.writer.write_manifest(manifest)
-            print(f"[OK] Dataset sensorleri aktif: {len(active_specs)} sensor")
+            print(f"[OK] Veri kaydı sensörleri aktif: {len(active_specs)} sensör")
         else:
             names = ", ".join(spec.name for spec in active_specs)
-            print(f"[OK] Yalnizca kontrol sensorleri aktif: {names}")
+            print(f"[OK] Yalnızca kontrol sensörleri aktif: {names}")
 
     def get_rgb(self, frame_id):
         return self.camera_stream.wait_latest(frame_id, timeout=0.5)
@@ -65,24 +66,26 @@ class SensorManager:
         return self.radar_stream.get_latest(sensor_name)
 
     def save_if_needed(self, frame_id, vehicle_data):
+        """Kayıt açıksa belirlenen aralıkta tam sensör paketini kaydeder."""
         if not self.recording_enabled:
             return
         if frame_id % self.settings.save_every_n_frames != 0:
             return
         if self.sync is None or self.layout is None or self.writer is None:
             raise RuntimeError(
-                "SensorManager.start() cagrilmadan veri kaydi yapilamaz."
+                "SensorManager.start() çağrılmadan veri kaydı yapılamaz."
             )
 
         packet = self.sync.wait(frame_id, timeout=1.5)
         if packet is None:
-            print(f"[WARN] Sensor paketi eksik; frame atlandi: {frame_id}")
+            print(f"[WARN] Sensör paketi eksik; kare atlandı: {frame_id}")
             return
 
         sensor_data = process_packet(packet, self.layout)
         self.writer.save(frame_id, sensor_data, vehicle_data)
 
     def stop(self):
+        """Oluşturulan bütün CARLA sensörlerini ve geçici veriyi temizler."""
         for actor in self.actors:
             try:
                 actor.stop()
@@ -98,4 +101,4 @@ class SensorManager:
             self.sync.clear()
         self.camera_stream.clear()
         self.radar_stream.clear()
-        print("[OK] Sensorler kapatildi.")
+        print("[OK] Sensörler kapatıldı.")

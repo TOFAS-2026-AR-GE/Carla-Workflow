@@ -1,3 +1,5 @@
+"""Tam sensör paketlerini düzenli bir çalışma klasörüne kaydeder."""
+
 import json
 from datetime import datetime
 from pathlib import Path
@@ -133,7 +135,6 @@ class DatasetWriter:
             "gnss": sensor_data["gnss"],
             "imu": sensor_data["imu"],
             "radars": sensor_data["radars"],
-            "ultrasonics": (sensor_data["ultrasonics"]),
         }
 
         metadata_path = self.meta_folder / f"{name}.json"

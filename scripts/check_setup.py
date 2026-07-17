@@ -1,3 +1,5 @@
+"""Gerekli Python paketleri ile model dosyalarının varlığını kontrol eder."""
+
 from importlib.util import find_spec
 
 from carla_app.config import Settings

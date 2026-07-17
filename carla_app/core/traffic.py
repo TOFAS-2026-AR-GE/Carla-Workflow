@@ -1,7 +1,10 @@
+"""Senaryoda istenen trafik araçlarını oluşturur ve kapanışta temizler."""
+
 import random
 
 
 class Traffic:
+    """CARLA Traffic Manager ile sürülen diğer araçları yönetir."""
     def __init__(self, client, world, scenario):
         self.client = client
         self.world = world

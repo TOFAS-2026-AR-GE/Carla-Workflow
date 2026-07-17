@@ -3,7 +3,10 @@ import types
 import unittest
 from pathlib import Path
 
-from carla_app.sensors.web_viewer import build_web_view_data, render_web_view
+from carla_app.visualization.sensor_layout import (
+    build_web_view_data,
+    render_web_view,
+)
 
 
 def sensor(name, kind, attributes):

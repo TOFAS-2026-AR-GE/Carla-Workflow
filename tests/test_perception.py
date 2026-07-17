@@ -6,8 +6,8 @@ from io import StringIO
 
 import numpy as np
 
-# Unit tests do not need the heavy inference runtime. The production setup
-# check verifies that the real package is installed.
+# Birim testleri ağır model çalışma ortamına ihtiyaç duymaz. Gerçek paketin
+# kurulu olduğu üretim ortamında scripts/check_setup.py ile doğrulanır.
 if "ultralytics" not in sys.modules:
     ultralytics = types.ModuleType("ultralytics")
     ultralytics.YOLO = object

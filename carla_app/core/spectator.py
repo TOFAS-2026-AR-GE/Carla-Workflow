@@ -1,3 +1,5 @@
+"""CARLA izleyici kamerasını ego aracının arkasında tutar."""
+
 import carla
 
 FOLLOW_DISTANCE = 6.0

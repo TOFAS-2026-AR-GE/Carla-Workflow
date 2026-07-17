@@ -1,11 +1,11 @@
-"""Single-slot background worker for perception inference."""
+"""Algılamayı ana araç döngüsünü bekletmeden arka planda çalıştırır."""
 
 import queue
 import threading
 
 
 class PerceptionWorker:
-    """Always process the newest submitted frame and discard queued stale work."""
+    """Kuyrukta yalnızca en yeni kamera karesini tutar."""
 
     def __init__(self, perception_system):
         self.system = perception_system
@@ -30,7 +30,7 @@ class PerceptionWorker:
         except queue.Full:
             pass
 
-        # The queued frame is already stale. Replace it with the newest frame.
+        # Kuyruktaki görüntü artık eskidir; yerine en yeni görüntüyü koy.
         try:
             self.queue.get_nowait()
         except queue.Empty:
@@ -70,8 +70,9 @@ class PerceptionWorker:
             try:
                 result = self.system.detect(frame_id, image)
             except Exception as error:
-                # PerceptionSystem isolates detector failures. Reaching this
-                # block means the orchestration itself failed unexpectedly.
+                # Model hataları PerceptionSystem içinde ele alınır. Buraya
+                # gelinmesi algılama akışının beklenmedik biçimde bozulduğunu
+                # gösterir.
                 message = f"{type(error).__name__}: {error}"
                 if message != self.last_error:
                     print(f"[ERROR] Perception worker: {message}")

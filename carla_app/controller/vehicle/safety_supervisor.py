@@ -1,10 +1,14 @@
-"""Carpisma suresine gore bagimsiz acil fren denetimi."""
+"""Çarpışma süresine ve gerekli yavaşlamaya göre acil freni denetler.
+
+Bu sınıf normal gaz-fren hesabından bağımsızdır. Yalnızca doğrulanmış kritik
+tehlikede tam fren ister.
+"""
 
 import math
 
 
 class EmergencyBrakeSupervisor:
-    """Yalnizca carpisma riski dogrulanirsa tam fren ister."""
+    """Takip hedefi ile ham radar tehlikesinden daha riskli olanı inceler."""
 
     def __init__(self):
         self.stopping_clearance_m = 2.0
@@ -17,26 +21,36 @@ class EmergencyBrakeSupervisor:
         self.hazard_count = 0
         self.last_hazard = None
 
-    def evaluate_candidates(self, *obstacles):
-        candidates = []
-        for obstacle in obstacles:
-            metrics = self.calculate_metrics(obstacle)
-            if metrics is not None:
-                candidates.append((obstacle, metrics))
+    def evaluate_candidates(self, lead_obstacle, radar_obstacle=None):
+        """İki güvenlik adayını karşılaştırıp acil fren kararını verir."""
+        selected_obstacle = None
+        selected_metrics = None
+        selected_priority = None
 
-        if not candidates:
+        for obstacle in (lead_obstacle, radar_obstacle):
+            metrics = self.calculate_metrics(obstacle)
+            if metrics is None:
+                continue
+
+            priority = self.calculate_risk_priority(metrics)
+            if selected_priority is None or priority < selected_priority:
+                selected_obstacle = obstacle
+                selected_metrics = metrics
+                selected_priority = priority
+
+        if selected_obstacle is None:
             self.hazard_count = 0
             self.last_hazard = None
             return False, self.empty_info()
 
-        obstacle, metrics = min(
-            candidates,
-            key=lambda item: self.calculate_risk_priority(item[1]),
+        emergency, info = self.evaluate_metrics(
+            selected_metrics,
+            selected_obstacle,
         )
-        emergency, info = self.evaluate_metrics(metrics, obstacle)
         return emergency, info
 
     def evaluate(self, obstacle):
+        """Tek bir tehlike adayını değerlendirir."""
         metrics = self.calculate_metrics(obstacle)
         if metrics is None:
             self.hazard_count = 0
@@ -45,12 +59,13 @@ class EmergencyBrakeSupervisor:
         return self.evaluate_metrics(metrics, obstacle)
 
     def evaluate_metrics(self, metrics, obstacle=None):
+        """Mesafe ve TTC değerini doğrulayıp acil fren kararına çevirir."""
         obstacle = obstacle or {}
         source = obstacle.get("source", "unknown")
 
-        # Tek bir ham radar noktasi, cok kisa TTC hesaplandigi icin araci
-        # aniden durdurmasin. Fiziksel olarak cok yakin degilse ikinci, yeni
-        # radar karesinde de ayni engeli gormeyi bekleriz.
+        # Tek bir ham radar noktası, çok kısa TTC hesaplandığı için aracı
+        # aniden durdurmasın. Fiziksel olarak çok yakın değilse ikinci, yeni
+        # radar karesinde de aynı engeli görmeyi bekleriz.
         is_raw_radar = source == "radar_emergency"
         immediate_hazard = metrics["distance_m"] <= self.immediate_distance_m
         if not is_raw_radar:
@@ -145,6 +160,7 @@ class EmergencyBrakeSupervisor:
         return None
 
     def calculate_metrics(self, obstacle):
+        """Engel ölçümünden TTC ve gerekli yavaşlama değerlerini hesaplar."""
         if not isinstance(obstacle, dict):
             return None
         try:
@@ -169,6 +185,7 @@ class EmergencyBrakeSupervisor:
         }
 
     def calculate_risk_priority(self, metrics):
+        """En kritik adayın önce seçilmesi için sıralama değeri üretir."""
         immediate = (
             metrics["distance_m"] <= self.immediate_distance_m
             or metrics["ttc_s"] <= self.immediate_ttc_s
@@ -179,7 +196,12 @@ class EmergencyBrakeSupervisor:
             or metrics["required_deceleration_mps2"]
             >= self.required_deceleration_threshold_mps2
         )
-        risk_level = 0 if immediate else 1 if ordinary else 2
+        if immediate:
+            risk_level = 0
+        elif ordinary:
+            risk_level = 1
+        else:
+            risk_level = 2
         return risk_level, metrics["ttc_s"], metrics["distance_m"]
 
     def empty_info(self):

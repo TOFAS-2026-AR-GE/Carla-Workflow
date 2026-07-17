@@ -1,3 +1,5 @@
+"""Trafik levhasını önce bulur, sonra bulunan alanın sınıfını belirler."""
+
 import json
 
 import numpy as np

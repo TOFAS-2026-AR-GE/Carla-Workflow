@@ -1,4 +1,4 @@
-"""Perception pipeline orchestration."""
+"""Araç ve isteğe bağlı trafik levhası algılamasını birlikte yönetir."""
 
 import time
 
@@ -7,7 +7,7 @@ from carla_app.perception.vehicle_detector import VehicleDetector
 
 
 class PerceptionSystem:
-    """Run detectors independently so one optional model cannot hide another."""
+    """Bir model hata verdiğinde diğer modelin sonucunu korur."""
 
     def __init__(self, settings):
         self.vehicle_detector = VehicleDetector(

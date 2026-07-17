@@ -1,4 +1,8 @@
-"""On kontrol noktasiyla rotayi izleyen Stanley direksiyon kontrolcusu."""
+"""Ön kontrol noktasıyla rotayı izleyen Stanley direksiyon kontrolcüsü.
+
+Girdi olarak aracın konumu, yönü, hızı ve referans yolu gelir. Çıktı CARLA'nın
+-1 ile +1 arasında beklediği direksiyon değeridir.
+"""
 
 import math
 
@@ -12,7 +16,7 @@ def normalize_angle(angle):
 
 
 class StanleyController:
-    """Referans rotayi Stanley direksiyon kuraliyla takip eder."""
+    """Başlık ve yanal hatayı birleştirerek referans rotayı takip eder."""
 
     def __init__(self, dt=0.05):
         self.dt = float(dt)
@@ -33,6 +37,7 @@ class StanleyController:
         self.last_info = self.empty_info()
 
     def run_step(self, state):
+        """Başlık ve yanal hatadan bu çevrimin direksiyonunu hesaplar."""
         path = state.get("reference_path", [])
         speed = max(0.0, float(state.get("speed_mps", 0.0)))
         if len(path) < 2:
@@ -50,8 +55,8 @@ class StanleyController:
         raw_heading_error = normalize_angle(projection["path_heading_rad"] - yaw)
         self.filter_errors(raw_cross_track_error, raw_heading_error)
 
-        # CARLA koordinatinda pozitif yanal hata, kontrol noktasinin rotanin
-        # saginda oldugunu gosterir. Bu durumda direksiyon sola duzeltilir.
+        # CARLA koordinatında pozitif yanal hata, kontrol noktasının rotanın
+        # sağında olduğunu gösterir. Bu durumda direksiyon sola düzeltilir.
         correction_error = self.calculate_lane_edge_error(
             self.filtered_cross_track_error_m,
             state,
@@ -99,6 +104,7 @@ class StanleyController:
         return steer
 
     def calculate_lane_edge_error(self, cross_track_error, state):
+        """Araç gövdesi şerit kenarına yaklaştıkça düzeltmeyi artırır."""
         lane_width = max(2.5, float(state.get("lane_width", 3.5)))
         vehicle_half_width = max(
             0.70,
@@ -109,8 +115,8 @@ class StanleyController:
             0.5 * lane_width - vehicle_half_width - 0.20,
         )
 
-        # Arac govdesi serit kenarina yaklastikca ayni Stanley hatasini
-        # daha guclu uygula. Isaret korunur; sadece duzeltme buyur.
+        # Araç gövdesi şerit kenarına yaklaştıkça aynı Stanley hatasını
+        # daha güçlü uygula. İşaret korunur; yalnızca düzeltme büyür.
         edge_start = 0.55 * usable_center_offset
         extra_error = max(0.0, abs(cross_track_error) - edge_start)
         if cross_track_error < 0.0:
@@ -118,6 +124,7 @@ class StanleyController:
         return cross_track_error + 1.5 * extra_error
 
     def filter_errors(self, cross_track_error, heading_error):
+        """Harita noktalarındaki küçük hata sıçramalarını yumuşatır."""
         if not self.filter_initialized:
             self.filtered_cross_track_error_m = cross_track_error
             self.filtered_heading_error_rad = heading_error
@@ -140,6 +147,7 @@ class StanleyController:
         )
 
     def limit_steering_change(self, desired_steer, speed_mps):
+        """Direksiyonun hıza göre izin verilen değişim sınırını uygular."""
         steer_rate_per_second = clamp(0.8 - 0.035 * speed_mps, 0.4, 0.8)
         maximum_change = steer_rate_per_second * self.dt
         change = clamp(
@@ -154,6 +162,7 @@ class StanleyController:
         return clamp(0.68 - 0.022 * speed_mps, 0.42, 0.68)
 
     def find_nearest_path_projection(self, point_x, point_y, path):
+        """Ön kontrol noktasının referans yol üzerindeki izdüşümünü bulur."""
         nearest = None
         for index, (start, end) in enumerate(zip(path, path[1:])):
             segment_x = end.x - start.x

@@ -1,3 +1,5 @@
+"""Eski proje klasöründeki model dosyalarını düzenli model klasörüne taşır."""
+
 import argparse
 import shutil
 from pathlib import Path
@@ -19,6 +21,8 @@ def main():
         / "models/signs/detector.onnx",
         args.source / "trafik_levhasi_onnx_paket/models/classifier.onnx": PROJECT_ROOT
         / "models/signs/classifier.onnx",
+        args.source / "trafik_levhasi_onnx_paket/models/class_names.json": PROJECT_ROOT
+        / "models/signs/class_names.json",
     }
 
     missing = [source for source in mappings if not source.is_file()]

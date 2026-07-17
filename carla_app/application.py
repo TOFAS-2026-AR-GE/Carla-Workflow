@@ -1,4 +1,4 @@
-"""CARLA uygulamasinin acilis, ana dongu ve kapanis islemleri."""
+"""CARLA uygulamasını açar, ana döngüyü çalıştırır ve güvenli kapatır."""
 
 import math
 
@@ -19,177 +19,206 @@ from carla_app.visualization.viewer import PerceptionViewer
 
 
 class CarlaApplication:
-    """Algilama ve kontrol akisini CARLA senkron modunda calistirir."""
+    """Sensör, algılama ve kontrol parçalarını doğru sırayla çalıştırır."""
 
     def __init__(self):
         self.settings = Settings.load()
+        self.dt = None
+        self.session = None
+        self.world = None
+        self.vehicle = None
+        self.route_manager = None
+        self.traffic = None
+        self.sensors = None
+        self.worker = None
+        self.viewer = None
+        self.controller = None
+        self.lead_tracker = None
+        self.status_every_frames = 1
+        self.perception_period = 1
+        self.previous_control_mode = None
 
     def run(self):
-        session = None
-        traffic = None
-        vehicle = None
-        sensors = None
-        worker = None
-        viewer = None
-
+        """Uygulamayı açar, ana döngüyü çalıştırır ve her durumda temizler."""
         try:
-            self.settings.check_models()
-            scenario = load_scenario(
-                self.settings.scenario_file,
-                self.settings.fixed_delta_seconds,
-            )
-            dt = float(scenario.fixed_delta_seconds)
-            if dt <= 0.0:
-                raise ValueError("fixed_delta_seconds sifirdan buyuk olmali.")
-
-            session = CarlaSession(self.settings, scenario)
-            client, world = session.open()
-            vehicle = spawn_ego_vehicle(
-                world,
-                self.settings.vehicle_name,
-                self.settings.ego_role_name,
-            )
-
-            route_manager = PersistentRouteManager(
-                world.get_map(),
-                spacing_m=1.0,
-                horizon_m=80.0,
-                recovery_distance_m=8.0,
-                recovery_ticks=max(10, int(round(1.0 / dt))),
-            )
-
-            traffic = Traffic(client, world, scenario)
-            traffic.spawn()
-
-            sensors = SensorManager(self.settings)
-            sensors.start(world, vehicle)
-
-            perception = PerceptionSystem(self.settings)
-            worker = PerceptionWorker(perception)
-            viewer = PerceptionViewer()
-            controller = VehicleController(
-                dt,
-                cruise_speed_kmh=self.settings.maximum_speed_kmh,
-            )
-            radar_geometry = sensors.layout.front_radar_geometry
-            lead_tracker = LeadVehicleTracker(
-                dt=dt,
-                image_width=self.settings.camera_width,
-                camera_fov_deg=self.settings.camera_fov,
-                radar_height_m=radar_geometry["height_above_ground_m"],
-                radar_pitch_deg=radar_geometry["pitch_deg"],
-            )
-
-            status_every_frames = max(
-                1,
-                int(round(self.settings.status_period_seconds / dt)),
-            )
-            perception_period = max(
-                1,
-                int(self.settings.perception_every_n_frames),
-            )
-
-            print("[INFO] Q, ESC veya pencerenin X dugmesi ile cikis.")
-            print(
-                "[INFO] Controller: PersistentRoute + Stanley + "
-                "IDM adaptive cruise + TTC/AEB"
-            )
-
-            first_frame_id = None
-            previous_control_mode = None
-            while True:
-                frame_id = world.tick()
-                if first_frame_id is None:
-                    first_frame_id = frame_id
-
-                state = read_vehicle_state(
-                    world,
-                    vehicle,
-                    route_manager=route_manager,
-                )
-                camera_frame_id, rgb_image = sensors.get_rgb(frame_id)
-
-                if rgb_image is not None and camera_frame_id % perception_period == 0:
-                    worker.submit(camera_frame_id, rgb_image)
-
-                perception_result = worker.get_latest()
-                radar_frame_id, radar_points = sensors.get_radar("radar_front_long")
-                radar_points = radar_points or []
-
-                lead_vehicle = lead_tracker.update(
-                    current_frame_id=frame_id,
-                    state=state,
-                    perception_result=perception_result,
-                    radar_frame_id=radar_frame_id,
-                    radar_points=radar_points,
-                )
-                radar_diagnostics = lead_tracker.get_radar_diagnostics()
-                emergency_obstacle = lead_tracker.get_emergency_obstacle()
-                control, control_info = controller.run_step(
-                    state,
-                    lead_vehicle,
-                    emergency_obstacle=emergency_obstacle,
-                )
-                vehicle.apply_control(control)
-                update_spectator(world, vehicle)
-
-                current_mode = control_info["mode"]
-                if current_mode != previous_control_mode:
-                    print(self.control_event_message(frame_id, control_info))
-                    previous_control_mode = current_mode
-
-                if self.settings.enable_data_recording:
-                    sensors.save_if_needed(
-                        frame_id,
-                        serializable_vehicle_state(state, control),
-                    )
-
-                if frame_id % status_every_frames == 0:
-                    print(
-                        self.status_message(
-                            frame_id=frame_id,
-                            camera_frame_id=camera_frame_id,
-                            state=state,
-                            perception_result=perception_result,
-                            radar_frame_id=radar_frame_id,
-                            radar_points=radar_points,
-                            radar_diagnostics=radar_diagnostics,
-                            lead_vehicle=lead_vehicle,
-                            control_info=control_info,
-                        )
-                    )
-
-                if not viewer.show(
-                    perception_result,
-                    fallback_image=rgb_image,
-                    fallback_frame_id=camera_frame_id,
-                    current_frame_id=frame_id,
-                ):
-                    break
-
-                if self.runtime_limit_reached(first_frame_id, frame_id, dt):
-                    print("[INFO] MAX_RUNTIME_SECONDS sinirina ulasildi.")
-                    break
-
+            self.start()
+            self.run_main_loop()
         except KeyboardInterrupt:
-            print("\n[INFO] Kullanici uygulamayi durdurdu.")
+            print("\n[INFO] Kullanıcı uygulamayı durdurdu.")
         except Exception as error:
             print(f"[ERROR] {type(error).__name__}: {error}")
             raise
         finally:
-            self.cleanup("viewer", viewer, "close")
-            self.cleanup("perception worker", worker, "stop")
-            self.cleanup("sensors", sensors, "stop")
-            self.cleanup("traffic", traffic, "stop")
+            self.shutdown()
 
-            if vehicle is not None:
-                try:
-                    if vehicle.is_alive:
-                        vehicle.destroy()
-                except Exception as error:
-                    print(f"[WARN] Ego arac silinemedi: {error}")
+    def start(self):
+        """Ayarları doğrular ve uygulamanın bütün parçalarını sırayla açar."""
+        self.settings.check_models()
+        scenario = load_scenario(
+            self.settings.scenario_file,
+            self.settings.fixed_delta_seconds,
+        )
+        self.dt = float(scenario.fixed_delta_seconds)
+        if self.dt <= 0.0:
+            raise ValueError("fixed_delta_seconds sıfırdan büyük olmalı.")
 
-            self.cleanup("CARLA session", session, "close")
+        self.session = CarlaSession(self.settings, scenario)
+        client, self.world = self.session.open()
+        self.vehicle = spawn_ego_vehicle(
+            self.world,
+            self.settings.vehicle_name,
+            self.settings.ego_role_name,
+        )
+
+        self.route_manager = PersistentRouteManager(
+            self.world.get_map(),
+            spacing_m=1.0,
+            horizon_m=80.0,
+            recovery_distance_m=8.0,
+            recovery_ticks=max(10, int(round(1.0 / self.dt))),
+        )
+
+        self.traffic = Traffic(client, self.world, scenario)
+        self.traffic.spawn()
+
+        self.sensors = SensorManager(self.settings)
+        self.sensors.start(self.world, self.vehicle, self.dt)
+
+        perception = PerceptionSystem(self.settings)
+        self.worker = PerceptionWorker(perception)
+        self.viewer = PerceptionViewer()
+        self.controller = VehicleController(
+            self.dt,
+            cruise_speed_kmh=self.settings.maximum_speed_kmh,
+        )
+
+        radar_geometry = self.sensors.layout.front_radar_geometry
+        self.lead_tracker = LeadVehicleTracker(
+            dt=self.dt,
+            image_width=self.settings.camera_width,
+            camera_fov_deg=self.settings.camera_fov,
+            radar_height_m=radar_geometry["height_above_ground_m"],
+            radar_pitch_deg=radar_geometry["pitch_deg"],
+        )
+
+        self.status_every_frames = max(
+            1,
+            int(round(self.settings.status_period_seconds / self.dt)),
+        )
+        self.perception_period = max(
+            1,
+            int(self.settings.perception_every_n_frames),
+        )
+
+        print("[INFO] Q, ESC veya pencerenin X düğmesi ile çıkış.")
+        print(
+            "[INFO] Kontrol: Kalıcı rota + Stanley direksiyon + "
+            "IDM araç takibi + bağımsız acil fren"
+        )
+
+    def run_main_loop(self):
+        """CARLA dünyasını kare kare ilerletir."""
+        first_frame_id = None
+        self.previous_control_mode = None
+
+        while True:
+            frame_id = self.world.tick()
+            if first_frame_id is None:
+                first_frame_id = frame_id
+
+            keep_running = self.process_frame(frame_id)
+            if not keep_running:
+                break
+
+            if self.runtime_limit_reached(first_frame_id, frame_id, self.dt):
+                print("[INFO] MAX_RUNTIME_SECONDS sınırına ulaşıldı.")
+                break
+
+    def process_frame(self, frame_id):
+        """Tek dünya karesinin algılama, kontrol, kayıt ve gösterimini yapar."""
+        state = read_vehicle_state(
+            self.world,
+            self.vehicle,
+            route_manager=self.route_manager,
+        )
+        camera_frame_id, rgb_image = self.sensors.get_rgb(frame_id)
+
+        if (
+            rgb_image is not None
+            and camera_frame_id % self.perception_period == 0
+        ):
+            self.worker.submit(camera_frame_id, rgb_image)
+
+        perception_result = self.worker.get_latest()
+        radar_frame_id, radar_points = self.sensors.get_radar("radar_front_long")
+        radar_points = radar_points or []
+
+        lead_vehicle = self.lead_tracker.update(
+            current_frame_id=frame_id,
+            state=state,
+            perception_result=perception_result,
+            radar_frame_id=radar_frame_id,
+            radar_points=radar_points,
+        )
+        radar_diagnostics = self.lead_tracker.get_radar_diagnostics()
+        emergency_obstacle = self.lead_tracker.get_emergency_obstacle()
+
+        control, control_info = self.controller.run_step(
+            state,
+            lead_vehicle,
+            emergency_obstacle=emergency_obstacle,
+        )
+        self.vehicle.apply_control(control)
+        update_spectator(self.world, self.vehicle)
+
+        current_mode = control_info["mode"]
+        if current_mode != self.previous_control_mode:
+            print(self.control_event_message(frame_id, control_info))
+            self.previous_control_mode = current_mode
+
+        if self.settings.enable_data_recording:
+            self.sensors.save_if_needed(
+                frame_id,
+                serializable_vehicle_state(state, control),
+            )
+
+        if frame_id % self.status_every_frames == 0:
+            print(
+                self.status_message(
+                    frame_id=frame_id,
+                    camera_frame_id=camera_frame_id,
+                    state=state,
+                    perception_result=perception_result,
+                    radar_frame_id=radar_frame_id,
+                    radar_points=radar_points,
+                    radar_diagnostics=radar_diagnostics,
+                    lead_vehicle=lead_vehicle,
+                    control_info=control_info,
+                )
+            )
+
+        return self.viewer.show(
+            perception_result,
+            fallback_image=rgb_image,
+            fallback_frame_id=camera_frame_id,
+            current_frame_id=frame_id,
+        )
+
+    def shutdown(self):
+        """Açılmış parçaları ters sırayla kapatır."""
+        self.close_component("görüntü penceresi", self.viewer)
+        self.stop_component("algılama işçisi", self.worker)
+        self.stop_component("sensörler", self.sensors)
+        self.stop_component("trafik", self.traffic)
+
+        if self.vehicle is not None:
+            try:
+                if self.vehicle.is_alive:
+                    self.vehicle.destroy()
+            except Exception as error:
+                print(f"[WARN] Ego araç silinemedi: {error}")
+
+        self.close_component("CARLA oturumu", self.session)
 
     def runtime_limit_reached(self, first_frame_id, frame_id, dt):
         limit = self.settings.max_runtime_seconds
@@ -285,7 +314,7 @@ class CarlaApplication:
         return message
 
     def control_event_message(self, frame_id, control_info):
-        """Kontrol modunun neden degistigini tek, okunakli satirda anlatir."""
+        """Kontrol modunun neden değiştiğini tek, okunaklı satırda anlatır."""
         mode = control_info["mode"]
         message = f"[CONTROL] frame={frame_id} mode={mode}"
         if mode == "EMERGENCY":
@@ -307,10 +336,20 @@ class CarlaApplication:
             message += f" speed_reason={speed_plan.get('speed_reason', 'unknown')}"
         return message
 
-    def cleanup(self, name, instance, method_name):
-        if instance is None:
+    def stop_component(self, name, component):
+        """`stop` metodu olan bir parçayı hata yaymadan durdurur."""
+        if component is None:
             return
         try:
-            getattr(instance, method_name)()
+            component.stop()
         except Exception as error:
-            print(f"[WARN] {name} kapatilamadi: {error}")
+            print(f"[WARN] {name} durdurulamadı: {error}")
+
+    def close_component(self, name, component):
+        """`close` metodu olan bir parçayı hata yaymadan kapatır."""
+        if component is None:
+            return
+        try:
+            component.close()
+        except Exception as error:
+            print(f"[WARN] {name} kapatılamadı: {error}")

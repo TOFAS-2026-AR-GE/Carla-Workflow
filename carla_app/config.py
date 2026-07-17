@@ -1,3 +1,5 @@
+"""Ortam değişkenlerini tek yerde okuyup uygulama ayarlarına dönüştürür."""
+
 import os
 from dataclasses import dataclass
 from pathlib import Path

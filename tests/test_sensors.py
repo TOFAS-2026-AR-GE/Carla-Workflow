@@ -1,4 +1,5 @@
 import io
+import struct
 import sys
 import types
 import unittest
@@ -23,7 +24,9 @@ if "cv2" not in sys.modules:
     sys.modules["cv2"] = types.ModuleType("cv2")
 
 from carla_app.sensors import layout as layout_module  # noqa: E402
+from carla_app.sensors.factory import start_sensor_listener  # noqa: E402
 from carla_app.sensors.manager import SensorManager  # noqa: E402
+from carla_app.sensors.processors import process_packet  # noqa: E402
 from carla_app.sensors.stream import CameraStream  # noqa: E402
 
 
@@ -54,7 +57,17 @@ class CameraStreamTests(unittest.TestCase):
 
 
 class SensorManagerTests(unittest.TestCase):
-    def test_front_radar_is_mounted_high_and_aimed_above_the_road(self):
+    def test_layout_rejects_zero_simulation_step(self):
+        with self.assertRaises(ValueError):
+            layout_module.build_sensor_layout(
+                vehicle=object(),
+                camera_width=800,
+                camera_height=600,
+                front_wide_fov=90.0,
+                fixed_delta_seconds=0.0,
+            )
+
+    def test_layout_has_only_real_sensors_and_correct_front_radar(self):
         vehicle = types.SimpleNamespace(
             bounding_box=types.SimpleNamespace(
                 location=types.SimpleNamespace(x=0.0, y=0.0, z=0.75),
@@ -88,6 +101,19 @@ class SensorManagerTests(unittest.TestCase):
         self.assertGreaterEqual(geometry["height_above_ground_m"], 0.85)
         self.assertAlmostEqual(geometry["pitch_deg"], 2.0)
         self.assertEqual(sensor_layout.front_radar.attributes["vertical_fov"], "6.0")
+        self.assertEqual(len(sensor_layout.all_specs), 15)
+        self.assertEqual(len(sensor_layout.radars), 5)
+        self.assertEqual(
+            {sensor.kind for sensor in sensor_layout.all_specs},
+            {"camera", "radar", "lidar", "gnss", "imu"},
+        )
+
+        manifest = sensor_layout.to_manifest("vehicle.test")
+        self.assertEqual(manifest["sensor_count"]["total"], 15)
+        self.assertEqual(
+            set(manifest["sensor_count"]),
+            {"cameras", "lidars", "automotive_radars", "gnss", "imu", "total"},
+        )
 
     def test_live_control_spawns_only_primary_camera_and_front_radar(self):
         settings = types.SimpleNamespace(
@@ -124,10 +150,90 @@ class SensorManagerTests(unittest.TestCase):
             ),
             redirect_stdout(io.StringIO()),
         ):
-            manager.start(world=object(), vehicle=object())
+            manager.start(
+                world=object(),
+                vehicle=object(),
+                fixed_delta_seconds=0.05,
+            )
 
         self.assertEqual(captured["specs"], (camera, radar))
         self.assertIsNone(captured["sync"])
+
+    def test_recording_packet_contains_only_real_sensor_groups(self):
+        camera = types.SimpleNamespace(name="camera_front_wide")
+        radar = types.SimpleNamespace(name="radar_front_long")
+        layout = types.SimpleNamespace(
+            cameras=(camera,),
+            radars=(radar,),
+            lidar=types.SimpleNamespace(name="lidar_roof"),
+            gnss=types.SimpleNamespace(name="gnss_roof"),
+            imu=types.SimpleNamespace(name="imu_cg"),
+            primary_camera_name="camera_front_wide",
+        )
+
+        packet = {
+            "camera_front_wide": types.SimpleNamespace(
+                raw_data=bytes([10, 20, 30, 255]),
+                height=1,
+                width=1,
+            ),
+            "radar_front_long": [
+                types.SimpleNamespace(
+                    depth=12.0,
+                    velocity=-1.5,
+                    azimuth=0.0,
+                    altitude=0.0,
+                )
+            ],
+            "lidar_roof": types.SimpleNamespace(
+                raw_data=struct.pack("ffff", 1.0, 2.0, 3.0, 0.5),
+            ),
+            "gnss_roof": types.SimpleNamespace(
+                latitude=41.0,
+                longitude=29.0,
+                altitude=10.0,
+            ),
+            "imu_cg": types.SimpleNamespace(
+                accelerometer=types.SimpleNamespace(x=0.1, y=0.2, z=9.8),
+                gyroscope=types.SimpleNamespace(x=0.0, y=0.0, z=0.1),
+                compass=0.3,
+            ),
+        }
+
+        result = process_packet(packet, layout)
+
+        self.assertEqual(
+            set(result),
+            {"primary_camera", "cameras", "lidar", "gnss", "imu", "radars"},
+        )
+        front_point = result["radars"]["radar_front_long"][0]
+        self.assertEqual(front_point["depth_m"], 12.0)
+
+    def test_each_recording_listener_keeps_its_own_sensor_name(self):
+        class FakeActor:
+            def listen(self, callback):
+                self.callback = callback
+
+        class FakeSync:
+            def __init__(self):
+                self.names = []
+
+            def push(self, sensor_name, frame_id, data):
+                self.names.append(sensor_name)
+
+        sync = FakeSync()
+        first_actor = FakeActor()
+        second_actor = FakeActor()
+        first_sensor = types.SimpleNamespace(kind="lidar", name="lidar_roof")
+        second_sensor = types.SimpleNamespace(kind="gnss", name="gnss_roof")
+
+        start_sensor_listener(first_actor, first_sensor, sync, None, None)
+        start_sensor_listener(second_actor, second_sensor, sync, None, None)
+        measurement = types.SimpleNamespace(frame=10)
+        first_actor.callback(measurement)
+        second_actor.callback(measurement)
+
+        self.assertEqual(sync.names, ["lidar_roof", "gnss_roof"])
 
 
 if __name__ == "__main__":

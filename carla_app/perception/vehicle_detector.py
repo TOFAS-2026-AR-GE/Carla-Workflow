@@ -1,4 +1,4 @@
-"""YOLO based vehicle detection."""
+"""Ön kamera görüntüsünde YOLO ile yol araçlarını bulur."""
 
 import numpy as np
 from ultralytics import YOLO
@@ -7,7 +7,7 @@ from carla_app.perception.device import move_model_to_cpu, resolve_device
 
 
 class VehicleDetector:
-    """Detect road vehicles and return a small, backend-independent result."""
+    """Model sonucunu kontrol katmanının kullanacağı sade sözlüğe çevirir."""
 
     VEHICLE_NAMES = {
         "vehicle",
@@ -25,7 +25,7 @@ class VehicleDetector:
         "coach",
         "motorcycle",
         "motorbike",
-        "motobike",  # Name used by the bundled CARLA model.
+        "motobike",  # Repoda bulunan CARLA modelinin kullandığı sınıf adı.
         "bicycle",
         "bike",
         "tram",
@@ -63,11 +63,11 @@ class VehicleDetector:
         )
 
     def detect(self, rgb_image):
-        """Return vehicle detections for one RGB camera frame."""
+        """Tek RGB kamera karesindeki araç kutularını döndürür."""
         self._validate_image(rgb_image)
 
-        # CARLA processor returns RGB; Ultralytics expects an OpenCV-style BGR
-        # ndarray and converts it to RGB internally.
+        # CARLA verisi RGB'dir. Ultralytics ise OpenCV biçimindeki BGR dizisini
+        # bekler ve kendi içinde tekrar RGB'ye çevirir.
         bgr_image = np.ascontiguousarray(rgb_image[:, :, :3][:, :, ::-1])
         results = self._predict(bgr_image)
 

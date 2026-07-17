@@ -1,4 +1,9 @@
-"""On kamera ve on radardan takip edilecek araci secme islemleri."""
+"""Ön kamera ve ön radardan takip edilecek aracı seçer.
+
+İşlem sırası açıktır: eski ve zemin radar dönüşleri elenir, kamera ile radar
+birleştirilir, hedefler zamana göre takip edilir ve sürüş koridorundaki en
+güvenli ön araç seçilir.
+"""
 
 import math
 
@@ -29,11 +34,11 @@ def percentile(values, fraction):
 
 
 class LeadVehicleTracker:
-    """Aracin gidecegi koridordaki en yakin ve kararli hedefi secer.
+    """Aracın gideceği koridordaki en yakın ve kararlı hedefi seçer.
 
-    Ana kaynak, on kamera kutusu ile radar mesafesinin birlestirilmesidir.
-    Kamera bir karede hedefi kacirirsa, iki kare boyunca dogrulanan radar
-    kumesi gecici olarak yedek kaynak olur.
+    Ana kaynak, ön kamera kutusu ile radar mesafesinin birleştirilmesidir.
+    Kamera bir karede hedefi kaçırırsa iki kare boyunca doğrulanan radar
+    kümesi geçici olarak yedek kaynak olur.
     """
 
     def __init__(
@@ -83,6 +88,7 @@ class LeadVehicleTracker:
         radar_frame_id,
         radar_points,
     ):
+        """Yeni kamera-radar verisini işleyip bu çevrimin ön aracını seçer."""
         radar_age_frames = self.frame_age(current_frame_id, radar_frame_id)
         maximum_radar_age = max(2, int(round(0.20 / self.dt)))
         radar_is_fresh = (
@@ -125,17 +131,17 @@ class LeadVehicleTracker:
         return dict(self.radar_diagnostics)
 
     def get_emergency_obstacle(self):
-        """Aracin koridorundaki en yakin ham radar tehlikesini verir.
+        """Aracın koridorundaki en yakın ham radar tehlikesini verir.
 
-        Bu son guvenlik yolu kamera kutusuna veya onaylanmis takibe bagli
-        degildir. Yalnizca cok yakin mesafede veya dusuk TTC'de kullanilir.
+        Bu son güvenlik yolu kamera kutusuna veya onaylanmış takibe bağlı
+        değildir. Yalnızca çok yakın mesafede veya düşük TTC'de kullanılır.
         """
         if self.emergency_obstacle is None:
             return None
         return dict(self.emergency_obstacle)
 
     def filter_ground_returns(self, radar_points):
-        """Fiziksel engel yuksekliginin altindaki zemin donuslerini eler."""
+        """Fiziksel engel yüksekliğinin altındaki zemin dönüşlerini eler."""
         usable_points = []
         ground_rejected = 0
         invalid_rejected = 0
@@ -178,6 +184,7 @@ class LeadVehicleTracker:
         radar_frame_id,
         radar_points,
     ):
+        """Kamera kutusunu radar mesafesiyle birleştirip dünyaya taşır."""
         if perception_result is None or radar_frame_id is None or not radar_points:
             return []
 
@@ -243,6 +250,7 @@ class LeadVehicleTracker:
         return measurements
 
     def select_tracked_lead(self, tracks, state):
+        """Doğrulanmış takiplerden sürüş koridorundaki ön aracı seçer."""
         candidates = []
 
         for track in tracks:
@@ -280,13 +288,14 @@ class LeadVehicleTracker:
         return self.select_with_hysteresis(candidates)
 
     def select_direct_radar_lead(self, radar_points, state, radar_frame_id):
+        """Kamera geçici kaybolursa doğrulanmış radar kümesini yedek seçer."""
         if radar_frame_id is None:
             return self.hold_last_radar_lead()
 
         radar_frame_id = int(radar_frame_id)
         if radar_frame_id == self.last_direct_radar_frame_id:
-            # Ayni sensor karesi ikinci bir kanit degildir. Kisa callback
-            # gecikmesinde son hedefi fizik modeliyle bir tick ilerletiriz.
+            # Aynı sensör karesi ikinci bir kanıt değildir. Kısa geri çağrı
+            # gecikmesinde son hedefi fizik modeliyle bir çevrim ilerletiriz.
             return self.hold_last_radar_lead()
 
         self.last_direct_radar_frame_id = radar_frame_id
@@ -329,6 +338,7 @@ class LeadVehicleTracker:
         return lead
 
     def radar_candidates(self, radar_points, state, radar_frame_id):
+        """Radar kümelerini mesafe ve şerit koşullarından geçirir."""
         candidates = []
         ego_location = state["location"]
 
@@ -365,9 +375,9 @@ class LeadVehicleTracker:
             if not self.inside_driving_corridor(lateral, state):
                 continue
 
-            # CARLA radar hizinin isareti bu projedeki kuralla aynidir:
-            # negatif deger mesafenin kapandigini, pozitif deger ise
-            # hedefin uzaklastigini gosterir. Isareti ters cevirmeyin.
+            # CARLA radar hızının işareti bu projedeki kuralla aynıdır:
+            # negatif değer mesafenin kapandığını, pozitif değer ise
+            # hedefin uzaklaştığını gösterir. İşareti ters çevirmeyin.
             relative_speed = clamp(float(radar_velocity), -20.0, 20.0)
             candidates.append(
                 {
@@ -394,7 +404,7 @@ class LeadVehicleTracker:
         state,
         radar_frame_id,
     ):
-        """Kamera veya radar kumesi kacirsa bile AEB yolunu acik tutar."""
+        """Kamera veya radar kümesi kaçırsa bile acil fren yolunu açık tutar."""
         ego_speed = max(0.0, float(state.get("speed_mps", 0.0)))
         ego_location = state["location"]
         candidates = []
@@ -439,8 +449,8 @@ class LeadVehicleTracker:
             closing_speed = max(0.0, -relative_speed)
             ttc = forward / closing_speed if closing_speed > 0.1 else math.inf
 
-            # Tek bir ham nokta sadece cok yakindaysa veya olculen yaklasma
-            # hizi guvenlik acisindan kritikse AEB adayi olabilir.
+            # Tek bir ham nokta yalnızca çok yakınsa veya ölçülen yaklaşma
+            # hızı güvenlik açısından kritikse acil fren adayı olabilir.
             if forward > 8.0 and ttc > 1.8:
                 continue
 
@@ -472,6 +482,7 @@ class LeadVehicleTracker:
         )
 
     def cluster_radar_points(self, radar_points):
+        """Birbirine yakın radar noktalarını aynı fiziksel hedefte toplar."""
         prepared = []
         for point in radar_points or []:
             depth = float(point.get("depth_m", -1.0))
@@ -590,15 +601,16 @@ class LeadVehicleTracker:
         return filtered
 
     def choose_safest_lead(self, tracked_lead, radar_lead):
+        """Kamera kimliğini koruyarak daha yakın ve güvenli ölçümü seçer."""
         if tracked_lead is None:
             return radar_lead
         if radar_lead is None:
             return tracked_lead
 
-        # Kamera hedef kimligini verir. Kamera kutusu kaybolup geri geldiginde
-        # Kalman mesafesi biraz geriden gelebilir. Bu durumda kamera kimligini
-        # korurken daha yakin radar mesafesi ve hizini kullaniriz. Boylece
-        # kaynak degisimindeki 4 m -> 7 m -> 5 m sicrama kontrolcuye gitmez.
+        # Kamera hedef kimliğini verir. Kamera kutusu kaybolup geri geldiğinde
+        # Kalman mesafesi biraz geriden gelebilir. Bu durumda kamera kimliğini
+        # korurken daha yakın radar mesafesi ve hızını kullanırız. Böylece
+        # kaynak değişimindeki 4 m -> 7 m -> 5 m sıçrama kontrolcüye gitmez.
         if abs(tracked_lead["distance_m"] - radar_lead["distance_m"]) <= 3.0:
             lead = dict(tracked_lead)
             if radar_lead["distance_m"] < tracked_lead["distance_m"]:
@@ -614,20 +626,18 @@ class LeadVehicleTracker:
         )
 
     def select_with_hysteresis(self, candidates):
+        """Benzer mesafedeki iki hedef arasında sürekli geçişi önler."""
         if not candidates:
             self.selected_track_id = None
             return None
 
         candidates.sort(key=lambda candidate: candidate["distance_m"])
         nearest = candidates[0]
-        current = next(
-            (
-                candidate
-                for candidate in candidates
-                if candidate["track_id"] == self.selected_track_id
-            ),
-            None,
-        )
+        current = None
+        for candidate in candidates:
+            if candidate["track_id"] == self.selected_track_id:
+                current = candidate
+                break
 
         if current is None:
             selected = nearest
@@ -643,15 +653,16 @@ class LeadVehicleTracker:
         return selected
 
     def inside_driving_corridor(self, lateral_m, state):
+        """Noktanın ego aracının sürüş koridorunda olduğunu sınar."""
         lane_width = max(2.5, float(state.get("lane_width", 3.5)))
         vehicle_half_width = max(
             0.70,
             float(state.get("vehicle_half_width_m", 0.95)),
         )
 
-        # Sadece ego aracinin kapladigi koridoru ve kucuk bir guvenlik
-        # payini kabul et. Boylece komsu serit, kaldirim ve yol kenari
-        # donusleri normal takip araci olarak secilmez.
+        # Yalnızca ego aracının kapladığı koridoru ve küçük bir güvenlik
+        # payını kabul et. Böylece komşu şerit, kaldırım ve yol kenarı
+        # dönüşleri normal takip aracı olarak seçilmez.
         lane_boundary = 0.5 * lane_width - 0.15
         vehicle_corridor = vehicle_half_width + 0.40
         allowed_lateral = max(0.90, min(lane_boundary, vehicle_corridor))

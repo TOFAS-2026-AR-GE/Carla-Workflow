@@ -1,3 +1,5 @@
+"""Kamera ve radarın en güncel verisini iş parçacıkları arasında saklar."""
+
 import threading
 import time
 
@@ -16,12 +18,12 @@ class CameraStream:
             self.condition.notify_all()
 
     def wait_latest(self, world_frame_id, timeout=0.5):
-        """Return the newest camera frame available for this world tick.
+        """Dünya karesine göre kullanılabilir en güncel görüntüyü verir.
 
-        CARLA RGB cameras are rendered on the GPU and their callbacks can
-        arrive a few world ticks late. Waiting only for an exact frame ID
-        causes every delayed image to be discarded forever. The actual camera
-        frame ID is returned with the image so perception keeps correct time.
+        RGB kamera GPU üzerinde çizildiği için callback birkaç dünya karesi
+        gecikebilir. Yalnızca tam kare numarasını beklemek geç gelen bütün
+        görüntüleri kaybettirir. Bu nedenle görüntü kendi gerçek kare
+        numarasıyla birlikte döndürülür.
         """
         world_frame_id = int(world_frame_id)
         end_time = time.monotonic() + timeout

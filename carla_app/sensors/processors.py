@@ -1,3 +1,5 @@
+"""CARLA sensör nesnelerini sade Python ve NumPy verilerine çevirir."""
+
 import math
 
 import numpy as np
@@ -19,14 +21,9 @@ def image_to_rgb(image):
 
 
 def lidar_to_array(lidar):
-    return (
-        np.frombuffer(
-            lidar.raw_data,
-            dtype=np.float32,
-        )
-        .reshape(-1, 4)
-        .copy()
-    )
+    array = np.frombuffer(lidar.raw_data, dtype=np.float32)
+    array = array.reshape(-1, 4)
+    return array.copy()
 
 
 def gnss_to_dict(gnss):
@@ -54,72 +51,37 @@ def imu_to_dict(imu):
 
 
 def radar_to_list(radar):
-    return [
-        {
-            "depth_m": float(point.depth),
-            "relative_velocity_mps": float(point.velocity),
-            "azimuth_deg": math.degrees(float(point.azimuth)),
-            "altitude_deg": math.degrees(float(point.altitude)),
-        }
-        for point in radar
-    ]
-
-
-def ultrasonic_to_dict(
-    measurement,
-    maximum_range,
-):
-    nearest = None
-
-    for point in measurement:
-        if nearest is None or point.depth < nearest.depth:
-            nearest = point
-
-    if nearest is None:
-        return {
-            "detected": False,
-            "distance_m": float(maximum_range),
-            "relative_velocity_mps": 0.0,
-            "azimuth_deg": 0.0,
-            "altitude_deg": 0.0,
-        }
-
-    return {
-        "detected": True,
-        "distance_m": float(nearest.depth),
-        "relative_velocity_mps": float(nearest.velocity),
-        "azimuth_deg": math.degrees(float(nearest.azimuth)),
-        "altitude_deg": math.degrees(float(nearest.altitude)),
-    }
+    points = []
+    for point in radar:
+        points.append(
+            {
+                "depth_m": float(point.depth),
+                "relative_velocity_mps": float(point.velocity),
+                "azimuth_deg": math.degrees(float(point.azimuth)),
+                "altitude_deg": math.degrees(float(point.altitude)),
+            }
+        )
+    return points
 
 
 def process_packet(
     packet,
     layout,
 ):
-    cameras = {spec.name: image_to_rgb(packet[spec.name]) for spec in layout.cameras}
+    """Aynı kareye ait tam sensör paketini kayıt biçimine dönüştürür."""
+    cameras = {}
+    for camera in layout.cameras:
+        cameras[camera.name] = image_to_rgb(packet[camera.name])
 
-    radars = {spec.name: radar_to_list(packet[spec.name]) for spec in layout.radars}
-
-    ultrasonics = {
-        spec.name: ultrasonic_to_dict(
-            packet[spec.name],
-            float(
-                spec.attributes.get(
-                    "range",
-                    "4.5",
-                )
-            ),
-        )
-        for spec in layout.ultrasonics
-    }
+    radars = {}
+    for radar in layout.radars:
+        radars[radar.name] = radar_to_list(packet[radar.name])
 
     return {
-        "primary_camera": (layout.primary_camera_name),
+        "primary_camera": layout.primary_camera_name,
         "cameras": cameras,
         "lidar": lidar_to_array(packet[layout.lidar.name]),
         "gnss": gnss_to_dict(packet[layout.gnss.name]),
         "imu": imu_to_dict(packet[layout.imu.name]),
         "radars": radars,
-        "ultrasonics": ultrasonics,
     }

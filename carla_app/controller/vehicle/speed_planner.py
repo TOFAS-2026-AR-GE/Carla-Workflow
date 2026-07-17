@@ -1,4 +1,8 @@
-"""Yol virajina ve serit hatasina gore guvenli hedef hizini hesaplar."""
+"""Yol virajına ve şerit hatasına göre güvenli hedef hızı hesaplar.
+
+Girdi olarak referans yolu, araç hızını ve direksiyon hatasını alır. Çıktı
+olarak boylamsal kontrolcünün izleyeceği metre/saniye cinsinden hızı verir.
+"""
 
 import math
 
@@ -8,7 +12,7 @@ def clamp(value, minimum, maximum):
 
 
 class CurvatureSpeedPlanner:
-    """Aracin rotayi koruyabilecegi rahat ve guvenli hizi secer."""
+    """Aracın rotayı koruyabileceği rahat ve güvenli hızı seçer."""
 
     def __init__(self, dt=0.05, cruise_speed_kmh=60.0):
         self.dt = float(dt)
@@ -25,6 +29,7 @@ class CurvatureSpeedPlanner:
         self.previous_target_speed_mps = self.cruise_speed_mps
 
     def run_step(self, state, lateral_info=None):
+        """Viraj ve şerit hatasından bu çevrimin hedef hızını seçer."""
         curvature = self.calculate_preview_curvature(
             state.get("reference_path", []),
             state.get("speed_mps", 0.0),
@@ -74,6 +79,7 @@ class CurvatureSpeedPlanner:
         return math.sqrt(self.maximum_lateral_acceleration_mps2 / curvature)
 
     def calculate_lane_recovery_speed(self, state, lateral_info):
+        """Şerit kenarında güvenli toparlanma hızını verir."""
         if not lateral_info:
             return None
 
@@ -99,11 +105,12 @@ class CurvatureSpeedPlanner:
         return None
 
     def calculate_preview_curvature(self, path, speed_mps=0.0):
+        """Hıza göre ilerideki yolun güvenilir eğrilik değerini hesaplar."""
         if len(path) < 5:
             return 0.0
 
-        # Hiz arttikca daha uzagi tara. 80 km/sa hizda 35 metrelik eski
-        # pencere viraji gec gosterebiliyordu; uc saniyelik yol daha guvenli.
+        # Hız arttıkça daha uzağı tara. Yüksek hızda kısa bakış mesafesi
+        # virajı geç gösterebilir; üç saniyelik yol daha güvenlidir.
         preview_distance_m = clamp(float(speed_mps) * 3.0, 35.0, 75.0)
         preview = [path[0]]
         travelled_m = 0.0
@@ -114,8 +121,8 @@ class CurvatureSpeedPlanner:
             if travelled_m >= preview_distance_m:
                 break
         curvatures = []
-        # Dort noktalik aralik, 1 metrelik waypoint basamaklarinin
-        # tek basina yanlis viraj uretmesini azaltir.
+        # Dört noktalık aralık, bir metrelik yol noktalarının tek başına
+        # yanlış viraj üretmesini azaltır.
         for middle_index in range(2, len(preview) - 2):
             curvature = abs(
                 self.three_point_curvature(
@@ -130,8 +137,8 @@ class CurvatureSpeedPlanner:
         if not curvatures:
             return 0.0
 
-        # Yuzde 85 degeri gercek viraji yakalar fakat tek bir bozuk harita
-        # noktasinin tum hedef hizi belirlemesine izin vermez.
+        # Yüzde 85 değeri gerçek virajı yakalar fakat tek bir bozuk harita
+        # noktasının bütün hedef hızı belirlemesine izin vermez.
         curvatures.sort()
         index = int(round(0.85 * (len(curvatures) - 1)))
         return curvatures[index]
@@ -150,6 +157,7 @@ class CurvatureSpeedPlanner:
         return 2.0 * twice_area / denominator
 
     def limit_speed_change(self, desired_speed):
+        """Hedef hızın çevrimler arasında aniden değişmesini önler."""
         difference = desired_speed - self.previous_target_speed_mps
         if difference >= 0.0:
             maximum_change = self.maximum_speed_increase_mps2 * self.dt
@@ -157,7 +165,3 @@ class CurvatureSpeedPlanner:
 
         maximum_change = self.maximum_speed_decrease_mps2 * self.dt
         return self.previous_target_speed_mps + max(difference, -maximum_change)
-
-    def limit_speed_increase(self, desired_speed):
-        """Eski cagri adini kullanan kodlar icin geriye uyumluluk."""
-        return self.limit_speed_change(desired_speed)

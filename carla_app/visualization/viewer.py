@@ -1,10 +1,11 @@
-"""OpenCV perception viewer."""
+"""Kamera görüntüsünü ve algılama kutularını OpenCV penceresinde gösterir."""
 
 import cv2
 import numpy as np
 
 
 class PerceptionViewer:
+    """Algılama sonuçlarını gösterir ve kullanıcı çıkışını izler."""
     def __init__(self, window_name="CARLA Perception"):
         self.window_name = window_name
         self.closed = False

@@ -1,3 +1,5 @@
+"""YAML senaryo dosyasındaki harita, zaman ve trafik ayarlarını okur."""
+
 from dataclasses import dataclass
 from pathlib import Path
 

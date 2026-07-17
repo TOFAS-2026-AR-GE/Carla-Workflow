@@ -1,20 +1,35 @@
-from dataclasses import dataclass
-from typing import Dict, List, Tuple
+"""Araç üzerindeki sensörlerin konumunu ve CARLA ayarlarını tanımlar.
+
+Bu dosya yalnızca sensör yerleşiminden sorumludur. Sensör oluşturma işlemi
+``factory.py``, canlı veriyi saklama işlemi ise ``stream.py`` içindedir.
+"""
 
 import carla
 
 
-@dataclass(frozen=True)
 class SensorSpec:
-    name: str
-    kind: str
-    blueprint_id: str
-    transform: carla.Transform
-    attributes: Dict[str, str]
-    physical_sensor: str
-    primary: bool = False
+    """Tek bir sensörün adı, türü, konumu ve CARLA ayarları."""
 
-    def to_dict(self) -> Dict[str, object]:
+    def __init__(
+        self,
+        name,
+        kind,
+        blueprint_id,
+        transform,
+        attributes,
+        physical_sensor,
+        primary=False,
+    ):
+        self.name = name
+        self.kind = kind
+        self.blueprint_id = blueprint_id
+        self.transform = transform
+        self.attributes = attributes
+        self.physical_sensor = physical_sensor
+        self.primary = primary
+
+    def to_dict(self):
+        """Sensör tanımını kayıt dosyasına uygun sözlüğe çevirir."""
         location = self.transform.location
         rotation = self.transform.rotation
 
@@ -36,42 +51,50 @@ class SensorSpec:
         }
 
 
-@dataclass(frozen=True)
 class SensorLayout:
-    cameras: Tuple[SensorSpec, ...]
-    lidar: SensorSpec
-    gnss: SensorSpec
-    imu: SensorSpec
-    radars: Tuple[SensorSpec, ...]
-    ultrasonics: Tuple[SensorSpec, ...]
-    vehicle_geometry: Dict[str, float]
+    """Araçta kullanılabilecek bütün gerçek CARLA sensörlerini tutar."""
+
+    def __init__(self, cameras, lidar, gnss, imu, radars, vehicle_geometry):
+        self.cameras = cameras
+        self.lidar = lidar
+        self.gnss = gnss
+        self.imu = imu
+        self.radars = radars
+        self.vehicle_geometry = vehicle_geometry
 
     @property
-    def all_specs(self) -> Tuple[SensorSpec, ...]:
-        return (
-            self.cameras
-            + (self.lidar, self.gnss, self.imu)
-            + self.radars
-            + self.ultrasonics
-        )
+    def all_specs(self):
+        """Kayıt modunda açılacak bütün sensörleri verir."""
+        return self.cameras + (self.lidar, self.gnss, self.imu) + self.radars
 
     @property
-    def sensor_names(self) -> List[str]:
-        return [spec.name for spec in self.all_specs]
+    def sensor_names(self):
+        return [sensor.name for sensor in self.all_specs]
 
     @property
-    def control_specs(self) -> Tuple[SensorSpec, ...]:
-        """Sensors required by the live controller and perception viewer."""
-        primary_camera = next(camera for camera in self.cameras if camera.primary)
+    def control_specs(self):
+        """Canlı araç kontrolünün gerçekten kullandığı iki sensörü verir."""
+        primary_camera = None
+        for camera in self.cameras:
+            if camera.primary:
+                primary_camera = camera
+                break
+
+        if primary_camera is None:
+            raise RuntimeError("Birincil kamera tanımlanmamış.")
+
         return primary_camera, self.front_radar
 
     @property
-    def front_radar(self) -> SensorSpec:
-        return next(radar for radar in self.radars if radar.name == "radar_front_long")
+    def front_radar(self):
+        for radar in self.radars:
+            if radar.name == "radar_front_long":
+                return radar
+        raise RuntimeError("Ön uzun menzil radarı tanımlanmamış.")
 
     @property
-    def front_radar_geometry(self) -> Dict[str, float]:
-        """Geometry needed to reject radar rays that intersect the road."""
+    def front_radar_geometry(self):
+        """Zemin dönüşlerini elemek için gereken radar yüksekliğini verir."""
         bottom_z = (
             self.vehicle_geometry["bounding_box_center_z_m"]
             - self.vehicle_geometry["half_height_m"]
@@ -84,14 +107,14 @@ class SensorLayout:
         }
 
     @property
-    def primary_camera_name(self) -> str:
+    def primary_camera_name(self):
         for camera in self.cameras:
             if camera.primary:
                 return camera.name
+        raise RuntimeError("Birincil kamera tanımlanmamış.")
 
-        raise RuntimeError("Birincil kamera tanimlanmamis.")
-
-    def to_manifest(self, vehicle_type_id: str) -> Dict[str, object]:
+    def to_manifest(self, vehicle_type_id):
+        """Sensör yerleşimini veri kaydının kalibrasyon dosyasına hazırlar."""
         return {
             "profile": "cost_effective_360_research_vehicle_v1",
             "vehicle_type_id": vehicle_type_id,
@@ -107,47 +130,27 @@ class SensorLayout:
                 "cameras": len(self.cameras),
                 "lidars": 1,
                 "automotive_radars": len(self.radars),
-                "ultrasonics": len(self.ultrasonics),
                 "gnss": 1,
                 "imu": 1,
                 "total": len(self.all_specs),
             },
-            "simulation_note": (
-                "CARLA'da yerlesik ultrasonik blueprint bulunmadigi icin fiziksel "
-                "ultrasonikler, 4.5 m menzilli dusuk yogunluklu radar konileriyle "
-                "simule edilmistir."
-            ),
-            "sensors": [spec.to_dict() for spec in self.all_specs],
+            "sensors": [sensor.to_dict() for sensor in self.all_specs],
         }
 
 
-def _transform(
-    x: float,
-    y: float,
-    z: float,
-    yaw: float = 0.0,
-    pitch: float = 0.0,
-    roll: float = 0.0,
-) -> carla.Transform:
-    return carla.Transform(
-        carla.Location(
-            x=float(x),
-            y=float(y),
-            z=float(z),
-        ),
-        carla.Rotation(
-            roll=float(roll),
-            pitch=float(pitch),
-            yaw=float(yaw),
-        ),
+def make_transform(x, y, z, yaw=0.0, pitch=0.0, roll=0.0):
+    """Araç merkezine göre verilen değerlerden CARLA dönüşümü oluşturur."""
+    location = carla.Location(x=float(x), y=float(y), z=float(z))
+    rotation = carla.Rotation(
+        roll=float(roll),
+        pitch=float(pitch),
+        yaw=float(yaw),
     )
+    return carla.Transform(location, rotation)
 
 
-def _camera_attributes(
-    width: int,
-    height: int,
-    fov: float,
-) -> Dict[str, str]:
+def camera_attributes(width, height, fov):
+    """Bütün RGB kameraların ortak CARLA ayarları."""
     return {
         "image_size_x": str(int(width)),
         "image_size_y": str(int(height)),
@@ -159,198 +162,195 @@ def _camera_attributes(
     }
 
 
-def _radar_attributes(
-    horizontal_fov: float,
-    vertical_fov: float,
-    sensor_range: float,
-    points_per_second: int,
-) -> Dict[str, str]:
+def radar_attributes(horizontal_fov, vertical_fov, sensor_range, point_count):
+    """Bütün radarların ortak CARLA ayarları."""
     return {
         "horizontal_fov": f"{float(horizontal_fov):.1f}",
         "vertical_fov": f"{float(vertical_fov):.1f}",
         "range": f"{float(sensor_range):.1f}",
-        "points_per_second": str(int(points_per_second)),
+        "points_per_second": str(int(point_count)),
         "sensor_tick": "0.0",
     }
 
 
+def make_camera(
+    name,
+    x,
+    y,
+    z,
+    yaw,
+    pitch,
+    fov,
+    width,
+    height,
+    physical_sensor,
+    primary=False,
+):
+    """Tekrarlanan kamera tanımlarını açık ve kısa biçimde oluşturur."""
+    return SensorSpec(
+        name=name,
+        kind="camera",
+        blueprint_id="sensor.camera.rgb",
+        transform=make_transform(x, y, z, yaw=yaw, pitch=pitch),
+        attributes=camera_attributes(width, height, fov),
+        physical_sensor=physical_sensor,
+        primary=primary,
+    )
+
+
+def make_radar(
+    name,
+    x,
+    y,
+    z,
+    yaw,
+    pitch,
+    horizontal_fov,
+    vertical_fov,
+    sensor_range,
+    point_count,
+    physical_sensor,
+):
+    """Tekrarlanan radar tanımlarını açık ve kısa biçimde oluşturur."""
+    return SensorSpec(
+        name=name,
+        kind="radar",
+        blueprint_id="sensor.other.radar",
+        transform=make_transform(x, y, z, yaw=yaw, pitch=pitch),
+        attributes=radar_attributes(
+            horizontal_fov,
+            vertical_fov,
+            sensor_range,
+            point_count,
+        ),
+        physical_sensor=physical_sensor,
+    )
+
+
 def build_sensor_layout(
     vehicle,
-    camera_width: int,
-    camera_height: int,
-    front_wide_fov: float,
-    fixed_delta_seconds: float,
-) -> SensorLayout:
+    camera_width,
+    camera_height,
+    front_wide_fov,
+    fixed_delta_seconds,
+):
+    """Araç boyutunu okuyup bütün sensörlerin yerleşimini oluşturur."""
+    if fixed_delta_seconds <= 0.0:
+        raise ValueError("Sensör zaman adımı sıfırdan büyük olmalı.")
+
     box = vehicle.bounding_box
     center = box.location
     extent = box.extent
 
-    # CARLA bounding-box extent değerleri yarı boyutlardır.
+    # CARLA extent değerleri tam boy değil, aracın yarı boyutlarıdır.
     half_length = max(float(extent.x), 1.50)
     half_width = max(float(extent.y), 0.70)
     half_height = max(float(extent.z), 0.50)
 
     front_x = float(center.x) + half_length + 0.05
     rear_x = float(center.x) - half_length - 0.05
-
     left_y = float(center.y) - half_width - 0.04
     right_y = float(center.y) + half_width + 0.04
-
     bottom_z = float(center.z) - half_height
     top_z = float(center.z) + half_height
 
     windshield_x = float(center.x) + 0.42 * half_length
     windshield_z = top_z - 0.08
-
     side_camera_z = float(center.z) + 0.45 * half_height
     rear_camera_z = float(center.z) + 0.25 * half_height
-
-    bumper_z = bottom_z + min(
-        0.55,
-        max(0.38, 0.52 * half_height),
-    )
-
-    # Uzun menzil radari birkac metre ondeki yolu degil, ufka yakin arac
-    # govdelerini gormelidir. Kaput seviyesine yerlestirilir ve hafif yukari
-    # bakar. Yukseklik secilen aracin boyutuna gore otomatik hesaplanir.
-    front_radar_height_above_ground = min(
-        1.15,
-        max(0.85, 0.70 * (2.0 * half_height)),
-    )
-    front_radar_z = bottom_z + front_radar_height_above_ground
-
+    bumper_z = bottom_z + min(0.55, max(0.38, 0.52 * half_height))
     roof_z = top_z + 0.16
 
-    surround_fov = 100.0
-    rear_fov = 110.0
+    # Ön radar kaput seviyesinde ve iki derece yukarı bakar. Bu yerleşim,
+    # aracın hemen önündeki yol yüzeyinden gelen yanlış dönüşleri azaltır.
+    front_radar_height = min(1.15, max(0.85, 0.70 * (2.0 * half_height)))
+    front_radar_z = bottom_z + front_radar_height
 
     cameras = (
-        SensorSpec(
-            name="camera_front_wide",
-            kind="camera",
-            blueprint_id="sensor.camera.rgb",
-            transform=_transform(
-                windshield_x,
-                float(center.y),
-                windshield_z,
-                yaw=0.0,
-                pitch=-4.0,
-            ),
-            attributes=_camera_attributes(
-                camera_width,
-                camera_height,
-                front_wide_fov,
-            ),
-            physical_sensor="2 MP HDR wide-angle automotive camera",
+        make_camera(
+            "camera_front_wide",
+            windshield_x,
+            center.y,
+            windshield_z,
+            yaw=0.0,
+            pitch=-4.0,
+            fov=front_wide_fov,
+            width=camera_width,
+            height=camera_height,
+            physical_sensor="2 MP HDR geniş açılı otomotiv kamerası",
             primary=True,
         ),
-        SensorSpec(
-            name="camera_front_narrow",
-            kind="camera",
-            blueprint_id="sensor.camera.rgb",
-            transform=_transform(
-                windshield_x + 0.02,
-                float(center.y),
-                windshield_z + 0.02,
-                yaw=0.0,
-                pitch=-2.0,
-            ),
-            attributes=_camera_attributes(
-                camera_width,
-                camera_height,
-                50.0,
-            ),
-            physical_sensor="2 MP HDR long-range narrow camera",
+        make_camera(
+            "camera_front_narrow",
+            windshield_x + 0.02,
+            center.y,
+            windshield_z + 0.02,
+            yaw=0.0,
+            pitch=-2.0,
+            fov=50.0,
+            width=camera_width,
+            height=camera_height,
+            physical_sensor="2 MP HDR uzun menzil ön kamerası",
         ),
-        SensorSpec(
-            name="camera_front_left",
-            kind="camera",
-            blueprint_id="sensor.camera.rgb",
-            transform=_transform(
-                float(center.x) + 0.48 * half_length,
-                left_y,
-                side_camera_z,
-                yaw=-60.0,
-                pitch=-4.0,
-            ),
-            attributes=_camera_attributes(
-                camera_width,
-                camera_height,
-                surround_fov,
-            ),
-            physical_sensor="2 MP HDR surround camera",
+        make_camera(
+            "camera_front_left",
+            center.x + 0.48 * half_length,
+            left_y,
+            side_camera_z,
+            yaw=-60.0,
+            pitch=-4.0,
+            fov=100.0,
+            width=camera_width,
+            height=camera_height,
+            physical_sensor="2 MP HDR çevre görüş kamerası",
         ),
-        SensorSpec(
-            name="camera_front_right",
-            kind="camera",
-            blueprint_id="sensor.camera.rgb",
-            transform=_transform(
-                float(center.x) + 0.48 * half_length,
-                right_y,
-                side_camera_z,
-                yaw=60.0,
-                pitch=-4.0,
-            ),
-            attributes=_camera_attributes(
-                camera_width,
-                camera_height,
-                surround_fov,
-            ),
-            physical_sensor="2 MP HDR surround camera",
+        make_camera(
+            "camera_front_right",
+            center.x + 0.48 * half_length,
+            right_y,
+            side_camera_z,
+            yaw=60.0,
+            pitch=-4.0,
+            fov=100.0,
+            width=camera_width,
+            height=camera_height,
+            physical_sensor="2 MP HDR çevre görüş kamerası",
         ),
-        SensorSpec(
-            name="camera_rear_left",
-            kind="camera",
-            blueprint_id="sensor.camera.rgb",
-            transform=_transform(
-                float(center.x) - 0.38 * half_length,
-                left_y,
-                side_camera_z,
-                yaw=-120.0,
-                pitch=-4.0,
-            ),
-            attributes=_camera_attributes(
-                camera_width,
-                camera_height,
-                surround_fov,
-            ),
-            physical_sensor="2 MP HDR surround camera",
+        make_camera(
+            "camera_rear_left",
+            center.x - 0.38 * half_length,
+            left_y,
+            side_camera_z,
+            yaw=-120.0,
+            pitch=-4.0,
+            fov=100.0,
+            width=camera_width,
+            height=camera_height,
+            physical_sensor="2 MP HDR çevre görüş kamerası",
         ),
-        SensorSpec(
-            name="camera_rear_right",
-            kind="camera",
-            blueprint_id="sensor.camera.rgb",
-            transform=_transform(
-                float(center.x) - 0.38 * half_length,
-                right_y,
-                side_camera_z,
-                yaw=120.0,
-                pitch=-4.0,
-            ),
-            attributes=_camera_attributes(
-                camera_width,
-                camera_height,
-                surround_fov,
-            ),
-            physical_sensor="2 MP HDR surround camera",
+        make_camera(
+            "camera_rear_right",
+            center.x - 0.38 * half_length,
+            right_y,
+            side_camera_z,
+            yaw=120.0,
+            pitch=-4.0,
+            fov=100.0,
+            width=camera_width,
+            height=camera_height,
+            physical_sensor="2 MP HDR çevre görüş kamerası",
         ),
-        SensorSpec(
-            name="camera_rear_center",
-            kind="camera",
-            blueprint_id="sensor.camera.rgb",
-            transform=_transform(
-                rear_x,
-                float(center.y),
-                rear_camera_z,
-                yaw=180.0,
-                pitch=-5.0,
-            ),
-            attributes=_camera_attributes(
-                camera_width,
-                camera_height,
-                rear_fov,
-            ),
-            physical_sensor="2 MP HDR rear camera",
+        make_camera(
+            "camera_rear_center",
+            rear_x,
+            center.y,
+            rear_camera_z,
+            yaw=180.0,
+            pitch=-5.0,
+            fov=110.0,
+            width=camera_width,
+            height=camera_height,
+            physical_sensor="2 MP HDR arka görüş kamerası",
         ),
     )
 
@@ -358,32 +358,28 @@ def build_sensor_layout(
         name="lidar_roof",
         kind="lidar",
         blueprint_id="sensor.lidar.ray_cast",
-        transform=_transform(
-            float(center.x),
-            float(center.y),
-            roof_z,
-        ),
+        transform=make_transform(center.x, center.y, roof_z),
         attributes={
             "channels": "32",
             "range": "80.0",
             "points_per_second": "560000",
-            "rotation_frequency": (f"{1.0 / fixed_delta_seconds:.3f}"),
+            "rotation_frequency": f"{1.0 / fixed_delta_seconds:.3f}",
             "upper_fov": "10.0",
             "lower_fov": "-25.0",
             "horizontal_fov": "360.0",
             "sensor_tick": "0.0",
             "dropoff_general_rate": "0.10",
         },
-        physical_sensor=("single 360-degree 32-channel roof LiDAR"),
+        physical_sensor="Tavan tipi 32 kanallı 360 derece LiDAR",
     )
 
     gnss = SensorSpec(
         name="gnss_roof",
         kind="gnss",
         blueprint_id="sensor.other.gnss",
-        transform=_transform(
-            float(center.x) - 0.10 * half_length,
-            float(center.y),
+        transform=make_transform(
+            center.x - 0.10 * half_length,
+            center.y,
             roof_z + 0.06,
         ),
         attributes={
@@ -393,18 +389,14 @@ def build_sensor_layout(
             "noise_alt_stddev": "0.10",
             "noise_seed": "41",
         },
-        physical_sensor=("multi-band RTK-capable GNSS antenna/receiver"),
+        physical_sensor="Çok bantlı RTK destekli GNSS alıcısı",
     )
 
     imu = SensorSpec(
         name="imu_cg",
         kind="imu",
         blueprint_id="sensor.other.imu",
-        transform=_transform(
-            float(center.x),
-            float(center.y),
-            float(center.z) - 0.15 * half_height,
-        ),
+        transform=make_transform(center.x, center.y, center.z - 0.15 * half_height),
         attributes={
             "sensor_tick": "0.0",
             "noise_accel_stddev_x": "0.02",
@@ -415,201 +407,78 @@ def build_sensor_layout(
             "noise_gyro_stddev_z": "0.001",
             "noise_seed": "43",
         },
-        physical_sensor=("automotive six-axis IMU near vehicle center of gravity"),
+        physical_sensor="Araç ağırlık merkezine yakın altı eksenli IMU",
     )
 
     radars = (
-        SensorSpec(
-            name="radar_front_long",
-            kind="radar",
-            blueprint_id="sensor.other.radar",
-            transform=_transform(
-                front_x,
-                float(center.y),
-                front_radar_z,
-                yaw=0.0,
-                pitch=2.0,
-            ),
-            attributes=_radar_attributes(
-                horizontal_fov=30.0,
-                vertical_fov=6.0,
-                sensor_range=150.0,
-                points_per_second=6000,
-            ),
-            physical_sensor="front 77 GHz long-range radar",
+        make_radar(
+            "radar_front_long",
+            front_x,
+            center.y,
+            front_radar_z,
+            yaw=0.0,
+            pitch=2.0,
+            horizontal_fov=30.0,
+            vertical_fov=6.0,
+            sensor_range=150.0,
+            point_count=6000,
+            physical_sensor="Ön 77 GHz uzun menzil radarı",
         ),
-        SensorSpec(
-            name="radar_front_left",
-            kind="radar",
-            blueprint_id="sensor.other.radar",
-            transform=_transform(
-                float(center.x) + 0.88 * half_length,
-                float(center.y) - 0.88 * half_width,
-                bumper_z,
-                yaw=-45.0,
-            ),
-            attributes=_radar_attributes(
-                horizontal_fov=100.0,
-                vertical_fov=20.0,
-                sensor_range=70.0,
-                points_per_second=3500,
-            ),
-            physical_sensor=("front-left 77 GHz corner radar"),
+        make_radar(
+            "radar_front_left",
+            center.x + 0.88 * half_length,
+            center.y - 0.88 * half_width,
+            bumper_z,
+            yaw=-45.0,
+            pitch=0.0,
+            horizontal_fov=100.0,
+            vertical_fov=20.0,
+            sensor_range=70.0,
+            point_count=3500,
+            physical_sensor="Ön sol 77 GHz köşe radarı",
         ),
-        SensorSpec(
-            name="radar_front_right",
-            kind="radar",
-            blueprint_id="sensor.other.radar",
-            transform=_transform(
-                float(center.x) + 0.88 * half_length,
-                float(center.y) + 0.88 * half_width,
-                bumper_z,
-                yaw=45.0,
-            ),
-            attributes=_radar_attributes(
-                horizontal_fov=100.0,
-                vertical_fov=20.0,
-                sensor_range=70.0,
-                points_per_second=3500,
-            ),
-            physical_sensor=("front-right 77 GHz corner radar"),
+        make_radar(
+            "radar_front_right",
+            center.x + 0.88 * half_length,
+            center.y + 0.88 * half_width,
+            bumper_z,
+            yaw=45.0,
+            pitch=0.0,
+            horizontal_fov=100.0,
+            vertical_fov=20.0,
+            sensor_range=70.0,
+            point_count=3500,
+            physical_sensor="Ön sağ 77 GHz köşe radarı",
         ),
-        SensorSpec(
-            name="radar_rear_left",
-            kind="radar",
-            blueprint_id="sensor.other.radar",
-            transform=_transform(
-                float(center.x) - 0.88 * half_length,
-                float(center.y) - 0.88 * half_width,
-                bumper_z,
-                yaw=-135.0,
-            ),
-            attributes=_radar_attributes(
-                horizontal_fov=100.0,
-                vertical_fov=20.0,
-                sensor_range=70.0,
-                points_per_second=3500,
-            ),
-            physical_sensor=("rear-left 77 GHz corner radar"),
+        make_radar(
+            "radar_rear_left",
+            center.x - 0.88 * half_length,
+            center.y - 0.88 * half_width,
+            bumper_z,
+            yaw=-135.0,
+            pitch=0.0,
+            horizontal_fov=100.0,
+            vertical_fov=20.0,
+            sensor_range=70.0,
+            point_count=3500,
+            physical_sensor="Arka sol 77 GHz köşe radarı",
         ),
-        SensorSpec(
-            name="radar_rear_right",
-            kind="radar",
-            blueprint_id="sensor.other.radar",
-            transform=_transform(
-                float(center.x) - 0.88 * half_length,
-                float(center.y) + 0.88 * half_width,
-                bumper_z,
-                yaw=135.0,
-            ),
-            attributes=_radar_attributes(
-                horizontal_fov=100.0,
-                vertical_fov=20.0,
-                sensor_range=70.0,
-                points_per_second=3500,
-            ),
-            physical_sensor=("rear-right 77 GHz corner radar"),
+        make_radar(
+            "radar_rear_right",
+            center.x - 0.88 * half_length,
+            center.y + 0.88 * half_width,
+            bumper_z,
+            yaw=135.0,
+            pitch=0.0,
+            horizontal_fov=100.0,
+            vertical_fov=20.0,
+            sensor_range=70.0,
+            point_count=3500,
+            physical_sensor="Arka sağ 77 GHz köşe radarı",
         ),
     )
 
-    ultrasonic_positions = (
-        (
-            "ultrasonic_front_left_outer",
-            front_x,
-            -0.90,
-            -70.0,
-        ),
-        (
-            "ultrasonic_front_left_corner",
-            front_x,
-            -0.55,
-            -40.0,
-        ),
-        (
-            "ultrasonic_front_left_center",
-            front_x,
-            -0.20,
-            -15.0,
-        ),
-        (
-            "ultrasonic_front_right_center",
-            front_x,
-            0.20,
-            15.0,
-        ),
-        (
-            "ultrasonic_front_right_corner",
-            front_x,
-            0.55,
-            40.0,
-        ),
-        (
-            "ultrasonic_front_right_outer",
-            front_x,
-            0.90,
-            70.0,
-        ),
-        (
-            "ultrasonic_rear_left_outer",
-            rear_x,
-            -0.90,
-            -110.0,
-        ),
-        (
-            "ultrasonic_rear_left_corner",
-            rear_x,
-            -0.55,
-            -140.0,
-        ),
-        (
-            "ultrasonic_rear_left_center",
-            rear_x,
-            -0.20,
-            -165.0,
-        ),
-        (
-            "ultrasonic_rear_right_center",
-            rear_x,
-            0.20,
-            165.0,
-        ),
-        (
-            "ultrasonic_rear_right_corner",
-            rear_x,
-            0.55,
-            140.0,
-        ),
-        (
-            "ultrasonic_rear_right_outer",
-            rear_x,
-            0.90,
-            110.0,
-        ),
-    )
-
-    ultrasonics = tuple(
-        SensorSpec(
-            name=name,
-            kind="ultrasonic",
-            blueprint_id="sensor.other.radar",
-            transform=_transform(
-                x,
-                float(center.y) + y_ratio * half_width,
-                bumper_z - 0.05,
-                yaw=yaw,
-            ),
-            attributes=_radar_attributes(
-                horizontal_fov=50.0,
-                vertical_fov=24.0,
-                sensor_range=4.5,
-                points_per_second=450,
-            ),
-            physical_sensor=("40 kHz parking ultrasonic transducer"),
-        )
-        for name, x, y_ratio, yaw in ultrasonic_positions
-    )
-
-    geometry = {
+    vehicle_geometry = {
         "bounding_box_center_x_m": float(center.x),
         "bounding_box_center_y_m": float(center.y),
         "bounding_box_center_z_m": float(center.z),
@@ -627,6 +496,5 @@ def build_sensor_layout(
         gnss=gnss,
         imu=imu,
         radars=radars,
-        ultrasonics=ultrasonics,
-        vehicle_geometry=geometry,
+        vehicle_geometry=vehicle_geometry,
     )

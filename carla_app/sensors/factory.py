@@ -1,40 +1,24 @@
-from typing import Dict, List
+"""Sensör tanımlarını CARLA aktörlerine dönüştürür ve veriyi yönlendirir."""
 
 import carla
 
-from carla_app.sensors.layout import (
-    SensorLayout,
-    SensorSpec,
-)
 from carla_app.sensors.processors import image_to_rgb, radar_to_list
 
 
-def _set_supported_attributes(
-    blueprint,
-    attributes: Dict[str, str],
-) -> None:
+def set_supported_attributes(blueprint, attributes):
+    """Yalnızca CARLA planının desteklediği sensör ayarlarını uygular."""
     for name, value in attributes.items():
         if blueprint.has_attribute(name):
             blueprint.set_attribute(name, str(value))
 
 
-def _spawn_actor(
-    world,
-    vehicle,
-    spec: SensorSpec,
-):
+def spawn_sensor(world, vehicle, spec):
+    """Bir sensörü araca sabit biçimde bağlar."""
     blueprint = world.get_blueprint_library().find(spec.blueprint_id)
-
-    _set_supported_attributes(
-        blueprint,
-        spec.attributes,
-    )
+    set_supported_attributes(blueprint, spec.attributes)
 
     if blueprint.has_attribute("role_name"):
-        blueprint.set_attribute(
-            "role_name",
-            spec.name,
-        )
+        blueprint.set_attribute("role_name", spec.name)
 
     return world.spawn_actor(
         blueprint,
@@ -44,85 +28,64 @@ def _spawn_actor(
     )
 
 
-def _listen(
-    actor,
-    spec: SensorSpec,
-    sync,
-    camera_stream,
-    radar_stream,
-) -> None:
+def start_sensor_listener(actor, spec, sync, camera_stream, radar_stream):
+    """Sensör verisini kamera, radar veya kayıt akışına gönderir."""
     if spec.kind == "camera":
 
         def camera_callback(image):
             if sync is not None:
                 sync.push(spec.name, image.frame, image)
-
             if spec.primary:
-                camera_stream.push(
-                    image.frame,
-                    image_to_rgb(image),
-                )
+                camera_stream.push(image.frame, image_to_rgb(image))
 
         actor.listen(camera_callback)
         return
 
     if spec.kind == "radar":
 
-        def radar_callback(data, sensor_name=spec.name):
+        def radar_callback(data):
             if sync is not None:
-                sync.push(sensor_name, data.frame, data)
-            radar_stream.push(
-                sensor_name,
-                data.frame,
-                radar_to_list(data),
-            )
+                sync.push(spec.name, data.frame, data)
+            radar_stream.push(spec.name, data.frame, radar_to_list(data))
 
         actor.listen(radar_callback)
         return
 
     if sync is not None:
-        actor.listen(
-            lambda data, sensor_name=spec.name: sync.push(
-                sensor_name,
-                data.frame,
-                data,
-            )
-        )
+
+        def recording_callback(data):
+            sync.push(spec.name, data.frame, data)
+
+        actor.listen(recording_callback)
 
 
 def spawn_layout(
     world,
     vehicle,
-    layout: SensorLayout,
+    layout,
     sync,
     camera_stream,
     radar_stream,
     specs=None,
-) -> List[object]:
+):
+    """Seçilen sensörleri oluşturur; hata olursa oluşturulanları temizler."""
     actors = []
 
     try:
         active_specs = layout.all_specs if specs is None else tuple(specs)
 
         for spec in active_specs:
-            actor = _spawn_actor(
-                world,
-                vehicle,
-                spec,
-            )
-
-            _listen(
+            actor = spawn_sensor(world, vehicle, spec)
+            start_sensor_listener(
                 actor,
                 spec,
                 sync,
                 camera_stream,
                 radar_stream,
             )
-
             actors.append(actor)
-
             print(
-                f"[OK] Sensor: {spec.name:<32} "
+                f"[OK] Sensör: {spec.name:<32} "
                 f"tip={spec.kind:<10} "
                 f"blueprint={spec.blueprint_id}"
             )
@@ -135,10 +98,8 @@ def spawn_layout(
                 actor.stop()
             except Exception:
                 pass
-
             try:
                 actor.destroy()
             except Exception:
                 pass
-
         raise

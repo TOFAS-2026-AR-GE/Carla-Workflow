@@ -95,6 +95,7 @@ class CarlaApplication:
             )
 
             first_frame_id = None
+            previous_control_mode = None
             while True:
                 frame_id = world.tick()
                 if first_frame_id is None:
@@ -130,6 +131,11 @@ class CarlaApplication:
                 )
                 vehicle.apply_control(control)
                 update_spectator(world, vehicle)
+
+                current_mode = control_info["mode"]
+                if current_mode != previous_control_mode:
+                    print(self.control_event_message(frame_id, control_info))
+                    previous_control_mode = current_mode
 
                 if self.settings.enable_data_recording:
                     sensors.save_if_needed(
@@ -227,6 +233,11 @@ class CarlaApplication:
             f"{int(radar_diagnostics.get('usable_points', 0))}@{radar_frame_id}"
         )
 
+        radar_age = radar_diagnostics.get("frame_age")
+        message += f" radar_age={radar_age if radar_age is not None else '-'}"
+        if not radar_diagnostics.get("fresh", False):
+            message += " radar_stale"
+
         ground_rejected = int(radar_diagnostics.get("ground_rejected", 0))
         if ground_rejected:
             message += f" ground={ground_rejected}"
@@ -238,6 +249,9 @@ class CarlaApplication:
             f" cte={cross_track_error:+.2f}m"
             f" heading={math.degrees(heading_error):+.1f}deg"
         )
+
+        speed_plan = control_info.get("speed_plan", {})
+        message += f" speed_reason={speed_plan.get('speed_reason', 'unknown')}"
 
         if lead_vehicle is not None:
             message += (
@@ -253,9 +267,43 @@ class CarlaApplication:
         emergency_obstacle = control_info.get("emergency_obstacle")
         if emergency_obstacle is not None:
             message += f" aeb_radar={float(emergency_obstacle['distance_m']):.1f}m"
+        safety = control_info.get("safety", {})
+        if safety.get("hazard_count", 0):
+            ttc = safety.get("ttc_s")
+            message += (
+                f" aeb={safety.get('reason')}"
+                f"/{safety.get('target_source')}"
+                f" count={safety.get('hazard_count')}"
+                f" sensor_frame={safety.get('measurement_frame_id')}"
+            )
+            if ttc is not None and math.isfinite(float(ttc)):
+                message += f" ttc={float(ttc):.2f}s"
         if errors:
             message += f" detector_errors={','.join(sorted(errors))}"
 
+        return message
+
+    def control_event_message(self, frame_id, control_info):
+        """Kontrol modunun neden degistigini tek, okunakli satirda anlatir."""
+        mode = control_info["mode"]
+        message = f"[CONTROL] frame={frame_id} mode={mode}"
+        if mode == "EMERGENCY":
+            safety = control_info.get("safety", {})
+            message += (
+                f" reason={safety.get('reason')}"
+                f" source={safety.get('target_source')}"
+                f" distance={safety.get('distance_m')}m"
+                f" sensor_frame={safety.get('measurement_frame_id')}"
+            )
+        elif mode in ("FOLLOW", "HOLD", "LEAD_FAR", "RESTART"):
+            lead = control_info.get("longitudinal_lead") or {}
+            message += (
+                f" source={lead.get('source', 'unknown')}"
+                f" distance={lead.get('distance_m')}m"
+            )
+        else:
+            speed_plan = control_info.get("speed_plan", {})
+            message += f" speed_reason={speed_plan.get('speed_reason', 'unknown')}"
         return message
 
     def cleanup(self, name, instance, method_name):

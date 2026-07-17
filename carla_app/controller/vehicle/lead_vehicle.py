@@ -72,6 +72,7 @@ class LeadVehicleTracker:
         self.radar_candidate_ticks = 0
         self.last_radar_lead = None
         self.radar_missing_ticks = 0
+        self.last_direct_radar_frame_id = None
         self.emergency_obstacle = None
 
     def update(
@@ -82,7 +83,18 @@ class LeadVehicleTracker:
         radar_frame_id,
         radar_points,
     ):
+        radar_age_frames = self.frame_age(current_frame_id, radar_frame_id)
+        maximum_radar_age = max(2, int(round(0.20 / self.dt)))
+        radar_is_fresh = (
+            radar_age_frames is not None
+            and 0 <= radar_age_frames <= maximum_radar_age
+        )
+        if not radar_is_fresh:
+            radar_points = []
+
         radar_points = self.filter_ground_returns(radar_points)
+        self.radar_diagnostics["frame_age"] = radar_age_frames
+        self.radar_diagnostics["fresh"] = radar_is_fresh
         measurements = self.build_camera_radar_measurements(
             current_frame_id=current_frame_id,
             state=state,
@@ -92,12 +104,22 @@ class LeadVehicleTracker:
         )
         tracks = self.tracker.step(self.dt, measurements)
         tracked_lead = self.select_tracked_lead(tracks, state)
-        radar_lead = self.select_direct_radar_lead(radar_points, state)
+        radar_lead = self.select_direct_radar_lead(
+            radar_points,
+            state,
+            radar_frame_id,
+        )
         self.emergency_obstacle = self.select_emergency_radar_obstacle(
             radar_points,
             state,
+            radar_frame_id,
         )
         return self.choose_safest_lead(tracked_lead, radar_lead)
+
+    def frame_age(self, current_frame_id, measurement_frame_id):
+        if measurement_frame_id is None:
+            return None
+        return int(current_frame_id) - int(measurement_frame_id)
 
     def get_radar_diagnostics(self):
         return dict(self.radar_diagnostics)
@@ -214,6 +236,7 @@ class LeadVehicleTracker:
                     "range_m": range_m,
                     "bearing_deg": bearing_deg,
                     "relative_velocity_mps": detection.get("relative_velocity_mps"),
+                    "measurement_frame_id": int(radar_frame_id),
                 }
             )
 
@@ -250,13 +273,28 @@ class LeadVehicleTracker:
                     "relative_speed_mps": float(relative_speed),
                     "source": "camera_radar_track",
                     "radar_points": None,
+                    "measurement_frame_id": track.last_measurement_frame_id,
                 }
             )
 
         return self.select_with_hysteresis(candidates)
 
-    def select_direct_radar_lead(self, radar_points, state):
-        candidates = self.radar_candidates(radar_points, state)
+    def select_direct_radar_lead(self, radar_points, state, radar_frame_id):
+        if radar_frame_id is None:
+            return self.hold_last_radar_lead()
+
+        radar_frame_id = int(radar_frame_id)
+        if radar_frame_id == self.last_direct_radar_frame_id:
+            # Ayni sensor karesi ikinci bir kanit degildir. Kisa callback
+            # gecikmesinde son hedefi fizik modeliyle bir tick ilerletiriz.
+            return self.hold_last_radar_lead()
+
+        self.last_direct_radar_frame_id = radar_frame_id
+        candidates = self.radar_candidates(
+            radar_points,
+            state,
+            radar_frame_id,
+        )
         raw_candidate = min(
             candidates,
             key=lambda item: item["distance_m"],
@@ -290,7 +328,7 @@ class LeadVehicleTracker:
         self.radar_missing_ticks = 0
         return lead
 
-    def radar_candidates(self, radar_points, state):
+    def radar_candidates(self, radar_points, state, radar_frame_id):
         candidates = []
         ego_location = state["location"]
 
@@ -344,12 +382,18 @@ class LeadVehicleTracker:
                     "source": "radar_direct",
                     "radar_points": len(cluster),
                     "bearing_deg": float(bearing_deg),
+                    "measurement_frame_id": int(radar_frame_id),
                 }
             )
 
         return candidates
 
-    def select_emergency_radar_obstacle(self, radar_points, state):
+    def select_emergency_radar_obstacle(
+        self,
+        radar_points,
+        state,
+        radar_frame_id,
+    ):
         """Kamera veya radar kumesi kacirsa bile AEB yolunu acik tutar."""
         ego_speed = max(0.0, float(state.get("speed_mps", 0.0)))
         ego_location = state["location"]
@@ -412,6 +456,9 @@ class LeadVehicleTracker:
                     "radar_points": 1,
                     "bearing_deg": float(azimuth),
                     "ttc_s": float(ttc),
+                    "measurement_frame_id": (
+                        int(radar_frame_id) if radar_frame_id is not None else None
+                    ),
                 }
             )
 

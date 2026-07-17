@@ -19,6 +19,9 @@ class CurvatureSpeedPlanner:
         )
         self.maximum_lateral_acceleration_mps2 = 2.0
         self.maximum_speed_increase_mps2 = 1.5
+        self.maximum_speed_decrease_mps2 = 3.0
+        self.recovery_confirmation_ticks = max(2, int(round(0.15 / self.dt)))
+        self.recovery_evidence_ticks = 0
         self.previous_target_speed_mps = self.cruise_speed_mps
 
     def run_step(self, state, lateral_info=None):
@@ -33,17 +36,36 @@ class CurvatureSpeedPlanner:
             self.cruise_speed_mps,
         )
 
-        recovery_speed = self.calculate_lane_recovery_speed(state, lateral_info)
+        requested_recovery_speed = self.calculate_lane_recovery_speed(
+            state,
+            lateral_info,
+        )
+        if requested_recovery_speed is None:
+            self.recovery_evidence_ticks = max(0, self.recovery_evidence_ticks - 1)
+        else:
+            self.recovery_evidence_ticks += 1
+
+        recovery_speed = None
+        if self.recovery_evidence_ticks >= self.recovery_confirmation_ticks:
+            recovery_speed = requested_recovery_speed
         if recovery_speed is not None:
             desired_speed = min(desired_speed, recovery_speed)
 
-        target_speed = self.limit_speed_increase(desired_speed)
+        target_speed = self.limit_speed_change(desired_speed)
         self.previous_target_speed_mps = target_speed
+        speed_reason = "cruise"
+        if curve_speed < self.cruise_speed_mps:
+            speed_reason = "curve"
+        if recovery_speed is not None and recovery_speed <= desired_speed:
+            speed_reason = "lane_recovery"
         return target_speed, {
             "curvature_1pm": float(curvature),
             "curve_speed_mps": float(curve_speed),
             "desired_speed_mps": float(desired_speed),
+            "requested_recovery_speed_mps": requested_recovery_speed,
             "recovery_speed_mps": recovery_speed,
+            "recovery_evidence_ticks": self.recovery_evidence_ticks,
+            "speed_reason": speed_reason,
         }
 
     def calculate_curve_speed(self, curvature):
@@ -127,13 +149,15 @@ class CurvatureSpeedPlanner:
         ) * (last.x - first.x)
         return 2.0 * twice_area / denominator
 
-    def limit_speed_increase(self, desired_speed):
+    def limit_speed_change(self, desired_speed):
         difference = desired_speed - self.previous_target_speed_mps
-        if difference <= 0.0:
-            # Viraj veya serit kenari bir guvenlik siniridir. Bu siniri
-            # gecikmeli vermek yerine hemen uygula; pedal yumusatmasini
-            # boylamsal kontrolcudeki jerk siniri zaten yapar.
-            return desired_speed
+        if difference >= 0.0:
+            maximum_change = self.maximum_speed_increase_mps2 * self.dt
+            return self.previous_target_speed_mps + min(difference, maximum_change)
 
-        maximum_change = self.maximum_speed_increase_mps2 * self.dt
-        return self.previous_target_speed_mps + min(difference, maximum_change)
+        maximum_change = self.maximum_speed_decrease_mps2 * self.dt
+        return self.previous_target_speed_mps + max(difference, -maximum_change)
+
+    def limit_speed_increase(self, desired_speed):
+        """Eski cagri adini kullanan kodlar icin geriye uyumluluk."""
+        return self.limit_speed_change(desired_speed)

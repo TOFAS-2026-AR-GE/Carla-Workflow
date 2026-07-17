@@ -136,9 +136,12 @@ class SpeedPlannerTests(unittest.TestCase):
         speed, info = planner.run_step(curved_state(radius_m=20.0))
         self.assertAlmostEqual(info["curvature_1pm"], 1.0 / 20.0, places=3)
         self.assertLess(info["desired_speed_mps"], planner.cruise_speed_mps)
-        self.assertAlmostEqual(speed, info["desired_speed_mps"])
+        expected = planner.cruise_speed_mps - (
+            planner.maximum_speed_decrease_mps2 * planner.dt
+        )
+        self.assertAlmostEqual(speed, expected)
 
-    def test_safety_speed_drop_is_not_delayed(self):
+    def test_one_lane_error_sample_does_not_drop_target_speed(self):
         planner = CurvatureSpeedPlanner(dt=0.05, cruise_speed_kmh=80.0)
         speed, info = planner.run_step(
             straight_state(speed_mps=15.0),
@@ -148,8 +151,9 @@ class SpeedPlannerTests(unittest.TestCase):
             },
         )
 
-        self.assertAlmostEqual(speed, 8.0 / 3.6)
-        self.assertEqual(speed, info["desired_speed_mps"])
+        self.assertAlmostEqual(speed, planner.cruise_speed_mps)
+        self.assertIsNone(info["recovery_speed_mps"])
+        self.assertAlmostEqual(info["requested_recovery_speed_mps"], 8.0 / 3.6)
 
     def test_high_speed_preview_sees_curve_beyond_thirty_five_metres(self):
         planner = CurvatureSpeedPlanner(dt=0.05, cruise_speed_kmh=80.0)
@@ -173,14 +177,17 @@ class SpeedPlannerTests(unittest.TestCase):
 
     def test_large_lane_error_sets_recovery_speed(self):
         planner = CurvatureSpeedPlanner(dt=0.05)
-        _, info = planner.run_step(
-            straight_state(speed_mps=8.0),
-            lateral_info={
-                "cross_track_error_m": 2.0,
-                "heading_error_rad": 0.0,
-            },
-        )
+        for _ in range(planner.recovery_confirmation_ticks):
+            speed, info = planner.run_step(
+                straight_state(speed_mps=8.0),
+                lateral_info={
+                    "cross_track_error_m": 2.0,
+                    "heading_error_rad": 0.0,
+                },
+            )
         self.assertAlmostEqual(info["recovery_speed_mps"], 8.0 / 3.6)
+        self.assertGreater(speed, info["recovery_speed_mps"])
+        self.assertEqual(info["speed_reason"], "lane_recovery")
 
 
 class LongitudinalControllerTests(unittest.TestCase):
@@ -468,6 +475,73 @@ class EmergencyBrakeTests(unittest.TestCase):
         self.assertTrue(emergency)
         self.assertEqual(info["target_source"], "camera_radar_track")
 
+    def test_same_raw_radar_frame_is_not_counted_twice(self):
+        supervisor = EmergencyBrakeSupervisor()
+        obstacle = {
+            "track_id": -2,
+            "distance_m": 6.0,
+            "relative_speed_mps": -8.0,
+            "bearing_deg": 0.0,
+            "source": "radar_emergency",
+            "measurement_frame_id": 10,
+        }
+
+        first_emergency, _ = supervisor.evaluate(obstacle)
+        second_emergency, info = supervisor.evaluate(obstacle)
+
+        self.assertFalse(first_emergency)
+        self.assertFalse(second_emergency)
+        self.assertEqual(info["hazard_count"], 1)
+        self.assertFalse(info["new_observation"])
+
+    def test_raw_radar_requires_two_new_frames_for_emergency(self):
+        supervisor = EmergencyBrakeSupervisor()
+        obstacle = {
+            "track_id": -2,
+            "distance_m": 6.0,
+            "relative_speed_mps": -8.0,
+            "bearing_deg": 0.0,
+            "source": "radar_emergency",
+            "measurement_frame_id": 10,
+        }
+        first_emergency, _ = supervisor.evaluate(obstacle)
+        obstacle["measurement_frame_id"] = 11
+        second_emergency, info = supervisor.evaluate(obstacle)
+
+        self.assertFalse(first_emergency)
+        self.assertTrue(second_emergency)
+        self.assertEqual(info["hazard_count"], 2)
+
+    def test_different_raw_points_do_not_build_one_hazard(self):
+        supervisor = EmergencyBrakeSupervisor()
+        first = {
+            "track_id": -2,
+            "distance_m": 6.0,
+            "relative_speed_mps": -8.0,
+            "bearing_deg": -5.0,
+            "source": "radar_emergency",
+            "measurement_frame_id": 10,
+        }
+        second = dict(first, bearing_deg=5.0, measurement_frame_id=11)
+        supervisor.evaluate(first)
+        emergency, info = supervisor.evaluate(second)
+
+        self.assertFalse(emergency)
+        self.assertEqual(info["hazard_count"], 1)
+
+    def test_physically_critical_raw_point_still_brakes_immediately(self):
+        supervisor = EmergencyBrakeSupervisor()
+        emergency, info = supervisor.evaluate(
+            {
+                "distance_m": 0.5,
+                "relative_speed_mps": -1.0,
+                "source": "radar_emergency",
+                "measurement_frame_id": 10,
+            }
+        )
+        self.assertTrue(emergency)
+        self.assertEqual(info["reason"], "critical_distance")
+
 
 class LeadVehicleTrackerTests(unittest.TestCase):
     def test_front_camera_and_radar_create_one_fused_track(self):
@@ -603,6 +677,45 @@ class LeadVehicleTrackerTests(unittest.TestCase):
         self.assertIsNotNone(second)
         self.assertEqual(second["source"], "radar_direct")
         self.assertAlmostEqual(second["relative_speed_mps"], -3.0)
+
+    def test_repeated_radar_frame_is_not_temporal_confirmation(self):
+        tracker = LeadVehicleTracker(0.05, 800, 90.0)
+        state = straight_state(speed_mps=8.0)
+        points = [
+            {
+                "depth_m": 20.0 + offset,
+                "azimuth_deg": offset,
+                "altitude_deg": 0.0,
+                "relative_velocity_mps": -3.0,
+            }
+            for offset in (-0.3, 0.0, 0.3)
+        ]
+
+        first = tracker.update(1, state, None, 1, points)
+        repeated = tracker.update(2, state, None, 1, points)
+        confirmed = tracker.update(3, state, None, 2, points)
+
+        self.assertIsNone(first)
+        self.assertIsNone(repeated)
+        self.assertIsNotNone(confirmed)
+
+    def test_stale_radar_frame_is_ignored(self):
+        tracker = LeadVehicleTracker(0.05, 800, 90.0)
+        state = straight_state(speed_mps=8.0)
+        points = [
+            {
+                "depth_m": 6.0,
+                "azimuth_deg": 0.0,
+                "altitude_deg": 0.0,
+                "relative_velocity_mps": -8.0,
+            }
+        ]
+
+        lead = tracker.update(20, state, None, 1, points)
+
+        self.assertIsNone(lead)
+        self.assertIsNone(tracker.get_emergency_obstacle())
+        self.assertFalse(tracker.get_radar_diagnostics()["fresh"])
 
     def test_adjacent_lane_radar_cluster_is_rejected(self):
         tracker = LeadVehicleTracker(0.05, 800, 90.0)

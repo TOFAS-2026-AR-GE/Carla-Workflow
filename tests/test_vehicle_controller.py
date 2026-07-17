@@ -68,14 +68,24 @@ class VehicleControllerIntegrationTests(unittest.TestCase):
             "distance_m": 6.0,
             "relative_speed_mps": -8.0,
             "source": "radar_emergency",
+            "bearing_deg": 0.0,
+            "measurement_frame_id": 10,
         }
 
+        first_control, first_info = controller.run_step(
+            state,
+            lead_vehicle=None,
+            emergency_obstacle=radar_hazard,
+        )
+        radar_hazard["measurement_frame_id"] = 11
         control, info = controller.run_step(
             state,
             lead_vehicle=None,
             emergency_obstacle=radar_hazard,
         )
 
+        self.assertNotEqual(first_info["mode"], "EMERGENCY")
+        self.assertLess(first_control.brake, 1.0)
         self.assertEqual(info["mode"], "EMERGENCY")
         self.assertEqual(control.throttle, 0.0)
         self.assertEqual(control.brake, 1.0)

@@ -114,6 +114,7 @@ class Track:
         self.last_range_m = None
         self.last_bearing_deg = None
         self.last_relative_velocity_mps = None
+        self.last_measurement_frame_id = None
 
     def predict(self, dt):
         self.kx.predict(dt)
@@ -207,6 +208,7 @@ class Tracker:
             track.last_range_m = meas.get("range_m")
             track.last_bearing_deg = meas.get("bearing_deg")
             track.last_relative_velocity_mps = meas.get("relative_velocity_mps")
+            track.last_measurement_frame_id = meas.get("measurement_frame_id")
 
         # 3) Eslesmeyen track'lerin kayip sayacini arttir.
         for ti, track in enumerate(self.tracks):
@@ -221,6 +223,7 @@ class Tracker:
             new_track.last_range_m = meas.get("range_m")
             new_track.last_bearing_deg = meas.get("bearing_deg")
             new_track.last_relative_velocity_mps = meas.get("relative_velocity_mps")
+            new_track.last_measurement_frame_id = meas.get("measurement_frame_id")
             self.tracks.append(new_track)
             self.next_id += 1
 

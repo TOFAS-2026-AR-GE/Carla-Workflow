@@ -47,6 +47,98 @@ bash run_cpu.sh
 Doğrudan `python main.py` da kullanılabilir. OpenCV penceresinde `Q`, `ESC`
 veya pencerenin X düğmesi uygulamayı güvenli biçimde kapatır.
 
+## RViz sensör yerleşimi
+
+`scripts/rviz_sensor_layout.py`, araç boyutundan hesaplanan 27 sensörün
+konumunu, yönünü ve yatay görüş alanını RViz'de gösterir. Kontrol için gerçekten
+çalışan sensörler dolu, yalnızca tasarımda bulunan sensörler saydam ve `[plan]`
+etiketli çizilir. Bu nedenle yerleşimi görmek için
+`ENABLE_DATA_RECORDING=true` yapıp bütün sensörleri çalıştırmak gerekmez.
+Araç gövdesi, CARLA'dan okunan gerçek bounding-box ölçüsüyle saydam gri kutu
+olarak çizilir.
+
+Renkler:
+
+- Yeşil: kamera
+- Kırmızı: radar
+- Mavi: LiDAR
+- Sarı: ultrasonik
+- Mor: GNSS
+- Camgöbeği: IMU
+
+Bu görünüm için CARLA ROS Bridge zorunlu değildir. CARLA sunucusunu açtıktan
+sonra ilk terminalde normal uygulamayı çalıştır:
+
+```bash
+cd Carla-Workflow
+bash run.sh
+```
+
+İkinci terminalde sensör marker ve TF node'unu çalıştır:
+
+```bash
+source /opt/ros/$ROS_DISTRO/setup.bash
+cd Carla-Workflow
+python scripts/rviz_sensor_layout.py
+```
+
+Üçüncü terminalde hazır RViz görünümünü aç:
+
+```bash
+source /opt/ros/$ROS_DISTRO/setup.bash
+cd Carla-Workflow
+rviz2 -d config/sensor_layout.rviz
+```
+
+Node şu TF ağacını kendi yayımlar:
+
+```text
+map -> ego_vehicle -> ego_vehicle/layout/<sensor_adi>
+```
+
+Bu nedenle sensörlerin araç üzerindeki konumu için ayrıca ROS Bridge veya
+`sensor.pseudo.tf` gerekmez.
+
+Marker konusu:
+
+```text
+/carla/ego_vehicle/sensor_layout
+```
+
+Yalnızca gerçekten spawn edilmiş sensörleri göstermek için:
+
+```bash
+python scripts/rviz_sensor_layout.py --ros-args \
+  -p show_inactive:=false
+```
+
+Uzak CARLA sunucusunda host ve port parametreleri verilebilir:
+
+```bash
+python scripts/rviz_sensor_layout.py --ros-args \
+  -p host:=192.168.1.50 -p port:=2000
+```
+
+Gerçek kamera görüntüsü veya radar `PointCloud2` verisini de RViz'e almak
+istersen ROS Bridge'i ayrıca açabilirsin. Uygulama synchronous dünyanın tick'ini
+verdiği için bridge mutlaka pasif olmalıdır:
+
+```bash
+source ~/carla-ros-bridge/install/setup.bash
+ros2 launch carla_ros_bridge carla_ros_bridge.launch.py \
+  passive:=True synchronous_mode:=True register_all_sensors:=True
+```
+
+Bridge ile gerçek sensör verisini açarken marker node'u ve RViz'i
+`--ros-args -p use_sim_time:=true` ile başlat. Ardından RViz Displays panelinde
+varsayılan olarak kapalı gelen `Front Radar Points` katmanını açabilirsin.
+
+ROS Bridge ego aracı `ego_vehicle` rolüyle bulur. Bu repo aracı varsayılan
+olarak bu rolle oluşturur; gerekirse `.env` içindeki `EGO_ROLE_NAME` ile
+değiştirilebilir. Resmî kaynaklar:
+[CARLA ROS Bridge](https://carla.readthedocs.io/projects/ros-bridge/en/latest/run_ros/)
+ve [RViz eklentisi](https://carla.readthedocs.io/projects/ros-bridge/en/latest/rviz_plugin/).
+
 ## Bbox kontrolü
 
 OpenCV başlığında şu bilgiler görünür:
@@ -66,6 +158,7 @@ geçer.
 VEHICLE_DEVICE=auto
 VEHICLE_CONFIDENCE=0.05
 PERCEPTION_EVERY_N_FRAMES=1
+EGO_ROLE_NAME=ego_vehicle
 
 ENABLE_SIGN_DETECTION=false
 ENABLE_DATA_RECORDING=false

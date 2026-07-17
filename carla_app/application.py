@@ -47,6 +47,7 @@ class CarlaApplication:
             vehicle = spawn_ego_vehicle(
                 world,
                 self.settings.vehicle_name,
+                self.settings.ego_role_name,
             )
 
             route_manager = PersistentRouteManager(

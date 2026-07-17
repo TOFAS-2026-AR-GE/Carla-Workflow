@@ -32,6 +32,7 @@ class Settings:
     port: int
     timeout: float
     vehicle_name: str
+    ego_role_name: str
     scenario_file: Path
     fixed_delta_seconds: float
     save_every_n_frames: int
@@ -69,6 +70,8 @@ class Settings:
             port=int(get("PORT", "2000")),
             timeout=float(get("TIMEOUT", "60.0")),
             vehicle_name=get("VEHICLE_NAME", "vehicle.tesla.model3"),
+            ego_role_name=get("EGO_ROLE_NAME", "ego_vehicle").strip()
+            or "ego_vehicle",
             scenario_file=_path(get("SCENARIO_FILE", "scenarios/traffic.yaml")),
             fixed_delta_seconds=float(get("FIXED_DELTA_SECONDS", "0.05")),
             save_every_n_frames=max(1, int(get("SAVE_EVERY_N_FRAMES", "5"))),

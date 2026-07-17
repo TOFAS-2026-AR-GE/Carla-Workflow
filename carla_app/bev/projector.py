@@ -1,72 +1,91 @@
-"""Sensör ölçümlerini ego aracına göre metre cinsinden X-Y düzlemine taşır."""
+"""Bütün sensör ölçümlerini kalibrasyonla ortak ego koordinatına taşır."""
 
 import math
 
 import numpy as np
 
-
-def rotate_point(x, y, yaw_deg):
-    """Bir noktayı verilen yaw açısı kadar döndürür."""
-    yaw = math.radians(float(yaw_deg))
-    rotated_x = x * math.cos(yaw) - y * math.sin(yaw)
-    rotated_y = x * math.sin(yaw) + y * math.cos(yaw)
-    return rotated_x, rotated_y
+from carla_app.bev.calibration import CalibrationSet
 
 
 class BevProjector:
-    """Kamera, radar, LiDAR ve rotayı ortak ego koordinatına dönüştürür."""
+    """Kamera, radar, LiDAR ve rotayı metre tabanlı ego düzlemine taşır."""
 
-    def __init__(self, layout, maximum_lidar_points=6000):
+    def __init__(
+        self,
+        layout,
+        calibrations=None,
+        motion_compensator=None,
+        maximum_lidar_points=12000,
+    ):
         self.layout = layout
+        self.calibrations = calibrations or CalibrationSet(layout)
+        self.motion_compensator = motion_compensator
         self.maximum_lidar_points = int(maximum_lidar_points)
+        self.ground_z_m = self.calibrations.ground_z_m
 
-        geometry = layout.vehicle_geometry
-        self.vehicle_bottom_z = (
-            float(geometry["bounding_box_center_z_m"])
-            - float(geometry["half_height_m"])
-        )
-
-    def build_scene(self, sensor_snapshot, perception_result, vehicle_state):
-        """Renderer tarafından çizilecek sade BEV sahnesini oluşturur."""
+    def build_scene(
+        self,
+        sensor_snapshot,
+        perception_result,
+        vehicle_state,
+        current_frame_id=None,
+    ):
+        """Füzyon ve çizim katmanlarının kullanacağı kalibre sahneyi üretir."""
         return {
-            "lidar_points": self.project_lidar(sensor_snapshot),
-            "radar_points": self.project_radars(sensor_snapshot),
-            "detections": self.project_camera_detections(perception_result),
+            "lidar_points": self.project_lidar(
+                sensor_snapshot,
+                current_frame_id,
+            ),
+            "lidar_origin": self.sensor_origin(
+                self.layout.lidar.name,
+                sensor_snapshot,
+                current_frame_id,
+            ),
+            "radar_points": self.project_radars(
+                sensor_snapshot,
+                current_frame_id,
+            ),
+            "camera_objects": self.project_camera_detections(
+                perception_result,
+                current_frame_id,
+            ),
             "route_points": self.project_route(vehicle_state),
             "active_sensor_count": len(sensor_snapshot),
             "total_sensor_count": len(self.layout.all_specs),
             "vehicle_geometry": dict(self.layout.vehicle_geometry),
+            "ground_z_m": self.ground_z_m,
         }
 
-    def project_lidar(self, sensor_snapshot):
-        """LiDAR noktalarını sensör konumundan ego araç koordinatına taşır."""
+    def project_lidar(self, sensor_snapshot, current_frame_id=None):
+        """LiDAR XYZ noktalarını tam R-T dönüşümüyle ego karesine taşır."""
         entry = sensor_snapshot.get(self.layout.lidar.name)
         if entry is None:
-            return np.empty((0, 2), dtype=np.float32)
+            return np.empty((0, 3), dtype=np.float32)
 
-        points = np.asarray(entry["data"], dtype=np.float32)
+        points = np.asarray(entry["data"], dtype=np.float64)
         if points.ndim != 2 or points.shape[1] < 3 or len(points) == 0:
-            return np.empty((0, 2), dtype=np.float32)
+            return np.empty((0, 3), dtype=np.float32)
 
         if len(points) > self.maximum_lidar_points:
             step = int(math.ceil(len(points) / self.maximum_lidar_points))
             points = points[::step]
 
-        transform = self.layout.lidar.transform
-        yaw = math.radians(float(transform.rotation.yaw))
-        x = points[:, 0]
-        y = points[:, 1]
-        rotated_x = x * math.cos(yaw) - y * math.sin(yaw)
-        rotated_y = x * math.sin(yaw) + y * math.cos(yaw)
-        ego_x = rotated_x + float(transform.location.x)
-        ego_y = rotated_y + float(transform.location.y)
+        calibration = self.calibrations.get_sensor(self.layout.lidar.name)
+        ego_points = calibration.sensor_points_to_ego(points[:, :3])
+        ego_points = self.compensate_points(
+            ego_points,
+            entry.get("frame_id"),
+            current_frame_id,
+        )
 
-        valid = np.isfinite(ego_x) & np.isfinite(ego_y)
-        valid &= np.hypot(ego_x, ego_y) <= 90.0
-        return np.column_stack((ego_x[valid], ego_y[valid])).astype(np.float32)
+        finite = np.all(np.isfinite(ego_points), axis=1)
+        finite &= np.hypot(ego_points[:, 0], ego_points[:, 1]) <= 90.0
+        finite &= ego_points[:, 2] >= self.ground_z_m - 1.0
+        finite &= ego_points[:, 2] <= self.ground_z_m + 5.0
+        return ego_points[finite].astype(np.float32)
 
-    def project_radars(self, sensor_snapshot):
-        """Beş radarın kutupsal noktalarını ego X-Y koordinatına çevirir."""
+    def project_radars(self, sensor_snapshot, current_frame_id=None):
+        """Beş radarın kutupsal 3B noktalarını ortak ego karesine taşır."""
         projected = []
 
         for radar in self.layout.radars:
@@ -74,44 +93,84 @@ class BevProjector:
             if entry is None:
                 continue
 
-            sensor_x = float(radar.transform.location.x)
-            sensor_y = float(radar.transform.location.y)
-            sensor_yaw = float(radar.transform.rotation.yaw)
+            local_points = []
+            valid_metadata = []
+            maximum_range = float(radar.attributes.get("range", 90.0))
 
             for point in entry["data"]:
                 try:
                     depth = float(point["depth_m"])
-                    azimuth = float(point["azimuth_deg"])
+                    azimuth = math.radians(float(point["azimuth_deg"]))
+                    altitude = math.radians(float(point["altitude_deg"]))
                 except (KeyError, TypeError, ValueError):
                     continue
-                if not math.isfinite(depth) or not math.isfinite(azimuth):
-                    continue
-                if not 0.0 < depth <= 90.0:
+                if not math.isfinite(depth) or not 0.0 < depth <= maximum_range:
                     continue
 
-                angle = math.radians(azimuth)
-                local_x = depth * math.cos(angle)
-                local_y = depth * math.sin(angle)
-                rotated_x, rotated_y = rotate_point(
-                    local_x,
-                    local_y,
-                    sensor_yaw,
+                horizontal_depth = depth * math.cos(altitude)
+                local_points.append(
+                    (
+                        horizontal_depth * math.cos(azimuth),
+                        horizontal_depth * math.sin(azimuth),
+                        depth * math.sin(altitude),
+                    )
                 )
+                valid_metadata.append(point)
+
+            if not local_points:
+                continue
+
+            calibration = self.calibrations.get_sensor(radar.name)
+            ego_points = calibration.sensor_points_to_ego(local_points)
+            ego_points = self.compensate_points(
+                ego_points,
+                entry.get("frame_id"),
+                current_frame_id,
+            )
+
+            origin = np.array(
+                [[calibration.T[0], calibration.T[1], calibration.T[2]]],
+                dtype=np.float64,
+            )
+            origin = self.compensate_points(
+                origin,
+                entry.get("frame_id"),
+                current_frame_id,
+            )[0]
+
+            for index, ego_point in enumerate(ego_points):
+                if not np.all(np.isfinite(ego_point)):
+                    continue
+                metadata = valid_metadata[index]
                 projected.append(
                     {
-                        "x_m": sensor_x + rotated_x,
-                        "y_m": sensor_y + rotated_y,
+                        "x_m": float(ego_point[0]),
+                        "y_m": float(ego_point[1]),
+                        "z_m": float(ego_point[2]),
+                        "origin_x_m": float(origin[0]),
+                        "origin_y_m": float(origin[1]),
                         "sensor_name": radar.name,
+                        "frame_id": int(entry["frame_id"]),
                         "relative_velocity_mps": float(
-                            point.get("relative_velocity_mps", 0.0)
+                            metadata.get("relative_velocity_mps", 0.0)
+                        ),
+                        "ground_return": bool(
+                            ego_point[2] < self.ground_z_m + 0.15
+                        ),
+                        "measurement_id": (
+                            f"{radar.name}:{int(entry['frame_id'])}:{index}"
                         ),
                     }
                 )
 
         return projected
 
-    def project_camera_detections(self, perception_result):
-        """BBox alt merkezini zeminle kesiştirerek yaklaşık BEV konumu bulur."""
+    def project_camera_detections(
+        self,
+        perception_result,
+        current_frame_id=None,
+    ):
+        """Yedi kameranın bbox tabanlarını kalibre zemin düzlemine taşır."""
         if not perception_result:
             return []
 
@@ -134,62 +193,102 @@ class BevProjector:
                 )
                 if position is None:
                     continue
-                position["camera_name"] = camera.name
-                position["class_name"] = detection.get(
-                    "class_name", "vehicle"
+
+                point = np.array(
+                    [[position["x_m"], position["y_m"], self.ground_z_m]],
+                    dtype=np.float64,
                 )
-                position["confidence"] = float(
-                    detection.get("confidence", 0.0)
+                point = self.compensate_points(
+                    point,
+                    result.get("frame_id"),
+                    current_frame_id,
+                )[0]
+                distance = math.hypot(float(point[0]), float(point[1]))
+                confidence = float(detection.get("confidence", 0.0))
+                uncertainty = 0.70 + 0.035 * distance
+
+                projected.append(
+                    {
+                        "x_m": float(point[0]),
+                        "y_m": float(point[1]),
+                        "source": "camera",
+                        "camera_name": camera.name,
+                        "sensor_names": [camera.name],
+                        "frame_ids": [int(result["frame_id"])],
+                        "class_name": detection.get("class_name", "vehicle"),
+                        "confidence": confidence,
+                        "uncertainty_m": uncertainty,
+                        "measurement_ids": [
+                            self.camera_measurement_id(
+                                camera.name,
+                                result["frame_id"],
+                                detection.get("bbox"),
+                            )
+                        ],
+                    }
                 )
-                projected.append(position)
 
         return projected
 
     def project_detection(self, camera, detection, image_width, image_height):
-        """Tek bbox'ın alt merkezinden zemin üzerindeki yaklaşık noktayı bulur."""
+        """Tek bbox'ın alt orta pikselini H^-1 ile zemin konumuna çevirir."""
         bbox = detection.get("bbox")
         if bbox is None or len(bbox) != 4:
             return None
 
-        pixel_x = 0.5 * (float(bbox[0]) + float(bbox[2]))
-        pixel_y = float(bbox[3])
-        fov_deg = float(camera.attributes.get("fov", 90.0))
-        focal_length = float(image_width) / (
-            2.0 * math.tan(math.radians(fov_deg) / 2.0)
-        )
-
-        ray_x = 1.0
-        ray_y = (pixel_x - 0.5 * image_width) / focal_length
-        ray_z = -(pixel_y - 0.5 * image_height) / focal_length
-
-        pitch = math.radians(float(camera.transform.rotation.pitch))
-        pitched_x = math.cos(pitch) * ray_x - math.sin(pitch) * ray_z
-        pitched_z = math.sin(pitch) * ray_x + math.cos(pitch) * ray_z
-        if pitched_z >= -0.01:
+        calibration = self.calibrations.get_camera(camera.name)
+        scale_x = calibration.width / max(1.0, float(image_width))
+        scale_y = calibration.height / max(1.0, float(image_height))
+        pixel_x = 0.5 * (float(bbox[0]) + float(bbox[2])) * scale_x
+        pixel_y = float(bbox[3]) * scale_y
+        position = calibration.pixel_to_ground_point(pixel_x, pixel_y)
+        if position is None:
             return None
 
-        camera_height = (
-            float(camera.transform.location.z) - self.vehicle_bottom_z
-        )
-        distance_scale = camera_height / -pitched_z
-        local_x = distance_scale * pitched_x
-        local_y = distance_scale * ray_y
-        rotated_x, rotated_y = rotate_point(
-            local_x,
-            local_y,
-            camera.transform.rotation.yaw,
-        )
-        ego_x = float(camera.transform.location.x) + rotated_x
-        ego_y = float(camera.transform.location.y) + rotated_y
+        forward_m, right_m = position
+        if math.hypot(forward_m, right_m) > 100.0:
+            return None
+        return {"x_m": forward_m, "y_m": right_m}
 
-        if not math.isfinite(ego_x) or not math.isfinite(ego_y):
-            return None
-        if math.hypot(ego_x, ego_y) > 100.0:
-            return None
-        return {"x_m": ego_x, "y_m": ego_y}
+    def camera_measurement_id(self, camera_name, frame_id, bbox):
+        if bbox is None:
+            box_text = "no-box"
+        else:
+            box_values = []
+            for value in bbox:
+                box_values.append(str(int(round(value))))
+            box_text = ",".join(box_values)
+        return f"{camera_name}:{int(frame_id)}:{box_text}"
+
+    def compensate_points(self, points, old_frame_id, current_frame_id):
+        if self.motion_compensator is None or current_frame_id is None:
+            return np.asarray(points).copy()
+        return self.motion_compensator.compensate_points(
+            points,
+            old_frame_id,
+            current_frame_id,
+        )
+
+    def sensor_origin(self, sensor_name, sensor_snapshot, current_frame_id):
+        """Sensör merkezini ölçüm anından güncel ego karesine taşır."""
+        calibration = self.calibrations.get_sensor(sensor_name)
+        if calibration is None:
+            return (0.0, 0.0)
+
+        frame_id = current_frame_id
+        entry = sensor_snapshot.get(sensor_name)
+        if entry is not None:
+            frame_id = entry.get("frame_id", current_frame_id)
+
+        origin = np.array(
+            [[calibration.T[0], calibration.T[1], calibration.T[2]]],
+            dtype=np.float64,
+        )
+        origin = self.compensate_points(origin, frame_id, current_frame_id)[0]
+        return float(origin[0]), float(origin[1])
 
     def project_route(self, vehicle_state):
-        """Dünya koordinatındaki referans rotayı ego koordinatına çevirir."""
+        """Dünya koordinatındaki referans rotayı güncel ego karesine taşır."""
         if not vehicle_state:
             return []
 

@@ -1,15 +1,67 @@
-"""BEV projektörü ile görüntüleyicisini tek ve çıkarılabilir modülde toplar."""
+"""Kalibrasyon, IPM, füzyon, takip ve occupancy katmanlarını birleştirir."""
 
+import queue
+import threading
+
+import numpy as np
+
+from carla_app.bev.calibration import CalibrationSet
+from carla_app.bev.camera_ipm import CameraIpm
+from carla_app.bev.coordinate import EgoMotionCompensator, MetricGrid
+from carla_app.bev.fusion import SensorFusion
+from carla_app.bev.occupancy import OccupancyGrid
 from carla_app.bev.projector import BevProjector
 from carla_app.bev.renderer import BevRenderer
+from carla_app.bev.tracking import BevTracker
 
 
 class BevModule:
-    """Sensör snapshot'ından kuş bakışı BGR görüntüsü üretir."""
+    """Sensör snapshot'ından çıkarılabilir kuş bakışı görünüm üretir."""
 
-    def __init__(self, layout, width=800, height=600):
-        self.projector = BevProjector(layout)
-        self.renderer = BevRenderer(width=width, height=height)
+    def __init__(
+        self,
+        layout,
+        width=800,
+        height=600,
+        fixed_delta_seconds=0.05,
+        update_every_n_frames=2,
+        asynchronous=False,
+    ):
+        self.layout = layout
+        self.update_every_n_frames = max(1, int(update_every_n_frames))
+        self.grid = MetricGrid(width=width, height=height)
+        self.calibrations = CalibrationSet(layout)
+        self.motion = EgoMotionCompensator()
+        self.projector = BevProjector(
+            layout,
+            calibrations=self.calibrations,
+            motion_compensator=self.motion,
+        )
+        self.camera_ipm = CameraIpm(layout, self.calibrations, self.grid)
+        self.fusion = SensorFusion()
+        self.tracker = BevTracker(fixed_delta_seconds)
+        self.occupancy = OccupancyGrid(
+            forward_range_m=self.grid.forward_range_m,
+            rear_range_m=self.grid.rear_range_m,
+            side_range_m=self.grid.side_range_m,
+        )
+        self.renderer = BevRenderer(grid=self.grid)
+
+        self.asynchronous = bool(asynchronous)
+        self.work_queue = queue.Queue(maxsize=1)
+        self.lock = threading.Lock()
+        self.latest_image = None
+        self.latest_scene = None
+        self.last_error = None
+        self.stop_event = threading.Event()
+        self.thread = None
+        if self.asynchronous:
+            self.thread = threading.Thread(
+                target=self.worker_loop,
+                name="bev-worker",
+                daemon=True,
+            )
+            self.thread.start()
 
     def render(
         self,
@@ -18,9 +70,186 @@ class BevModule:
         vehicle_state,
         current_frame_id=None,
     ):
+        """Tek BEV karesini senkron üretir; test ve bağımsız kullanım içindir."""
+        current_frame_id = 0 if current_frame_id is None else int(current_frame_id)
+        self.motion.remember(current_frame_id, vehicle_state)
+
         scene = self.projector.build_scene(
             sensor_snapshot,
             perception_result,
             vehicle_state,
+            current_frame_id,
         )
-        return self.renderer.render(scene, current_frame_id)
+        camera_results = self.camera_results_for_ipm(
+            sensor_snapshot,
+            perception_result,
+        )
+        ipm_image, coverage, ipm_cameras = self.camera_ipm.build_mosaic(
+            camera_results,
+            motion_compensator=self.motion,
+            current_frame_id=current_frame_id,
+        )
+
+        object_lidar_points = self.object_lidar_points(
+            scene["lidar_points"],
+            scene["ground_z_m"],
+        )
+        fused_objects = self.fusion.build_fused_objects(
+            scene["camera_objects"],
+            scene["radar_points"],
+            object_lidar_points,
+        )
+        ego_pose = self.motion.get_pose(current_frame_id)
+        tracks = self.tracker.update(
+            fused_objects,
+            current_frame_id,
+            ego_pose,
+        )
+        occupancy = self.occupancy.update(
+            scene["lidar_points"],
+            scene["lidar_origin"],
+            scene["radar_points"],
+            tracks,
+            scene["ground_z_m"],
+            self.motion,
+            current_frame_id,
+        )
+
+        scene["ipm_image"] = ipm_image
+        scene["ipm_coverage"] = coverage
+        scene["ipm_cameras"] = ipm_cameras
+        scene["fused_objects"] = fused_objects
+        scene["tracks"] = tracks
+        scene["occupancy"] = occupancy
+        image = self.renderer.render(scene, current_frame_id)
+        with self.lock:
+            self.latest_scene = scene
+        return image
+
+    def submit(
+        self,
+        sensor_snapshot,
+        perception_result,
+        vehicle_state,
+        current_frame_id,
+    ):
+        """En yeni BEV işini ana kontrol döngüsünü bekletmeden kuyruğa koyar."""
+        self.motion.remember(current_frame_id, vehicle_state)
+        if int(current_frame_id) % self.update_every_n_frames != 0:
+            return
+        if not self.asynchronous:
+            image = self.render(
+                sensor_snapshot,
+                perception_result,
+                vehicle_state,
+                current_frame_id,
+            )
+            with self.lock:
+                self.latest_image = image
+            return
+
+        item = {
+            "sensor_snapshot": sensor_snapshot,
+            "perception_result": perception_result,
+            "vehicle_state": vehicle_state,
+            "current_frame_id": int(current_frame_id),
+        }
+        try:
+            self.work_queue.put_nowait(item)
+            return
+        except queue.Full:
+            pass
+
+        try:
+            self.work_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self.work_queue.put_nowait(item)
+        except queue.Full:
+            pass
+
+    def get_latest(self):
+        with self.lock:
+            return self.latest_image
+
+    def get_latest_scene(self):
+        with self.lock:
+            return self.latest_scene
+
+    def worker_loop(self):
+        while not self.stop_event.is_set():
+            try:
+                item = self.work_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if item is None:
+                return
+
+            try:
+                image = self.render(
+                    item["sensor_snapshot"],
+                    item["perception_result"],
+                    item["vehicle_state"],
+                    item["current_frame_id"],
+                )
+                with self.lock:
+                    self.latest_image = image
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"
+                if message != self.last_error:
+                    print(f"[ERROR] BEV modülü: {message}")
+                self.last_error = message
+                continue
+            self.last_error = None
+
+    def stop(self):
+        self.stop_event.set()
+        if self.thread is None:
+            return
+        try:
+            self.work_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self.work_queue.put_nowait(None)
+        except queue.Full:
+            pass
+        self.thread.join(timeout=3.0)
+        if self.thread.is_alive():
+            print("[WARN] BEV işçisi 3 saniyede durmadı.")
+
+    def object_lidar_points(self, lidar_points, ground_z_m):
+        points = np.asarray(lidar_points)
+        if points.ndim != 2 or points.shape[1] < 3 or len(points) == 0:
+            return np.empty((0, 3), dtype=np.float32)
+        minimum_height = float(ground_z_m) + 0.18
+        maximum_height = float(ground_z_m) + 3.50
+        mask = points[:, 2] >= minimum_height
+        mask &= points[:, 2] <= maximum_height
+
+        geometry = self.layout.vehicle_geometry
+        inside_ego = np.abs(points[:, 0]) <= float(geometry["half_length_m"]) + 0.3
+        inside_ego &= np.abs(points[:, 1]) <= float(geometry["half_width_m"]) + 0.3
+        mask &= ~inside_ego
+        return points[mask]
+
+    def camera_results_for_ipm(self, sensor_snapshot, perception_result):
+        """IPM için algılamadan bağımsız en güncel yedi kamerayı seçer."""
+        results = {}
+        if perception_result:
+            for camera_name, result in perception_result.get(
+                "camera_results", {}
+            ).items():
+                results[camera_name] = result
+
+        for camera in self.layout.cameras:
+            entry = sensor_snapshot.get(camera.name)
+            if entry is None:
+                continue
+            results[camera.name] = {
+                "camera_name": camera.name,
+                "frame_id": int(entry["frame_id"]),
+                "image": entry["data"],
+            }
+        return results

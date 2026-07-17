@@ -120,6 +120,10 @@ class Settings:
         self.sensor_mode = requested_sensor_mode
         self.enable_bev = self.sensor_mode == "bev"
         self.enable_data_recording = self.sensor_mode == "record"
+        self.bev_update_every_n_frames = max(
+            1,
+            int(os.getenv("BEV_UPDATE_EVERY_N_FRAMES", "2")),
+        )
         self.status_period_seconds = max(
             0.2,
             float(os.getenv("STATUS_PERIOD_SECONDS", "2.0")),

@@ -45,7 +45,7 @@ Her CARLA karesinde aşağıdaki sıra izlenir:
 | `carla_app/sensors/processors.py` | CARLA sensör verisini NumPy ve sözlük biçimine çevirir. |
 | `carla_app/sensors/writer.py` | Tam sensör paketini `data/runs/` altına kaydeder. |
 | `carla_app/perception/` | YOLO araç tespiti, isteğe bağlı levha tespiti ve kamera-radar eşleştirmesidir. |
-| `carla_app/bev/` | Kamera, radar, LiDAR ve rotadan çıkarılabilir kuş bakışı görüntü üretir. |
+| `carla_app/bev/` | Kalibrasyonlu IPM, sensör füzyonu, takip ve occupancy grid üretir. |
 | `carla_app/controller/vehicle/` | Ön araç seçimi, direksiyon, hız, gaz-fren ve acil frendir. |
 | `carla_app/visualization/viewer.py` | Kamera kutularını, BEV açıksa iki panelli OpenCV penceresini gösterir. |
 | `carla_app/visualization/sensor_layout.py` | Sensör yerleşimini tarayıcı verisine dönüştürür. |
@@ -152,23 +152,71 @@ SENSOR_MODE=bev
 ```
 
 BEV açıkken OpenCV penceresinin sol yarısında ön kamera ve bbox'lar, sağ
-yarısında ise ego merkezli kuş bakışı görünüm bulunur. Sağ panelde:
+yarısında ise ego merkezli gerçek IPM kuş bakışı görünüm bulunur. Sağ panelde:
 
-- LiDAR noktaları gri,
-- beş radarın noktaları pembe,
-- yedi kameradan gelen araç tespitleri yeşil,
-- referans rota turuncu çizilir.
+- yedi kameranın zemin görüntüleri tek kuş bakışı dokuda birleşir,
+- LiDAR nesne noktaları gri, beş radarın noktaları pembe çizilir,
+- dolu occupancy hücreleri kırmızı, boş hücreler yeşil gösterilir,
+- yeni nesne takipleri sarı, doğrulanmış takipler yeşil kutuyla çizilir,
+- referans rota turuncu gösterilir.
 
 Koordinat sistemi metre cinsindedir: `X` aracın ilerisi, `Y` aracın sağıdır.
-Kamera bbox'ları, kutunun alt orta noktasından zemin düzlemine ışın atılarak
-yaklaşık konuma çevrilir. Bu yüzden BEV şu aşamada bir inceleme ekranıdır;
-araç kontrolü veya acil fren için kullanılmaz. GNSS ve IMU da 15 sensörün
-içinde çalışır ancak ego merkezli bu çizimde nokta üretmez; ileride harita
-konumlandırması eklenmesi için canlı pakette tutulur.
+Kamera çözünürlüğü ve yatay FOV değerinden `K` iç kalibrasyon matrisi;
+sensörün araç üzerindeki konum ve açısından `R` ile `T` dış kalibrasyon
+matrisleri hesaplanır. CARLA'nın `x-ileri, y-sağ, z-yukarı` eksenleri OpenCV
+kamera eksenlerine açık bir matrisle çevrilir. Zemin homografisinin tersi her
+BEV hücresinin kaynak kamera pikselini bulur; bu işlem IPM'dir.
+
+Kameraların örtüşen alanlarında görüntü merkezine, görüş açısına ve zemin
+görünürlüğüne göre ağırlık verilir. Böylece aynı bölgeyi gören iki kameranın
+arasında sert bir kesik yerine yumuşak geçiş oluşur. IPM düz zemin varsayar;
+araç tavanı ve bina gibi dikey yüzeyler görüntüde uzayabilir. Nesne konumu bu
+görsel bozulmaya bırakılmaz: bbox zemin noktası, radar ve LiDAR ölçümleri
+ayrıca ortak ego koordinatında birleştirilir.
+
+### BEV işleme sırası
+
+| Dosya | Açık görevi |
+|---|---|
+| `calibration.py` | Her sensörün `K`, `R`, `T` ve zemin homografisini hesaplar. |
+| `coordinate.py` | Metre-piksel dönüşümünü ve eski ölçümlerin ego hareket telafisini yapar. |
+| `camera_ipm.py` | Yedi RGB kamerayı kuş bakışına çevirir ve örtüşmeleri ağırlıklı birleştirir. |
+| `projector.py` | Kamera, radar, LiDAR ve rotayı ortak ego koordinatına taşır. |
+| `clustering.py` | Radar ve LiDAR noktalarını komşulukla kümeler. |
+| `association.py` | Aynı fiziksel nesneye ait farklı sensör ölçümlerini eşleştirir. |
+| `fusion.py` | Ölçüm belirsizliğinin ters varyansıyla ortak nesne konumu üretir. |
+| `tracking.py` | Nesneleri dünya koordinatında Kalman filtresiyle izler. |
+| `occupancy.py` | Işınların boş ve dolu hücrelerini log-odds occupancy grid'de biriktirir. |
+| `renderer.py` | IPM, occupancy, sensör noktaları, rota ve takipleri çizer. |
+| `module.py` | Bu katmanları tek ve çıkarılabilir dış arayüzde toplar. |
+
+Farklı kameralarda görülen aynı araç, sensör kimliği ve uzamsal kapı kontrolü
+ile tek gruba alınır. Aynı kameradaki iki ayrı bbox birbirine yakın olsa bile
+birleştirilmez. Kamera, radar ve LiDAR konumları ölçüm belirsizliğinin ters
+varyansıyla ağırlıklandırılır. Kalman takibi dünya koordinatında tutulduğu için
+ego araç hareket ettiğinde sabit nesneler BEV üzerinde yapay olarak kaymaz.
+
+Occupancy grid LiDAR ve radar ışınlarının geçtiği hücreleri boş, vurduğu
+yüksek noktaları dolu kabul eder. Geçmiş grid yeni ego pozuna taşınır ve zamanla
+zayıflatılır. Bu yapı klasik geometrik sensör füzyonlu BEV'dir. Yol, kaldırım
+ve yaya gibi her piksele sınıf veren öğrenilmiş semantic BEV değildir; bunun
+için ayrıca segmentasyon modeli gerekir.
+
+BEV yalnızca inceleme ekranıdır; araç kontrolü veya acil fren için kullanılmaz.
+Kontrolcü BEV modunda da yalnızca ön geniş kamera ve ön uzun radarı kullanır.
+GNSS ve IMU 15 sensörün içinde çalışır fakat ego merkezli çizimde nokta
+üretmez; ileride harita konumlandırması için canlı pakette tutulur.
 
 Sensörlerden biri birkaç kare gecikirse araç döngüsü bekletilmez. BEV her
 sensörün en yeni geçerli verisini kullanır ve eski veriyi kendiliğinden atar.
-Bu sayede yavaş bir çevre kamerası direksiyon ve fren akışını durdurmaz.
+IPM, füzyon, takip ve occupancy ayrı bir iş parçacığında çalışır. Kuyrukta
+yalnızca en yeni iş tutulur. Bu sayede yavaş bir çevre kamerası veya ağır bir
+BEV karesi direksiyon ve fren akışını durdurmaz.
+
+Sensörlerin yatay açıları ön, sağ, arka ve sol yönlerde 10 metre test
+noktalarıyla doğrulanmıştır. Çevre kameraları bu dört yönü boşluk bırakmadan
+ve örtüşmeli görmektedir. Çalışan kontrol davranışını değiştirmemek için ana ön
+kamera ve radar yerleşimi korunmuştur.
 
 ## Kontrol dosyaları
 
@@ -255,6 +303,7 @@ PERCEPTION_EVERY_N_FRAMES=1
 ENABLE_SIGN_DETECTION=false
 ENABLE_DATA_RECORDING=false
 SENSOR_MODE=control
+BEV_UPDATE_EVERY_N_FRAMES=2
 
 STATUS_PERIOD_SECONDS=2.0
 MAX_RUNTIME_SECONDS=0
@@ -265,6 +314,8 @@ MAXIMUM_SPEED_KMH=60
 - `PERCEPTION_EVERY_N_FRAMES=1`: her kamera karesini algılamaya gönderir.
 - `ENABLE_SIGN_DETECTION=false`: isteğe bağlı levha modellerini kapalı tutar.
 - `SENSOR_MODE=control`: yalnızca kontrol için gereken iki sensörü açar.
+- `BEV_UPDATE_EVERY_N_FRAMES=2`: BEV açıkken 20 Hz simülasyonda en fazla
+  10 Hz kuş bakışı üretir; kontrol döngüsünün frekansını değiştirmez.
 - `ENABLE_DATA_RECORDING=false`: eski kurulumlarla uyumluluk için tutulur.
   `true` yapılırsa `SENSOR_MODE` değerinden bağımsız olarak kayıt modu seçilir.
 - `MAX_RUNTIME_SECONDS=0`: kullanıcı kapatana kadar çalışır.
@@ -317,7 +368,9 @@ python -m unittest discover -s tests -v
 Testler; direksiyon yönünü, direksiyon değişim sınırını, viraj hızını, şerit
 toparlamayı, ön araç takibini, iki metre duruşu, yeniden kalkışı, kamera-radar
 birleşimini, komşu şerit ve zemin reddini, eski sensör karesini, acil freni,
-BEV koordinat dönüşümünü, çoklu kamera akışını ve sensör modu seçimini kapsar.
+`K-R-T` kalibrasyonunu, homografi dönüşümünü, 360 derece kamera kapsamasını,
+sensör tekrar silmeyi, güven ağırlıklı füzyonu, ego hareket telafisini, Kalman
+takibini, occupancy grid'i, çoklu kamera akışını ve sensör modu seçimini kapsar.
 
 Kontrol denklemlerinin temel kaynakları:
 

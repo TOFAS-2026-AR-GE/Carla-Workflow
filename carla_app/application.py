@@ -91,6 +91,11 @@ class CarlaApplication:
                 self.sensors.layout,
                 width=self.settings.camera_width,
                 height=self.settings.camera_height,
+                fixed_delta_seconds=self.dt,
+                update_every_n_frames=(
+                    self.settings.bev_update_every_n_frames
+                ),
+                asynchronous=True,
             )
 
         perception = PerceptionSystem(self.settings)
@@ -221,12 +226,13 @@ class CarlaApplication:
         bev_image = None
         if self.bev_module is not None:
             sensor_snapshot = self.sensors.get_bev_snapshot(frame_id)
-            bev_image = self.bev_module.render(
+            self.bev_module.submit(
                 sensor_snapshot=sensor_snapshot,
                 perception_result=perception_result,
                 vehicle_state=state,
                 current_frame_id=frame_id,
             )
+            bev_image = self.bev_module.get_latest()
 
         return self.viewer.show(
             perception_result,
@@ -239,6 +245,7 @@ class CarlaApplication:
     def shutdown(self):
         """Açılmış parçaları ters sırayla kapatır."""
         self.close_component("görüntü penceresi", self.viewer)
+        self.stop_component("BEV işçisi", self.bev_module)
         self.stop_component("algılama işçisi", self.worker)
         self.stop_component("sensörler", self.sensors)
         self.stop_component("trafik", self.traffic)

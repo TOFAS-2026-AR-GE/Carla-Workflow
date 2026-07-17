@@ -46,6 +46,17 @@ class SensorModeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 Settings()
 
+    def test_bev_update_interval_cannot_be_zero(self):
+        environment = {
+            "SENSOR_MODE": "bev",
+            "ENABLE_DATA_RECORDING": "false",
+            "BEV_UPDATE_EVERY_N_FRAMES": "0",
+        }
+        with patch.dict(os.environ, environment, clear=False):
+            settings = Settings()
+
+        self.assertEqual(settings.bev_update_every_n_frames, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

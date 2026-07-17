@@ -2,7 +2,13 @@
 
 import carla
 
-from carla_app.sensors.processors import image_to_rgb, radar_to_list
+from carla_app.sensors.processors import (
+    gnss_to_dict,
+    image_to_rgb,
+    imu_to_dict,
+    lidar_to_array,
+    radar_to_list,
+)
 
 
 def set_supported_attributes(blueprint, attributes):
@@ -28,15 +34,26 @@ def spawn_sensor(world, vehicle, spec):
     )
 
 
-def start_sensor_listener(actor, spec, sync, camera_stream, radar_stream):
+def start_sensor_listener(
+    actor,
+    spec,
+    sync,
+    camera_stream,
+    radar_stream,
+    live_stream=None,
+):
     """Sensör verisini kamera, radar veya kayıt akışına gönderir."""
     if spec.kind == "camera":
 
         def camera_callback(image):
             if sync is not None:
                 sync.push(spec.name, image.frame, image)
-            if spec.primary:
-                camera_stream.push(image.frame, image_to_rgb(image))
+            if spec.primary or live_stream is not None:
+                rgb_image = image_to_rgb(image)
+                if spec.primary:
+                    camera_stream.push(image.frame, rgb_image)
+                if live_stream is not None:
+                    live_stream.push(spec.name, image.frame, rgb_image)
 
         actor.listen(camera_callback)
         return
@@ -46,9 +63,45 @@ def start_sensor_listener(actor, spec, sync, camera_stream, radar_stream):
         def radar_callback(data):
             if sync is not None:
                 sync.push(spec.name, data.frame, data)
-            radar_stream.push(spec.name, data.frame, radar_to_list(data))
+            points = radar_to_list(data)
+            radar_stream.push(spec.name, data.frame, points)
+            if live_stream is not None:
+                live_stream.push(spec.name, data.frame, points)
 
         actor.listen(radar_callback)
+        return
+
+    if spec.kind == "lidar":
+
+        def lidar_callback(data):
+            if sync is not None:
+                sync.push(spec.name, data.frame, data)
+            if live_stream is not None:
+                live_stream.push(spec.name, data.frame, lidar_to_array(data))
+
+        actor.listen(lidar_callback)
+        return
+
+    if spec.kind == "gnss":
+
+        def gnss_callback(data):
+            if sync is not None:
+                sync.push(spec.name, data.frame, data)
+            if live_stream is not None:
+                live_stream.push(spec.name, data.frame, gnss_to_dict(data))
+
+        actor.listen(gnss_callback)
+        return
+
+    if spec.kind == "imu":
+
+        def imu_callback(data):
+            if sync is not None:
+                sync.push(spec.name, data.frame, data)
+            if live_stream is not None:
+                live_stream.push(spec.name, data.frame, imu_to_dict(data))
+
+        actor.listen(imu_callback)
         return
 
     if sync is not None:
@@ -66,6 +119,7 @@ def spawn_layout(
     sync,
     camera_stream,
     radar_stream,
+    live_stream=None,
     specs=None,
 ):
     """Seçilen sensörleri oluşturur; hata olursa oluşturulanları temizler."""
@@ -82,6 +136,7 @@ def spawn_layout(
                 sync,
                 camera_stream,
                 radar_stream,
+                live_stream,
             )
             actors.append(actor)
             print(

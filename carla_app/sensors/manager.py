@@ -3,17 +3,23 @@
 from carla_app.sensors.factory import spawn_layout
 from carla_app.sensors.layout import build_sensor_layout
 from carla_app.sensors.processors import process_packet
-from carla_app.sensors.stream import CameraStream, RadarStream
+from carla_app.sensors.stream import (
+    CameraStream,
+    LatestSensorStream,
+    RadarStream,
+)
 from carla_app.sensors.sync import SensorSync
 from carla_app.sensors.writer import DatasetWriter
 
 
 class SensorManager:
-    """Normal kullanımda yalnızca ön kamera ile ön radarı çalıştırır."""
+    """Seçilen moda göre kontrol, BEV veya kayıt sensörlerini çalıştırır."""
 
     def __init__(self, settings):
         self.settings = settings
         self.recording_enabled = bool(settings.enable_data_recording)
+        self.bev_enabled = bool(getattr(settings, "enable_bev", False))
+        self.sensor_mode = getattr(settings, "sensor_mode", "control")
         self.layout = None
         self.sync = None
         self.writer = None
@@ -21,6 +27,7 @@ class SensorManager:
 
         self.camera_stream = CameraStream(max_frames=8)
         self.radar_stream = RadarStream()
+        self.live_stream = LatestSensorStream() if self.bev_enabled else None
 
         if self.recording_enabled:
             self.writer = DatasetWriter(settings.output_folder)
@@ -38,6 +45,8 @@ class SensorManager:
         if self.recording_enabled:
             active_specs = self.layout.all_specs
             self.sync = SensorSync(self.layout.sensor_names, max_frames=8)
+        elif self.bev_enabled:
+            active_specs = self.layout.all_specs
         else:
             active_specs = self.layout.control_specs
 
@@ -48,6 +57,7 @@ class SensorManager:
             sync=self.sync,
             camera_stream=self.camera_stream,
             radar_stream=self.radar_stream,
+            live_stream=self.live_stream,
             specs=active_specs,
         )
 
@@ -55,6 +65,8 @@ class SensorManager:
             manifest = self.layout.to_manifest(vehicle.type_id)
             self.writer.write_manifest(manifest)
             print(f"[OK] Veri kaydı sensörleri aktif: {len(active_specs)} sensör")
+        elif self.bev_enabled:
+            print(f"[OK] BEV sensörleri aktif: {len(active_specs)} sensör")
         else:
             sensor_names = []
             for spec in active_specs:
@@ -67,6 +79,25 @@ class SensorManager:
 
     def get_radar(self, sensor_name="radar_front_long"):
         return self.radar_stream.get_latest(sensor_name)
+
+    def get_bev_snapshot(self, frame_id, max_age_frames=10):
+        """Sensörlerin en yeni geçerli verisini ana döngüyü bekletmeden verir."""
+        if self.live_stream is None:
+            return {}
+        return self.live_stream.get_snapshot(frame_id, max_age_frames)
+
+    def get_bev_camera_packet(self, frame_id, max_age_frames=10):
+        """Yedi kameranın mevcut en yeni görüntülerini adlarıyla verir."""
+        snapshot = self.get_bev_snapshot(frame_id, max_age_frames)
+        packet = {}
+        if self.layout is None:
+            return packet
+
+        for camera in self.layout.cameras:
+            entry = snapshot.get(camera.name)
+            if entry is not None:
+                packet[camera.name] = entry
+        return packet
 
     def save_if_needed(self, frame_id, vehicle_data):
         """Kayıt açıksa belirlenen aralıkta tam sensör paketini kaydeder."""
@@ -104,4 +135,6 @@ class SensorManager:
             self.sync.clear()
         self.camera_stream.clear()
         self.radar_stream.clear()
+        if self.live_stream is not None:
+            self.live_stream.clear()
         print("[OK] Sensörler kapatıldı.")

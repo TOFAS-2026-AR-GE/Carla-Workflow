@@ -17,6 +17,7 @@ class PerceptionViewer:
         fallback_image=None,
         fallback_frame_id=None,
         current_frame_id=None,
+        bev_image=None,
     ):
         if self.closed:
             return False
@@ -36,8 +37,13 @@ class PerceptionViewer:
             errors = result.get("errors", {})
             elapsed_ms = float(result.get("elapsed_ms", 0.0))
 
-        if image is None:
+        if image is None and bev_image is None:
             return self._window_is_open() and self._read_key()
+
+        if image is None:
+            cv2.imshow(self.window_name, bev_image)
+            self.closed = not (self._window_is_open() and self._read_key())
+            return not self.closed
 
         frame = np.ascontiguousarray(image[:, :, :3][:, :, ::-1]).copy()
         for detection in vehicles:
@@ -83,9 +89,25 @@ class PerceptionViewer:
                 cv2.LINE_AA,
             )
 
-        cv2.imshow(self.window_name, frame)
+        display_frame = self.combine_panels(frame, bev_image)
+        cv2.imshow(self.window_name, display_frame)
         self.closed = not (self._window_is_open() and self._read_key())
         return not self.closed
+
+    def combine_panels(self, perception_frame, bev_image):
+        """BEV verildiyse algılama ve BEV görüntüsünü eşit iki panele böler."""
+        if bev_image is None:
+            return perception_frame
+
+        target_width = perception_frame.shape[1]
+        target_height = perception_frame.shape[0]
+        bev_panel = cv2.resize(
+            bev_image,
+            (target_width, target_height),
+            interpolation=cv2.INTER_AREA,
+        )
+        divider = np.full((target_height, 3, 3), 210, dtype=np.uint8)
+        return np.hstack((perception_frame, divider, bev_panel))
 
     def close(self):
         if self.closed:

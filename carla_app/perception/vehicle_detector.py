@@ -64,17 +64,51 @@ class VehicleDetector:
 
     def detect(self, rgb_image):
         """Tek RGB kamera karesindeki araç kutularını döndürür."""
-        self._validate_image(rgb_image)
-
-        # CARLA verisi RGB'dir. Ultralytics ise OpenCV biçimindeki BGR dizisini
-        # bekler ve kendi içinde tekrar RGB'ye çevirir.
-        bgr_image = np.ascontiguousarray(rgb_image[:, :, :3][:, :, ::-1])
+        bgr_image = self.prepare_image(rgb_image)
         results = self._predict(bgr_image)
 
         if not results or results[0].boxes is None:
             return []
 
-        result = results[0]
+        return self.parse_result(results[0], bgr_image)
+
+    def detect_many(self, images_by_name):
+        """Birden fazla kamerayı tek YOLO çağrısında işler.
+
+        Tek model örneği kullanıldığı için yedi ayrı modelin ekran kartı
+        belleğini doldurması önlenir. Sonuçlar kamera adlarıyla döndürülür.
+        """
+        camera_names = []
+        bgr_images = []
+        for camera_name, rgb_image in images_by_name.items():
+            camera_names.append(camera_name)
+            bgr_images.append(self.prepare_image(rgb_image))
+
+        detections_by_name = {}
+        if not bgr_images:
+            return detections_by_name
+
+        source = bgr_images[0] if len(bgr_images) == 1 else bgr_images
+        results = self._predict(source)
+
+        for index, camera_name in enumerate(camera_names):
+            detections = []
+            if results and index < len(results):
+                result = results[index]
+                if result.boxes is not None:
+                    detections = self.parse_result(result, bgr_images[index])
+            detections_by_name[camera_name] = detections
+
+        return detections_by_name
+
+    def prepare_image(self, rgb_image):
+        """CARLA RGB görüntüsünü YOLO'nun beklediği BGR biçimine çevirir."""
+        self._validate_image(rgb_image)
+        return np.ascontiguousarray(rgb_image[:, :, :3][:, :, ::-1])
+
+    def parse_result(self, result, bgr_image):
+        """Tek bir YOLO sonucunu sade bbox sözlüklerine çevirir."""
+
         result_names = self._normalize_names(result.names)
         image_height, image_width = bgr_image.shape[:2]
         detections = []

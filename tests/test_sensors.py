@@ -27,7 +27,7 @@ from carla_app.sensors import layout as layout_module  # noqa: E402
 from carla_app.sensors.factory import start_sensor_listener  # noqa: E402
 from carla_app.sensors.manager import SensorManager  # noqa: E402
 from carla_app.sensors.processors import process_packet  # noqa: E402
-from carla_app.sensors.stream import CameraStream  # noqa: E402
+from carla_app.sensors.stream import CameraStream, LatestSensorStream  # noqa: E402
 
 
 class CameraStreamTests(unittest.TestCase):
@@ -54,6 +54,17 @@ class CameraStreamTests(unittest.TestCase):
 
         self.assertEqual(stream.wait_latest(20, timeout=0.0), (None, None))
         self.assertEqual(stream.wait_latest(21, timeout=0.0)[0], 21)
+
+    def test_bev_snapshot_drops_stale_sensor_without_waiting(self):
+        stream = LatestSensorStream()
+        stream.push("camera_front_wide", 100, "new")
+        stream.push("camera_rear_center", 80, "old")
+
+        snapshot = stream.get_snapshot(105, max_age_frames=10)
+
+        self.assertIn("camera_front_wide", snapshot)
+        self.assertNotIn("camera_rear_center", snapshot)
+        self.assertEqual(snapshot["camera_front_wide"]["age_frames"], 5)
 
 
 class SensorManagerTests(unittest.TestCase):
@@ -102,6 +113,7 @@ class SensorManagerTests(unittest.TestCase):
         self.assertAlmostEqual(geometry["pitch_deg"], 2.0)
         self.assertEqual(sensor_layout.front_radar.attributes["vertical_fov"], "6.0")
         self.assertEqual(len(sensor_layout.all_specs), 15)
+        self.assertEqual(len(sensor_layout.cameras), 7)
         self.assertEqual(len(sensor_layout.radars), 5)
         self.assertEqual(
             {sensor.kind for sensor in sensor_layout.all_specs},
@@ -158,6 +170,53 @@ class SensorManagerTests(unittest.TestCase):
 
         self.assertEqual(captured["specs"], (camera, radar))
         self.assertIsNone(captured["sync"])
+
+    def test_bev_mode_spawns_all_sensors_without_recording(self):
+        settings = types.SimpleNamespace(
+            enable_data_recording=False,
+            enable_bev=True,
+            sensor_mode="bev",
+            output_folder=None,
+            camera_width=800,
+            camera_height=600,
+            camera_fov=90.0,
+        )
+        camera = types.SimpleNamespace(name="camera_front_wide")
+        radar = types.SimpleNamespace(name="radar_front_long")
+        lidar = types.SimpleNamespace(name="lidar_roof")
+        layout = types.SimpleNamespace(
+            control_specs=(camera, radar),
+            all_specs=(camera, radar, lidar),
+            sensor_names=[camera.name, radar.name, lidar.name],
+        )
+        captured = {}
+
+        def fake_spawn_layout(**arguments):
+            captured.update(arguments)
+            return []
+
+        manager = SensorManager(settings)
+        with (
+            patch(
+                "carla_app.sensors.manager.build_sensor_layout",
+                return_value=layout,
+            ),
+            patch(
+                "carla_app.sensors.manager.spawn_layout",
+                side_effect=fake_spawn_layout,
+            ),
+            redirect_stdout(io.StringIO()),
+        ):
+            manager.start(
+                world=object(),
+                vehicle=object(),
+                fixed_delta_seconds=0.05,
+            )
+
+        self.assertEqual(captured["specs"], layout.all_specs)
+        self.assertIsNone(captured["sync"])
+        self.assertIs(captured["live_stream"], manager.live_stream)
+        self.assertIsNotNone(manager.live_stream)
 
     def test_recording_packet_contains_only_real_sensor_groups(self):
         camera = types.SimpleNamespace(name="camera_front_wide")
@@ -234,6 +293,46 @@ class SensorManagerTests(unittest.TestCase):
         second_actor.callback(measurement)
 
         self.assertEqual(sync.names, ["lidar_roof", "gnss_roof"])
+
+    def test_surround_camera_is_sent_to_bev_live_stream(self):
+        class FakeActor:
+            def listen(self, callback):
+                self.callback = callback
+
+        class FakeLiveStream:
+            def __init__(self):
+                self.items = []
+
+            def push(self, sensor_name, frame_id, data):
+                self.items.append((sensor_name, frame_id, data))
+
+        actor = FakeActor()
+        live_stream = FakeLiveStream()
+        spec = types.SimpleNamespace(
+            kind="camera",
+            name="camera_rear_center",
+            primary=False,
+        )
+        start_sensor_listener(
+            actor,
+            spec,
+            sync=None,
+            camera_stream=None,
+            radar_stream=None,
+            live_stream=live_stream,
+        )
+        image = types.SimpleNamespace(
+            frame=12,
+            width=1,
+            height=1,
+            raw_data=bytes([10, 20, 30, 255]),
+        )
+
+        actor.callback(image)
+
+        self.assertEqual(live_stream.items[0][0], "camera_rear_center")
+        self.assertEqual(live_stream.items[0][1], 12)
+        self.assertEqual(live_stream.items[0][2].tolist(), [[[30, 20, 10]]])
 
 
 if __name__ == "__main__":

@@ -72,3 +72,45 @@ class RadarStream:
     def clear(self):
         with self.lock:
             self.latest.clear()
+
+
+class LatestSensorStream:
+    """BEV için her sensörün en yeni verisini beklemeden saklar.
+
+    Bir sensör geç kaldığında ana araç döngüsü durmaz. Her verinin gerçek
+    kare numarası ve mevcut dünya karesine göre yaşı birlikte döndürülür.
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.latest = {}
+
+    def push(self, sensor_name, frame_id, data):
+        with self.lock:
+            self.latest[sensor_name] = (int(frame_id), data)
+
+    def get_snapshot(self, world_frame_id=None, max_age_frames=None):
+        snapshot = {}
+
+        with self.lock:
+            for sensor_name, entry in self.latest.items():
+                frame_id, data = entry
+                age = None
+                if world_frame_id is not None:
+                    age = int(world_frame_id) - frame_id
+                    if age < 0:
+                        continue
+                    if max_age_frames is not None and age > max_age_frames:
+                        continue
+
+                snapshot[sensor_name] = {
+                    "frame_id": frame_id,
+                    "age_frames": age,
+                    "data": data,
+                }
+
+        return snapshot
+
+    def clear(self):
+        with self.lock:
+            self.latest.clear()

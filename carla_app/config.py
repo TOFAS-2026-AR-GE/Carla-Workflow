@@ -102,7 +102,24 @@ class Settings:
         )
 
         self.enable_sign_detection = _boolean("ENABLE_SIGN_DETECTION", False)
-        self.enable_data_recording = _boolean("ENABLE_DATA_RECORDING", False)
+        old_recording_setting = _boolean("ENABLE_DATA_RECORDING", False)
+        requested_sensor_mode = os.getenv("SENSOR_MODE", "").strip().lower()
+        if not requested_sensor_mode:
+            if old_recording_setting:
+                requested_sensor_mode = "record"
+            else:
+                requested_sensor_mode = "control"
+        if old_recording_setting:
+            requested_sensor_mode = "record"
+        if requested_sensor_mode not in {"control", "bev", "record"}:
+            raise ValueError(
+                "SENSOR_MODE control, bev veya record olmali; "
+                f"gelen deger: {requested_sensor_mode!r}"
+            )
+
+        self.sensor_mode = requested_sensor_mode
+        self.enable_bev = self.sensor_mode == "bev"
+        self.enable_data_recording = self.sensor_mode == "record"
         self.status_period_seconds = max(
             0.2,
             float(os.getenv("STATUS_PERIOD_SECONDS", "2.0")),

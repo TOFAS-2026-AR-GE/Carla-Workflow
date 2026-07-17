@@ -17,13 +17,17 @@ Tekrarlanan işlemler görünür `for` döngüleriyle yazılmıştır.
 Her CARLA karesinde aşağıdaki sıra izlenir:
 
 1. `application.py` dünya karesini ilerletir ve araç durumunu okur.
-2. `sensors/manager.py` ön kamera ile ön radarın en güncel verisini verir.
-3. `perception/system.py` kamera görüntüsündeki araçları bulur.
+2. `sensors/manager.py` seçilen moda göre gerekli sensörlerin en güncel
+   verisini verir.
+3. `perception/system.py` kontrol modunda ön kamerayı, BEV modunda yedi
+   kamerayı aynı araç modeliyle işler.
 4. `controller/vehicle/lead_vehicle.py` kamera ile radarı birleştirip takip
    edilecek ön aracı seçer.
 5. `controller/vehicle/vehicle_controller.py` direksiyon, hedef hız, gaz ve
    fren değerlerini hesaplar.
 6. `application.py` hesaplanan komutu ego aracına uygular.
+7. BEV modu açıksa `bev/` sensör verilerini yalnızca görselleştirme için ego
+   koordinatına taşır. Bu sonuç kontrol komutunu değiştirmez.
 
 ## Klasör ve dosya rehberi
 
@@ -41,8 +45,9 @@ Her CARLA karesinde aşağıdaki sıra izlenir:
 | `carla_app/sensors/processors.py` | CARLA sensör verisini NumPy ve sözlük biçimine çevirir. |
 | `carla_app/sensors/writer.py` | Tam sensör paketini `data/runs/` altına kaydeder. |
 | `carla_app/perception/` | YOLO araç tespiti, isteğe bağlı levha tespiti ve kamera-radar eşleştirmesidir. |
+| `carla_app/bev/` | Kamera, radar, LiDAR ve rotadan çıkarılabilir kuş bakışı görüntü üretir. |
 | `carla_app/controller/vehicle/` | Ön araç seçimi, direksiyon, hız, gaz-fren ve acil frendir. |
-| `carla_app/visualization/viewer.py` | Kamera ve araç kutularını OpenCV penceresinde gösterir. |
+| `carla_app/visualization/viewer.py` | Kamera kutularını, BEV açıksa iki panelli OpenCV penceresini gösterir. |
 | `carla_app/visualization/sensor_layout.py` | Sensör yerleşimini tarayıcı verisine dönüştürür. |
 | `carla_app/visualization/sensor_layout.html` | Araba şeklindeki sensör ekranıdır. |
 | `scripts/` | Kurulum kontrolü, model kopyalama ve sensör ekranı komutlarıdır. |
@@ -107,16 +112,17 @@ xdg-open /tmp/carla_sensor_layout.html
 
 Bu ekran ROS veya RViz kullanmaz.
 
-## Sensör düzeni
+## Sensör modları
 
-Normal araç kontrolünde yalnızca iki sensör açılır:
+Çalışma biçimi `.env` içindeki tek bir `SENSOR_MODE` ayarıyla seçilir:
 
-| Sensör | Kullanım amacı |
-|---|---|
-| `camera_front_wide` | YOLO araç tespiti ve hedef kimliği |
-| `radar_front_long` | Mesafe, bağıl hız, yedek takip ve acil fren |
+| Mod | Açılan sensör | Davranış |
+|---|---:|---|
+| `control` | 2 | Yalnızca `camera_front_wide` ve `radar_front_long` açılır. Mevcut kontrol akışı değişmeden çalışır. Varsayılan mod budur. |
+| `bev` | 15 | Bütün sensörler açılır, yedi kamera tek YOLO modeliyle toplu işlenir ve OpenCV penceresi kamera + BEV olarak ikiye ayrılır. Diske kayıt yapılmaz. |
+| `record` | 15 | Bütün sensörlerin aynı karedeki paketi beklenir ve `data/runs/` altına kaydedilir. BEV açılmaz. |
 
-Veri kaydı açıldığında toplam 15 gerçek CARLA sensörü kullanılır:
+Toplam 15 gerçek CARLA sensörünün dağılımı:
 
 | Tür | Sayı |
 |---|---:|
@@ -129,6 +135,40 @@ Veri kaydı açıldığında toplam 15 gerçek CARLA sensörü kullanılır:
 CARLA'da gerçek ultrasonik sensör olmadığı için radar ile ultrasonik taklidi
 yapılmaz. Önceden bu amaçla kullanılan 12 kısa menzil radar bu branch'ten
 tamamen kaldırılmıştır.
+
+## İsteğe bağlı BEV modülü
+
+BEV bu sürümde projeye entegredir fakat varsayılan olarak kapalıdır. Normal
+çalıştırmada `.env` içindeki değer şu şekilde kalmalıdır:
+
+```dotenv
+SENSOR_MODE=control
+```
+
+Daha sonra denemek istediğinde yalnızca şu değeri değiştirmen yeterlidir:
+
+```dotenv
+SENSOR_MODE=bev
+```
+
+BEV açıkken OpenCV penceresinin sol yarısında ön kamera ve bbox'lar, sağ
+yarısında ise ego merkezli kuş bakışı görünüm bulunur. Sağ panelde:
+
+- LiDAR noktaları gri,
+- beş radarın noktaları pembe,
+- yedi kameradan gelen araç tespitleri yeşil,
+- referans rota turuncu çizilir.
+
+Koordinat sistemi metre cinsindedir: `X` aracın ilerisi, `Y` aracın sağıdır.
+Kamera bbox'ları, kutunun alt orta noktasından zemin düzlemine ışın atılarak
+yaklaşık konuma çevrilir. Bu yüzden BEV şu aşamada bir inceleme ekranıdır;
+araç kontrolü veya acil fren için kullanılmaz. GNSS ve IMU da 15 sensörün
+içinde çalışır ancak ego merkezli bu çizimde nokta üretmez; ileride harita
+konumlandırması eklenmesi için canlı pakette tutulur.
+
+Sensörlerden biri birkaç kare gecikirse araç döngüsü bekletilmez. BEV her
+sensörün en yeni geçerli verisini kullanır ve eski veriyi kendiliğinden atar.
+Bu sayede yavaş bir çevre kamerası direksiyon ve fren akışını durdurmaz.
 
 ## Kontrol dosyaları
 
@@ -214,6 +254,7 @@ PERCEPTION_EVERY_N_FRAMES=1
 
 ENABLE_SIGN_DETECTION=false
 ENABLE_DATA_RECORDING=false
+SENSOR_MODE=control
 
 STATUS_PERIOD_SECONDS=2.0
 MAX_RUNTIME_SECONDS=0
@@ -223,7 +264,9 @@ MAXIMUM_SPEED_KMH=60
 - `VEHICLE_DEVICE=auto`: CUDA varsa ekran kartını, yoksa CPU'yu seçer.
 - `PERCEPTION_EVERY_N_FRAMES=1`: her kamera karesini algılamaya gönderir.
 - `ENABLE_SIGN_DETECTION=false`: isteğe bağlı levha modellerini kapalı tutar.
-- `ENABLE_DATA_RECORDING=false`: yalnızca kontrol için gereken iki sensörü açar.
+- `SENSOR_MODE=control`: yalnızca kontrol için gereken iki sensörü açar.
+- `ENABLE_DATA_RECORDING=false`: eski kurulumlarla uyumluluk için tutulur.
+  `true` yapılırsa `SENSOR_MODE` değerinden bağımsız olarak kayıt modu seçilir.
 - `MAX_RUNTIME_SECONDS=0`: kullanıcı kapatana kadar çalışır.
 - `MAXIMUM_SPEED_KMH=60`: düz ve boş yoldaki üst hız hedefidir.
 
@@ -254,11 +297,13 @@ Uygulama belirlenen aralıkta bir `[STATUS]` satırı yazar:
 Tam sensör paketi gerektiğinde `.env` içinde:
 
 ```dotenv
-ENABLE_DATA_RECORDING=true
+SENSOR_MODE=record
 ```
 
 Bu mod 15 sensörü de açar ve daha fazla işlem gücü kullanır. Görüntü, LiDAR,
 radar, GNSS, IMU ve kalibrasyon dosyaları `data/runs/` altında saklanır.
+Eski `ENABLE_DATA_RECORDING=true` ayarı da aynı kayıt modunu seçmeye devam
+eder.
 
 ## Doğrulama
 
@@ -271,8 +316,8 @@ python -m unittest discover -s tests -v
 
 Testler; direksiyon yönünü, direksiyon değişim sınırını, viraj hızını, şerit
 toparlamayı, ön araç takibini, iki metre duruşu, yeniden kalkışı, kamera-radar
-birleşimini, komşu şerit ve zemin reddini, eski sensör karesini ve acil freni
-kapsar.
+birleşimini, komşu şerit ve zemin reddini, eski sensör karesini, acil freni,
+BEV koordinat dönüşümünü, çoklu kamera akışını ve sensör modu seçimini kapsar.
 
 Kontrol denklemlerinin temel kaynakları:
 

@@ -2,6 +2,7 @@
 
 import math
 
+from carla_app.bev import BevModule
 from carla_app.config import Settings
 from carla_app.controller.vehicle.lead_vehicle import LeadVehicleTracker
 from carla_app.controller.vehicle.vehicle_controller import VehicleController
@@ -34,6 +35,7 @@ class CarlaApplication:
         self.viewer = None
         self.controller = None
         self.lead_tracker = None
+        self.bev_module = None
         self.status_every_frames = 1
         self.perception_period = 1
         self.previous_control_mode = None
@@ -84,6 +86,13 @@ class CarlaApplication:
         self.sensors = SensorManager(self.settings)
         self.sensors.start(self.world, self.vehicle, self.dt)
 
+        if self.settings.enable_bev:
+            self.bev_module = BevModule(
+                self.sensors.layout,
+                width=self.settings.camera_width,
+                height=self.settings.camera_height,
+            )
+
         perception = PerceptionSystem(self.settings)
         self.worker = PerceptionWorker(perception)
         self.viewer = PerceptionViewer()
@@ -115,6 +124,7 @@ class CarlaApplication:
             "[INFO] Kontrol: Kalıcı rota + Stanley direksiyon + "
             "IDM araç takibi + bağımsız acil fren"
         )
+        print(f"[INFO] Sensör modu: {self.settings.sensor_mode}")
 
     def run_main_loop(self):
         """CARLA dünyasını kare kare ilerletir."""
@@ -143,11 +153,22 @@ class CarlaApplication:
         )
         camera_frame_id, rgb_image = self.sensors.get_rgb(frame_id)
 
-        if (
+        new_perception_frame = (
             rgb_image is not None
             and camera_frame_id % self.perception_period == 0
-        ):
-            self.worker.submit(camera_frame_id, rgb_image)
+        )
+        if new_perception_frame:
+            if self.settings.enable_bev:
+                camera_packet = self.sensors.get_bev_camera_packet(frame_id)
+                primary_name = self.sensors.layout.primary_camera_name
+                camera_packet[primary_name] = {
+                    "frame_id": int(camera_frame_id),
+                    "age_frames": int(frame_id) - int(camera_frame_id),
+                    "data": rgb_image,
+                }
+                self.worker.submit_cameras(camera_packet, primary_name)
+            else:
+                self.worker.submit(camera_frame_id, rgb_image)
 
         perception_result = self.worker.get_latest()
         radar_frame_id, radar_points = self.sensors.get_radar("radar_front_long")
@@ -197,11 +218,22 @@ class CarlaApplication:
                 )
             )
 
+        bev_image = None
+        if self.bev_module is not None:
+            sensor_snapshot = self.sensors.get_bev_snapshot(frame_id)
+            bev_image = self.bev_module.render(
+                sensor_snapshot=sensor_snapshot,
+                perception_result=perception_result,
+                vehicle_state=state,
+                current_frame_id=frame_id,
+            )
+
         return self.viewer.show(
             perception_result,
             fallback_image=rgb_image,
             fallback_frame_id=camera_frame_id,
             current_frame_id=frame_id,
+            bev_image=bev_image,
         )
 
     def shutdown(self):

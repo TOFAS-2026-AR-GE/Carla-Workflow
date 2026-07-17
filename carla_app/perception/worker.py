@@ -22,7 +22,24 @@ class PerceptionWorker:
         self.thread.start()
 
     def submit(self, frame_id, rgb_image):
-        item = (int(frame_id), rgb_image)
+        item = {
+            "kind": "single",
+            "frame_id": int(frame_id),
+            "image": rgb_image,
+        }
+        self.submit_item(item)
+
+    def submit_cameras(self, camera_packet, primary_camera_name):
+        """BEV modundaki kamera paketini en yeni iş olarak kuyruğa koyar."""
+        item = {
+            "kind": "cameras",
+            "camera_packet": camera_packet,
+            "primary_camera_name": primary_camera_name,
+        }
+        self.submit_item(item)
+
+    def submit_item(self, item):
+        """Eski bekleyen işi atıp yalnızca en yeni algılama işini tutar."""
 
         try:
             self.queue.put_nowait(item)
@@ -66,9 +83,17 @@ class PerceptionWorker:
             if item is None:
                 return
 
-            frame_id, image = item
             try:
-                result = self.system.detect(frame_id, image)
+                if item["kind"] == "cameras":
+                    result = self.system.detect_cameras(
+                        item["camera_packet"],
+                        item["primary_camera_name"],
+                    )
+                else:
+                    result = self.system.detect(
+                        item["frame_id"],
+                        item["image"],
+                    )
             except Exception as error:
                 # Model hataları PerceptionSystem içinde ele alınır. Buraya
                 # gelinmesi algılama akışının beklenmedik biçimde bozulduğunu

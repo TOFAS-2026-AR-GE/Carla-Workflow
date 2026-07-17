@@ -57,6 +57,39 @@ class VehicleDetectorTests(unittest.TestCase):
         self.assertEqual(captured["conf"], 0.05)
         self.assertEqual(captured["classes"], [0, 1, 9])
 
+    def test_multiple_cameras_use_one_batched_model_call(self):
+        captured = {"call_count": 0}
+
+        class FakeModel:
+            def predict(self, **arguments):
+                captured["call_count"] += 1
+                captured.update(arguments)
+                results = []
+                for _image in arguments["source"]:
+                    results.append(types.SimpleNamespace(boxes=None))
+                return results
+
+        detector = VehicleDetector.__new__(VehicleDetector)
+        detector.model = FakeModel()
+        detector.confidence = 0.05
+        detector.image_size = 640
+        detector.device = "cpu"
+        detector.vehicle_class_ids = [0]
+
+        image = np.zeros((20, 30, 3), dtype=np.uint8)
+        detections = detector.detect_many(
+            {
+                "camera_front_wide": image,
+                "camera_rear_center": image,
+            }
+        )
+
+        self.assertEqual(captured["call_count"], 1)
+        self.assertIsInstance(captured["source"], list)
+        self.assertEqual(len(captured["source"]), 2)
+        self.assertEqual(detections["camera_front_wide"], [])
+        self.assertEqual(detections["camera_rear_center"], [])
+
 
 class TrafficSignDetectorTests(unittest.TestCase):
     def test_detector_options_are_passed_openly_to_the_model(self):
@@ -128,6 +161,49 @@ class PerceptionSystemTests(unittest.TestCase):
         self.assertEqual(len(result["vehicles"]), 1)
         self.assertEqual(result["signs"], [])
         self.assertIn("sign", result["errors"])
+
+    def test_multi_camera_result_keeps_primary_control_shape(self):
+        system = PerceptionSystem.__new__(PerceptionSystem)
+
+        class FakeVehicleDetector:
+            def detect_many(self, images_by_name):
+                results = {}
+                for camera_name in images_by_name:
+                    results[camera_name] = [
+                        {
+                            "bbox": (1, 2, 20, 30),
+                            "confidence": 0.8,
+                            "class_name": "vehicle",
+                        }
+                    ]
+                return results
+
+        system.vehicle_detector = FakeVehicleDetector()
+        system.sign_detector = None
+        system._last_errors = {}
+        image = np.zeros((40, 60, 3), dtype=np.uint8)
+        packet = {
+            "camera_front_wide": {
+                "frame_id": 10,
+                "age_frames": 1,
+                "data": image,
+            },
+            "camera_rear_center": {
+                "frame_id": 9,
+                "age_frames": 2,
+                "data": image,
+            },
+        }
+
+        result = system.detect_cameras(packet, "camera_front_wide")
+
+        self.assertEqual(result["frame_id"], 10)
+        self.assertEqual(len(result["vehicles"]), 1)
+        self.assertEqual(len(result["camera_results"]), 2)
+        self.assertEqual(
+            result["camera_results"]["camera_rear_center"]["frame_id"],
+            9,
+        )
 
 
 class FusionTests(unittest.TestCase):

@@ -291,14 +291,14 @@ uygulamasını birlikte gösterir.
 | En yakın komşu eşleştirme | Yeni ölçümü kendisine en yakın mevcut araç takibiyle eşleştirir. | `tracking.py` ölçüm ile takip arasındaki bütün uygun uzaklıkları hesaplar. En yakın çiftten başlar; 5 metreden uzak çiftleri kabul etmez ve uzun süre görülmeyen takibi siler. |
 | Zamansal doğrulama ve histerezis | Tek bir gürültülü ölçümle hedef değiştirmeyi önler. | `lead_vehicle.py` doğrudan radar hedefini normal takibe vermeden önce iki yeni karede görür. Benzer mesafedeki iki araç arasında geçiş yapmak için yeni aracın en az 2 metre daha avantajlı olmasını ister. |
 | Stanley direksiyon kontrolü | Araç yönü ile şerit merkezine olan yanal hatayı tek direksiyon komutunda birleştirir. | `stanley_controller.py` aracın önündeki kontrol noktasını rotaya izdüşürür. Başlık hatası, yanal hata ve küçük bir viraj ileri beslemesi kullanır; direksiyon büyüklüğünü ve değişim hızını araç hızına göre sınırlar. |
-| Lineer yanal MPC | Gelecekteki rota eğriliklerini aynı optimizasyon ufkunda değerlendirir. | `mpc_controller.py` 1,8 saniyelik Frenet hata modelini OSQP ile çözer. Direksiyon açısı ve değişim hızını sınırlar; çözüm hata verir, 30 ms bütçeyi aşar veya tahmin geçersizleşirse aynı çevrimde Stanley'ye döner. |
+| Lineer yanal MPC | Gelecekteki rota eğriliklerini aynı optimizasyon ufkunda değerlendirir. | `mpc_controller.py` waypoint koordinatlarını 15 noktalı ikinci derece Savitzky–Golay uzamsal filtresiyle düzenler, ardından 1,8 saniyelik Frenet hata modelini OSQP ile çözer. Direksiyon açısı ve değişim hızını sınırlar; çözüm hata verir, 30 ms bütçeyi aşar veya tahmin geçersizleşirse aynı çevrimde Stanley'ye döner. |
 | Eğrilik tabanlı hız planlama | Viraj keskinleştikçe izin verilen hızı rahat yanal ivmeye göre düşürür. | `speed_planner.py` hız yükseldikçe 35-75 metre ileriyi tarar. Yol eğriliğinden `hız = karekök(yanal ivme / eğrilik)` hesabını yapar. Şerit hatası büyürse ayrıca toparlanma hızı ister. |
 | IDM araç takip kontrolü | Hedef hıza giderken ön araçla hıza bağlı güvenli zaman ve mesafe bırakır. | `longitudinal_controller.py` 2 metre duruş boşluğu, 1,2 saniye zaman aralığı, ego hızı ve yaklaşma hızından istenen ivmeyi hesaplar. Sonuç pozitifse gaz, yeterince negatifse fren üretir. |
 | İvme değişim sınırı | Gaz veya fren isteğinin bir çevrimde aniden sıçramasını önler. | `longitudinal_controller.py` istenen ivme değişimini hızlanmada 3, frenlemede 6 m/s³ ile sınırlar. Gaz ve fren aynı çevrimde birlikte verilmez. |
 | Üstel ölçüm yumuşatma | Yeni ölçüm ile önceki değeri belirli oranlarda birleştirir. | `lead_vehicle.py` radar mesafesi ve bağıl hızını, `longitudinal_controller.py` ise kontrolcünün kullandığı ön araç mesafesini yumuşatır. Yakınlaşan ölçüm güvenlik için uzaklaşan ölçümden daha hızlı kabul edilir. |
 | TTC ve gerekli yavaşlama ile acil fren | Mesafe kapanma süresini ve çarpışmayı önlemek için gereken yavaşlamayı hesaplar. | `safety_supervisor.py` takip hedefi ile ham radar tehlikesinden daha riskli olanı seçer. Kritik olmayan tek radar noktasını yeterli saymaz; aynı tehlikeyi ikinci yeni karede de görünce tam fren uygular. |
 | Basit IoU/merkez takibi | Aynı kutuyu ardışık karelerde ağır bir takip ağı olmadan eşleştirir. | `road_context.py` sınıf ailesi, IoU ve merkez yakınlığı kullanır; altı karelik kısa kaybı tolere eder ve güveni yumuşatır. |
-| Trafik ışığı debounce | Tek yanlış renk karesinin sürüş kararını değiştirmesini önler. | Aynı ışığın rengi üç yeni algılama karesinde doğrulanır; aynı sonuç karesinin tekrar okunması kanıt sayılmaz. |
+| Trafik ışığı debounce | Tek yanlış renk veya kaçırılmış kamera karesinin sürüş kararını değiştirmesini önler. | Aynı ışığın rengi üç yeni algılama karesinde doğrulanır; aynı sonuç karesinin tekrar okunması kanıt sayılmaz. Doğrulanmış kırmızı/sarı, bir saniyeye kadar kutu kaçırmalarında korunur ve yalnızca üç yeni yeşil kanıtıyla açılır. |
 | Lead trafik ışığı seçimi | Ego rotası için ilk etkili ışığı seçer. | Rota yönünün görüntüdeki hedef merkezi, yatay şerit uyumu, zaman tutarlılığı, kutu alanı ve mesafe birlikte puanlanır; yakın uyumlu ışık uzak kavşaktan önce gelir. |
 | Sarı ikilem bölgesi | Konforlu duruş mümkün değilse kavşağı kararlı geçer. | Reaksiyon mesafesinden sonra gerekli yavaşlama hesaplanır; 4 m/s² altında ve kavşak dışında ise durur, aksi halde geçiş kararını ışık değişene kadar korur. |
 | Kamera-LiDAR mesafe doğrulaması | Kamera kutusundaki çoklu LiDAR noktasından dayanıklı mesafe çıkarır. | Kalibrasyonla piksele taşınan en az üç noktanın yüzde 25 mesafesi alınır. Kare yaşı ikiyi aşarsa kamera tahminine dönülür; büyük çelişkide yakın değer seçilip güven düşürülür. |
@@ -312,7 +312,10 @@ silinir ve fren doğrudan `1.0` yapılır.
 
 Varsayılan `mpc` modu araç merkezinin yanal ve başlık hatasını, önündeki 18
 tahmin adımının yol eğriliğiyle birlikte çözer. Direksiyon açısı ile değişim
-hızı optimizasyonun içinde sınırlıdır. Solver bulunamaz, geçerli çözüm üretemez,
+hızı optimizasyonun içinde sınırlıdır. CARLA waypoint koordinatlarının sayısal
+pürüzü türev alınırken yapay sağ-sol eğriliğe dönüşmesin diye referans rota önce
+15 metrelik ikinci derece Savitzky–Golay filtresinden geçirilir; sabit yarıçaplı
+gerçek viraj eğriliği korunur. Solver bulunamaz, geçerli çözüm üretemez,
 30 ms süre bütçesini aşar veya rota çok kısaysa aynı çevrimde mevcut Stanley
 kontrolcüsü devralır. `LATERAL_CONTROLLER=stanley` ile MPC tamamen kapatılabilir.
 
@@ -459,6 +462,9 @@ hedef hızı ve gerekirse ürettiği sanal durma noktasını uygular.
   veya kavşak içindeyse ışık değişene kadar kararlı geçiş yapılır.
 - Yeşil üç yeni karede doğrulanır; kırmızıdan sonra hedef hız en fazla
   `1.2 m/s²` artışla açılır.
+- Doğrulanmış kırmızı veya sarı ışık, kamera kutuyu aralıklı kaçırsa bile bir
+  saniyelik sensör zaman aşımı boyunca tutulur; eski sonuç karesinin tekrar
+  okunması yeni kanıt sayılmaz.
 - Hız tabelası üç yeni karede doğrulanır. Düşük limit hemen güvenli hedef olur;
   yüksek limite geçiş kademelidir.
 - Yol kenarındaki yaya yalnızca izlenir. Sürüş koridorundaki yaya mesafeye göre
@@ -509,4 +515,7 @@ Kontrol denklemlerinin temel kaynakları:
 
 - [Intelligent Driver Model](https://mtreiber.de/publications/micro_tgf99.pdf)
 - [Stanley yanal kontrol](https://ai.stanford.edu/~gabeh/papers/hoffmann_stanley_control07.pdf)
+- [Savitzky–Golay uzamsal yumuşatma](https://doi.org/10.1021/ac60214a047)
+- [Otonom sürüş hareket planlama ve kontrol yöntemleri incelemesi](https://doi.org/10.1109/TIV.2016.2578706)
+- [Trafik ışığı algılama ve zamansal takip incelemesi](https://doi.org/10.1109/TITS.2015.2509509)
 - [NHTSA otomatik acil fren standardı](https://www.federalregister.gov/documents/2024/05/09/2024-09054/federal-motor-vehicle-safety-standards-automatic-emergency-braking-systems-for-light-vehicles)

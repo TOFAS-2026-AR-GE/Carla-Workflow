@@ -43,6 +43,10 @@ class DrivingParameters:
         self.speed_sign_confirmation_frames = 3
         self.tracker_lost_tolerance_frames = 6
         self.sensor_timeout_frames = max(6, int(round(1.0 / self.dt)))
+        self.traffic_light_dropout_tolerance_frames = (
+            self.sensor_timeout_frames
+        )
+        self.traffic_light_maximum_distance_m = 60.0
 
         # Boylamsal sürüş ve güvenli duruş değerleri.
         self.comfortable_deceleration_mps2 = 2.0
@@ -78,10 +82,10 @@ class DrivingParameters:
         self.mpc_horizon_steps = 18
         self.mpc_step_s = 0.10
         self.mpc_minimum_speed_mps = 0.75
-        self.mpc_lateral_error_weight = 8.0
-        self.mpc_heading_error_weight = 5.0
-        self.mpc_steering_weight = 0.20
-        self.mpc_steering_rate_weight = 1.50
+        self.mpc_lateral_error_weight = 12.0
+        self.mpc_heading_error_weight = 7.0
+        self.mpc_steering_weight = 0.30
+        self.mpc_steering_rate_weight = 2.00
         self.mpc_solver_tolerance = 1e-3
         self.mpc_maximum_iterations = 400
         self.mpc_time_budget_ms = 30.0

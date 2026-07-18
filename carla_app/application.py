@@ -362,10 +362,34 @@ class CarlaApplication:
             message += f" lateral_fallback={fallback_reason}"
 
         speed_plan = control_info.get("speed_plan", {})
-        message += f" speed_reason={speed_plan.get('speed_reason', 'unknown')}"
+        speed_reason = speed_plan.get("speed_reason", "unknown")
+        message += f" speed_reason={speed_reason}"
+        if speed_reason in {"curve", "lane_recovery"}:
+            curvature = float(speed_plan.get("curvature_1pm", 0.0))
+            yaw_rate = float(speed_plan.get("predicted_yaw_rate_radps", 0.0))
+            lateral_acceleration = float(
+                speed_plan.get("predicted_lateral_acceleration_mps2", 0.0)
+            )
+            longitudinal_acceleration = float(
+                speed_plan.get("planned_longitudinal_acceleration_mps2", 0.0)
+            )
+            message += (
+                f" curve_k={curvature:.4f}/m"
+                f" yaw_rate={yaw_rate:.2f}rad/s"
+                f" lat_a={lateral_acceleration:.2f}m/s2"
+                f" long_a={longitudinal_acceleration:+.2f}m/s2"
+            )
 
         road_context = road_context or {}
         light = road_context.get("lead_traffic_light")
+        if light is None:
+            primary = control_info.get("behavior", {}).get("primary_detection")
+            if isinstance(primary, dict) and primary.get("color") in {
+                "red",
+                "orange",
+                "green",
+            }:
+                light = primary
         if light is not None:
             message += (
                 f" light={light.get('color', 'unknown')}"

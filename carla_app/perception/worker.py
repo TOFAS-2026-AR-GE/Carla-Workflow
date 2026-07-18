@@ -2,6 +2,7 @@
 
 import queue
 import threading
+import time
 
 
 class PerceptionWorker:
@@ -26,6 +27,7 @@ class PerceptionWorker:
             "kind": "single",
             "frame_id": int(frame_id),
             "image": rgb_image,
+            "submitted_at": time.perf_counter(),
         }
         self.submit_item(item)
 
@@ -35,6 +37,7 @@ class PerceptionWorker:
             "kind": "cameras",
             "camera_packet": camera_packet,
             "primary_camera_name": primary_camera_name,
+            "submitted_at": time.perf_counter(),
         }
         self.submit_item(item)
 
@@ -84,6 +87,8 @@ class PerceptionWorker:
                 return
 
             try:
+                started_at = time.perf_counter()
+                submitted_at = float(item.get("submitted_at", started_at))
                 if item["kind"] == "cameras":
                     result = self.system.detect_cameras(
                         item["camera_packet"],
@@ -94,6 +99,12 @@ class PerceptionWorker:
                         item["frame_id"],
                         item["image"],
                     )
+                result["queue_delay_ms"] = (
+                    started_at - submitted_at
+                ) * 1000.0
+                result["worker_total_ms"] = (
+                    time.perf_counter() - submitted_at
+                ) * 1000.0
             except Exception as error:
                 # Model hataları PerceptionSystem içinde ele alınır. Buraya
                 # gelinmesi algılama akışının beklenmedik biçimde bozulduğunu

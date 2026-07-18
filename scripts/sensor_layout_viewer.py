@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from carla_app.visualization.sensor_layout import (
+from carla_app.visualization.sensor_layout import (  # noqa: E402
     build_web_view_data,
     render_web_view,
 )
@@ -65,7 +65,8 @@ def wait_for_ego_vehicle(client, role_name, wait_seconds):
         if time.monotonic() >= deadline:
             raise RuntimeError(
                 f"role_name={role_name!r} ego aracı bulunamadı. "
-                "Önce başka terminalde 'bash run.sh' çalıştır."
+                "Önce başka terminalde işletim sistemine uygun çalıştırma "
+                "betiğini başlat."
             )
 
         print(f"[BEKLE] role_name={role_name} ego aracı bekleniyor...")
@@ -93,6 +94,7 @@ def main():
 
     try:
         import carla
+
         from carla_app.config import Settings
         from carla_app.sensors.layout import build_sensor_layout
     except ModuleNotFoundError as error:

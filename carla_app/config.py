@@ -74,6 +74,19 @@ class DrivingParameters:
         self.maximum_brake = 1.0
         self.maximum_steer = 1.0
 
+        # Yanal MPC ufku, maliyetleri ve güvenli fallback sınırları.
+        self.mpc_horizon_steps = 18
+        self.mpc_step_s = 0.10
+        self.mpc_minimum_speed_mps = 0.75
+        self.mpc_lateral_error_weight = 8.0
+        self.mpc_heading_error_weight = 5.0
+        self.mpc_steering_weight = 0.20
+        self.mpc_steering_rate_weight = 1.50
+        self.mpc_solver_tolerance = 1e-3
+        self.mpc_maximum_iterations = 400
+        self.mpc_time_budget_ms = 30.0
+        self.mpc_maximum_predicted_error_m = 2.50
+
 
 class Settings:
     """`.env` içindeki bütün uygulama ayarlarını normal alanlarda tutar."""
@@ -103,6 +116,10 @@ class Settings:
             1,
             int(os.getenv("PERCEPTION_EVERY_N_FRAMES", "2")),
         )
+        self.camera_wait_timeout_ms = max(
+            0.0,
+            float(os.getenv("CAMERA_WAIT_TIMEOUT_MS", "10")),
+        )
         self.output_folder = _path(os.getenv("OUTPUT_FOLDER", "data/runs"))
 
         self.camera_width = int(os.getenv("CAMERA_WIDTH", "800"))
@@ -122,9 +139,9 @@ class Settings:
             os.getenv("SIGN_CLASS_NAMES", "models/signs/class_names.json")
         )
 
-        self.vehicle_device = os.getenv("VEHICLE_DEVICE", "cpu").strip()
+        self.vehicle_device = os.getenv("VEHICLE_DEVICE", "auto").strip()
         if not self.vehicle_device:
-            self.vehicle_device = "cpu"
+            self.vehicle_device = "auto"
         self.sign_device = os.getenv("SIGN_DEVICE", "cpu").strip()
         if not self.sign_device:
             self.sign_device = "cpu"
@@ -185,6 +202,15 @@ class Settings:
             10.0,
             float(os.getenv("MAXIMUM_SPEED_KMH", "60.0")),
         )
+        self.lateral_controller = os.getenv(
+            "LATERAL_CONTROLLER",
+            "mpc",
+        ).strip().lower()
+        if self.lateral_controller not in {"mpc", "stanley"}:
+            raise ValueError(
+                "LATERAL_CONTROLLER mpc veya stanley olmali; "
+                f"gelen deger: {self.lateral_controller!r}"
+            )
 
     def check_models(self):
         required_models = [self.vehicle_model]

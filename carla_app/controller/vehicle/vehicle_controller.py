@@ -11,6 +11,7 @@ from carla_app.controller.vehicle.behavior_planner import BehaviorPlanner
 from carla_app.controller.vehicle.longitudinal_controller import (
     LongitudinalController,
 )
+from carla_app.controller.vehicle.mpc_controller import LateralMPCController
 from carla_app.controller.vehicle.safety_supervisor import EmergencyBrakeSupervisor
 from carla_app.controller.vehicle.speed_planner import CurvatureSpeedPlanner
 from carla_app.controller.vehicle.stanley_controller import StanleyController
@@ -19,9 +20,18 @@ from carla_app.controller.vehicle.stanley_controller import StanleyController
 class VehicleController:
     """Dört bağımsız kontrol parçasını doğru sırayla çalıştırır."""
 
-    def __init__(self, dt=0.05, cruise_speed_kmh=60.0, parameters=None):
+    def __init__(
+        self,
+        dt=0.05,
+        cruise_speed_kmh=60.0,
+        parameters=None,
+        lateral_controller="stanley",
+    ):
         self.parameters = parameters or DrivingParameters(dt)
-        self.lateral = StanleyController(dt)
+        if str(lateral_controller).strip().lower() == "mpc":
+            self.lateral = LateralMPCController(dt, self.parameters)
+        else:
+            self.lateral = StanleyController(dt)
         self.speed_planner = CurvatureSpeedPlanner(dt, cruise_speed_kmh)
         self.behavior = BehaviorPlanner(dt, self.parameters)
         self.longitudinal = LongitudinalController(dt)

@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 
-
 TEMPLATE_FILE = Path(__file__).with_name("sensor_layout.html")
 
 

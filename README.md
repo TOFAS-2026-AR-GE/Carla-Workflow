@@ -61,12 +61,28 @@ Her CARLA karesinde aşağıdaki sıra izlenir:
 
 ## Kurulum
 
-Python 3.10 ortamında:
+Proje Python 3.12 ve `carla` adlı Conda ortamını kullanır. İşletim sistemine
+uygun betik ortam yoksa oluşturur, bağımlılıkları kurar, RTX 50 serisi için
+CUDA 12.8 destekli PyTorch'u doğrular ve kurulumu denetler.
+
+Windows (RTX 5070, PowerShell):
+
+```powershell
+cd C:\Users\<kullanıcı>\Desktop\Carla-Workflow
+.\run_windows.ps1 -SetupOnly
+```
+
+PowerShell betik çalıştırmayı engellerse yalnızca o çalıştırma için:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run_windows.ps1 -SetupOnly
+```
+
+Linux (RTX 5090):
 
 ```bash
-cd ~/Desktop/Carla-Workflow-Modular
-pip install -r requirements.txt
-python scripts/check_setup.py
+cd ~/Desktop/Carla-Workflow
+bash run_linux.sh --setup-only
 ```
 
 `check_setup.py` çıktısında gerekli paketler ve araç modeli `OK` görünmelidir.
@@ -76,19 +92,37 @@ Araç modeli şu konumdadır:
 models/vehicle/carla_yolov8n_best.pt
 ```
 
+Kontrol çıktısında `OK CUDA` ve ekran kartı adı görünmelidir. CPU-only PyTorch
+500–800 ms algılama gecikmesine yol açabilir; RTX 5070 üzerinde bundled modelin
+640 piksel sıcak inference ölçümü ortalama 24,5 ms, p95 30,6 ms'dir.
+
 ## Normal çalıştırma
 
-Önce kullandığın sürüme uygun CARLA sunucusunu aç. Ardından:
+Önce kullandığın sürüme uygun CARLA sunucusunu aç. Ardından Windows'ta:
 
-```bash
-cd ~/Desktop/Carla-Workflow-Modular
-bash run.sh
+```powershell
+.\run_windows.ps1
 ```
 
-CARLA ile araç modeli aynı ekran kartında sorun çıkarırsa:
+Linux'ta:
 
 ```bash
-bash run_cpu.sh
+bash run_linux.sh
+```
+
+İlk kurulumdan sonraki açılışlarda paket kontrolünü atlamak için Windows'ta
+`-SkipInstall`, Linux'ta `--skip-install` kullanılabilir. CUDA bulunamazsa betik
+varsayılan olarak durur; yalnızca bilinçli tanılama için `-AllowCpu` veya
+`--allow-cpu` seçeneği vardır.
+
+Tam sensör BEV görünümü:
+
+```powershell
+.\run_windows.ps1 -SensorMode bev
+```
+
+```bash
+bash run_linux.sh --bev
 ```
 
 OpenCV penceresinde `Q`, `ESC` veya pencerenin kapatma düğmesi uygulamayı
@@ -96,11 +130,14 @@ güvenli biçimde sonlandırır.
 
 ## Sensör yerleşimini görme
 
-Normal uygulama çalışırken ikinci terminalde:
+Normal uygulama çalışırken ikinci bir `carla` Conda terminalinde:
+
+```powershell
+conda run --no-capture-output -n carla python scripts/sensor_layout_viewer.py
+```
 
 ```bash
-cd ~/Desktop/Carla-Workflow-Modular
-./run_sensor_viewer.sh
+conda run --no-capture-output -n carla python scripts/sensor_layout_viewer.py
 ```
 
 Tarayıcıda aracın üstten ve yandan görünümü açılır. Parlak sensörler o anda
@@ -108,11 +145,10 @@ Tarayıcıda aracın üstten ve yandan görünümü açılır. Parlak sensörler
 açılmamıştır. Bir sensöre tıklayınca konumu, yönü, görüş açısı ve gerçek
 menzili gösterilir.
 
-Tarayıcı otomatik açılmazsa:
+Tarayıcı otomatik açılmazsa `--no-browser` ile HTML dosyası üretilebilir:
 
 ```bash
-./run_sensor_viewer.sh --no-browser
-xdg-open /tmp/carla_sensor_layout.html
+conda run --no-capture-output -n carla python scripts/sensor_layout_viewer.py --no-browser
 ```
 
 Bu ekran ROS veya RViz kullanmaz.
@@ -144,13 +180,15 @@ tamamen kaldırılmıştır.
 ## İsteğe bağlı BEV modülü
 
 BEV bu sürümde projeye entegredir fakat varsayılan olarak kapalıdır. Normal
-çalıştırmada `.env` içindeki değer şu şekilde kalmalıdır:
+çalıştırma betikleri `control` modunu seçer. Manuel `python main.py`
+çalıştırmasında `.env` içindeki değer şu şekilde kalmalıdır:
 
 ```dotenv
 SENSOR_MODE=control
 ```
 
-Daha sonra denemek istediğinde yalnızca şu değeri değiştirmen yeterlidir:
+Daha sonra betiklerde `-SensorMode bev` (Windows) veya `--bev` (Linux)
+kullanılabilir. Manuel çalıştırmada şu değer seçilir:
 
 ```dotenv
 SENSOR_MODE=bev
@@ -231,6 +269,7 @@ kamera ve radar yerleşimi korunmuştur.
 | `lead_vehicle.py` | Kamera kutuları, radar noktaları, rota | Takip edilecek ön araç ve acil fren adayı |
 | `tracking.py` | Birleştirilmiş araç ölçümleri | Kareler arasında sabit araç kimliği ve yumuşatılmış hareket |
 | `stanley_controller.py` | Araç konumu, yönü ve referans rota | `-1` ile `+1` arasında direksiyon |
+| `mpc_controller.py` | Araç durumu, rota ve gelecek eğrilikler | OSQP tabanlı öngörülü direksiyon veya güvenli Stanley fallback |
 | `speed_planner.py` | Rota eğriliği, hız ve şerit hatası | Metre/saniye cinsinden güvenli hedef hız |
 | `behavior_planner.py` | Trafik ışığı, hız tabelası, yaya, viraj ve sensör sağlığı | Davranış modu, güvenli hedef hız ve gerekirse sanal durma noktası |
 | `longitudinal_controller.py` | Ego hızı, hedef hız ve ön araç | Birbirini dışlayan gaz veya fren |
@@ -252,6 +291,7 @@ uygulamasını birlikte gösterir.
 | En yakın komşu eşleştirme | Yeni ölçümü kendisine en yakın mevcut araç takibiyle eşleştirir. | `tracking.py` ölçüm ile takip arasındaki bütün uygun uzaklıkları hesaplar. En yakın çiftten başlar; 5 metreden uzak çiftleri kabul etmez ve uzun süre görülmeyen takibi siler. |
 | Zamansal doğrulama ve histerezis | Tek bir gürültülü ölçümle hedef değiştirmeyi önler. | `lead_vehicle.py` doğrudan radar hedefini normal takibe vermeden önce iki yeni karede görür. Benzer mesafedeki iki araç arasında geçiş yapmak için yeni aracın en az 2 metre daha avantajlı olmasını ister. |
 | Stanley direksiyon kontrolü | Araç yönü ile şerit merkezine olan yanal hatayı tek direksiyon komutunda birleştirir. | `stanley_controller.py` aracın önündeki kontrol noktasını rotaya izdüşürür. Başlık hatası, yanal hata ve küçük bir viraj ileri beslemesi kullanır; direksiyon büyüklüğünü ve değişim hızını araç hızına göre sınırlar. |
+| Lineer yanal MPC | Gelecekteki rota eğriliklerini aynı optimizasyon ufkunda değerlendirir. | `mpc_controller.py` 1,8 saniyelik Frenet hata modelini OSQP ile çözer. Direksiyon açısı ve değişim hızını sınırlar; çözüm hata verir, 30 ms bütçeyi aşar veya tahmin geçersizleşirse aynı çevrimde Stanley'ye döner. |
 | Eğrilik tabanlı hız planlama | Viraj keskinleştikçe izin verilen hızı rahat yanal ivmeye göre düşürür. | `speed_planner.py` hız yükseldikçe 35-75 metre ileriyi tarar. Yol eğriliğinden `hız = karekök(yanal ivme / eğrilik)` hesabını yapar. Şerit hatası büyürse ayrıca toparlanma hızı ister. |
 | IDM araç takip kontrolü | Hedef hıza giderken ön araçla hıza bağlı güvenli zaman ve mesafe bırakır. | `longitudinal_controller.py` 2 metre duruş boşluğu, 1,2 saniye zaman aralığı, ego hızı ve yaklaşma hızından istenen ivmeyi hesaplar. Sonuç pozitifse gaz, yeterince negatifse fren üretir. |
 | İvme değişim sınırı | Gaz veya fren isteğinin bir çevrimde aniden sıçramasını önler. | `longitudinal_controller.py` istenen ivme değişimini hızlanmada 3, frenlemede 6 m/s³ ile sınırlar. Gaz ve fren aynı çevrimde birlikte verilmez. |
@@ -270,10 +310,11 @@ silinir ve fren doğrudan `1.0` yapılır.
 
 ### Direksiyon
 
-Stanley kontrolcüsü aracın ön kontrol noktasını referans rotaya izdüşürür.
-Rota yönü ile araç yönü arasındaki farkı ve şerit merkezine olan yanal hatayı
-birleştirir. Araç şerit kenarına yaklaşırsa merkezleme etkisi artar. Direksiyon
-değişimi hıza göre sınırlandırıldığı için ani sağ-sol komut üretilmez.
+Varsayılan `mpc` modu araç merkezinin yanal ve başlık hatasını, önündeki 18
+tahmin adımının yol eğriliğiyle birlikte çözer. Direksiyon açısı ile değişim
+hızı optimizasyonun içinde sınırlıdır. Solver bulunamaz, geçerli çözüm üretemez,
+30 ms süre bütçesini aşar veya rota çok kısaysa aynı çevrimde mevcut Stanley
+kontrolcüsü devralır. `LATERAL_CONTROLLER=stanley` ile MPC tamamen kapatılabilir.
 
 ### Hedef hız
 
@@ -313,6 +354,7 @@ EGO_ROLE_NAME=ego_vehicle
 VEHICLE_DEVICE=auto
 VEHICLE_CONFIDENCE=0.05
 PERCEPTION_EVERY_N_FRAMES=1
+CAMERA_WAIT_TIMEOUT_MS=10
 
 ENABLE_SIGN_DETECTION=false
 ENABLE_LIDAR_FUSION=true
@@ -323,10 +365,14 @@ BEV_UPDATE_EVERY_N_FRAMES=2
 STATUS_PERIOD_SECONDS=2.0
 MAX_RUNTIME_SECONDS=0
 MAXIMUM_SPEED_KMH=60
+LATERAL_CONTROLLER=mpc
 ```
 
 - `VEHICLE_DEVICE=auto`: CUDA varsa ekran kartını, yoksa CPU'yu seçer.
 - `PERCEPTION_EVERY_N_FRAMES=1`: her kamera karesini algılamaya gönderir.
+- `CAMERA_WAIT_TIMEOUT_MS=10`: kamera jitter'ının ana kontrol ve OpenCV
+  döngüsünü yüzlerce milisaniye durdurmasını engeller; geciken son kare bir
+  sonraki çevrimde alınır.
 - `ENABLE_SIGN_DETECTION=false`: isteğe bağlı levha modellerini kapalı tutar.
 - `ENABLE_LIDAR_FUSION=true`: zaman uyumlu LiDAR noktalarıyla kamera mesafesini doğrular.
 - `SENSOR_MODE=control`: kontrol için kamera, radar ve LiDAR sensörlerini açar.
@@ -336,6 +382,8 @@ MAXIMUM_SPEED_KMH=60
   `true` yapılırsa `SENSOR_MODE` değerinden bağımsız olarak kayıt modu seçilir.
 - `MAX_RUNTIME_SECONDS=0`: kullanıcı kapatana kadar çalışır.
 - `MAXIMUM_SPEED_KMH=60`: düz ve boş yoldaki üst hız hedefidir.
+- `LATERAL_CONTROLLER=mpc`: öngörülü yanal kontrolü açar; `stanley` güvenli
+  karşılaştırma ve geri dönüş seçeneğidir.
 
 ## Terminal durum satırı
 
@@ -346,6 +394,8 @@ Uygulama belirlenen aralıkta bir `[STATUS]` satırı yazar:
 | `speed` | Ego aracının mevcut hızı |
 | `target` | Viraj ve şerit durumundan sonra seçilen hedef hız |
 | `mode` | `CRUISE`, `LEAD_FAR`, `FOLLOW`, `HOLD`, `RESTART` veya `EMERGENCY` |
+| `lateral` / `mpc_ms` | Etkin yanal kontrolcü ve MPC çözüm süresi |
+| `lateral_fallback` | MPC yerine Stanley kullanılmasının açık nedeni |
 | `steer` | Uygulanan direksiyon değeri |
 | `throttle`, `brake` | Uygulanan gaz ve fren |
 | `bbox` | Son algılama sonucundaki araç kutusu sayısı |
@@ -370,6 +420,9 @@ Tam sensör paketi gerektiğinde `.env` içinde:
 ```dotenv
 SENSOR_MODE=record
 ```
+
+Çalıştırma betikleriyle aynı mod Windows'ta `-SensorMode record`, Linux'ta
+`--record` seçeneğiyle açılır.
 
 Bu mod 15 sensörü de açar ve daha fazla işlem gücü kullanır. Görüntü, LiDAR,
 radar, GNSS, IMU ve kalibrasyon dosyaları `data/runs/` altında saklanır.

@@ -1,3 +1,3 @@
 """İsteğe bağlı, sensör tabanlı kuş bakışı görünüm modülü."""
 
-from carla_app.bev.module import BevModule
+from carla_app.bev.module import BevModule as BevModule

@@ -1,5 +1,7 @@
 """Uygulamanın kullandığı sensörleri açar, okur ve güvenli biçimde kapatır."""
 
+import time
+
 from carla_app.sensors.factory import spawn_layout
 from carla_app.sensors.layout import build_sensor_layout
 from carla_app.sensors.processors import process_packet
@@ -20,6 +22,11 @@ class SensorManager:
         self.recording_enabled = bool(settings.enable_data_recording)
         self.bev_enabled = bool(getattr(settings, "enable_bev", False))
         self.sensor_mode = getattr(settings, "sensor_mode", "control")
+        self.camera_wait_timeout_s = (
+            max(0.0, float(getattr(settings, "camera_wait_timeout_ms", 10.0)))
+            / 1000.0
+        )
+        self.last_camera_wait_ms = 0.0
         self.layout = None
         self.sync = None
         self.writer = None
@@ -81,7 +88,13 @@ class SensorManager:
             print(f"[OK] Yalnızca kontrol sensörleri aktif: {names}")
 
     def get_rgb(self, frame_id):
-        return self.camera_stream.wait_latest(frame_id, timeout=0.5)
+        started_at = time.perf_counter()
+        result = self.camera_stream.wait_latest(
+            frame_id,
+            timeout=self.camera_wait_timeout_s,
+        )
+        self.last_camera_wait_ms = (time.perf_counter() - started_at) * 1000.0
+        return result
 
     def get_radar(self, sensor_name="radar_front_long"):
         return self.radar_stream.get_latest(sensor_name)

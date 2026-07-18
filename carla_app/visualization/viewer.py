@@ -46,7 +46,7 @@ class PerceptionViewer:
             self.closed = not (self._window_is_open() and self._read_key())
             return not self.closed
 
-        frame = np.ascontiguousarray(image[:, :, :3][:, :, ::-1]).copy()
+        frame = np.ascontiguousarray(image[:, :, :3][:, :, ::-1])
         for detection in vehicles:
             self._draw(frame, detection, (0, 220, 0), "VEH")
         for detection in signs:

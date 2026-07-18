@@ -27,6 +27,54 @@ def _boolean(name, default):
     raise ValueError(f"{name} true/false olmali; gelen deger: {value!r}")
 
 
+class DrivingParameters:
+    """Algılama ve sürüş kararlarının ayarlanabilir güvenlik değerleri."""
+
+    def __init__(self, dt=0.05):
+        self.dt = max(0.01, float(dt))
+
+        # Algılama ve zamansal doğrulama eşikleri.
+        self.minimum_detection_confidence = 0.25
+        self.traffic_light_confidence = 0.35
+        self.speed_sign_confidence = 0.45
+        self.pedestrian_confidence = 0.35
+        self.traffic_light_confirmation_frames = 3
+        self.green_light_confirmation_frames = 3
+        self.speed_sign_confirmation_frames = 3
+        self.tracker_lost_tolerance_frames = 6
+        self.sensor_timeout_frames = max(6, int(round(1.0 / self.dt)))
+
+        # Boylamsal sürüş ve güvenli duruş değerleri.
+        self.comfortable_deceleration_mps2 = 2.0
+        self.maximum_normal_deceleration_mps2 = 4.0
+        self.emergency_deceleration_mps2 = 8.0
+        self.reaction_time_s = 0.50
+        self.stopping_safety_margin_m = 2.0
+        self.traffic_light_stop_offset_m = 3.0
+        self.following_time_s = 1.5
+        self.minimum_following_distance_m = 2.0
+        self.green_start_acceleration_mps2 = 1.2
+
+        # Yaya risk kademeleri.
+        self.pedestrian_watch_distance_m = 35.0
+        self.pedestrian_slow_distance_m = 25.0
+        self.pedestrian_stop_distance_m = 12.0
+        self.pedestrian_emergency_distance_m = 5.0
+
+        # Kamera-LiDAR eşleştirme toleransları.
+        self.lidar_maximum_age_frames = 2
+        self.lidar_minimum_points = 3
+        self.camera_lidar_conflict_m = 5.0
+        self.camera_lidar_conflict_ratio = 0.35
+
+        # Kontrol komutu ve düşük güven modu sınırları.
+        self.degraded_speed_mps = 10.0 / 3.6
+        self.maximum_target_speed_mps = 130.0 / 3.6
+        self.maximum_throttle = 1.0
+        self.maximum_brake = 1.0
+        self.maximum_steer = 1.0
+
+
 class Settings:
     """`.env` içindeki bütün uygulama ayarlarını normal alanlarda tutar."""
 
@@ -102,6 +150,7 @@ class Settings:
         )
 
         self.enable_sign_detection = _boolean("ENABLE_SIGN_DETECTION", False)
+        self.enable_lidar_fusion = _boolean("ENABLE_LIDAR_FUSION", True)
         old_recording_setting = _boolean("ENABLE_DATA_RECORDING", False)
         requested_sensor_mode = os.getenv("SENSOR_MODE", "").strip().lower()
         if not requested_sensor_mode:

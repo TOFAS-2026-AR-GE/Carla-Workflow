@@ -3,7 +3,7 @@
 import math
 
 from carla_app.bev import BevModule
-from carla_app.config import Settings
+from carla_app.config import DrivingParameters, Settings
 from carla_app.controller.vehicle.lead_vehicle import LeadVehicleTracker
 from carla_app.controller.vehicle.vehicle_controller import VehicleController
 from carla_app.core.client import CarlaSession
@@ -13,6 +13,7 @@ from carla_app.core.spectator import update_spectator
 from carla_app.core.state import read_vehicle_state, serializable_vehicle_state
 from carla_app.core.traffic import Traffic
 from carla_app.core.vehicle import spawn_ego_vehicle
+from carla_app.perception.road_context import RoadContextTracker
 from carla_app.perception.system import PerceptionSystem
 from carla_app.perception.worker import PerceptionWorker
 from carla_app.sensors.manager import SensorManager
@@ -36,6 +37,7 @@ class CarlaApplication:
         self.controller = None
         self.lead_tracker = None
         self.bev_module = None
+        self.road_context_tracker = None
         self.status_every_frames = 1
         self.perception_period = 1
         self.previous_control_mode = None
@@ -104,6 +106,11 @@ class CarlaApplication:
         self.controller = VehicleController(
             self.dt,
             cruise_speed_kmh=self.settings.maximum_speed_kmh,
+            parameters=DrivingParameters(self.dt),
+        )
+        self.road_context_tracker = RoadContextTracker(
+            layout=self.sensors.layout,
+            parameters=self.controller.parameters,
         )
 
         radar_geometry = self.sensors.layout.front_radar_geometry
@@ -178,6 +185,16 @@ class CarlaApplication:
         perception_result = self.worker.get_latest()
         radar_frame_id, radar_points = self.sensors.get_radar("radar_front_long")
         radar_points = radar_points or []
+        lidar_entry = self.sensors.get_lidar(
+            frame_id,
+            max_age_frames=self.controller.parameters.lidar_maximum_age_frames,
+        )
+        road_context = self.road_context_tracker.update(
+            current_frame_id=frame_id,
+            perception_result=perception_result,
+            lidar_entry=lidar_entry,
+            state=state,
+        )
 
         lead_vehicle = self.lead_tracker.update(
             current_frame_id=frame_id,
@@ -193,6 +210,7 @@ class CarlaApplication:
             state,
             lead_vehicle,
             emergency_obstacle=emergency_obstacle,
+            road_context=road_context,
         )
         self.vehicle.apply_control(control)
         update_spectator(self.world, self.vehicle)
@@ -220,6 +238,7 @@ class CarlaApplication:
                     radar_diagnostics=radar_diagnostics,
                     lead_vehicle=lead_vehicle,
                     control_info=control_info,
+                    road_context=road_context,
                 )
             )
 
@@ -240,6 +259,7 @@ class CarlaApplication:
             fallback_frame_id=camera_frame_id,
             current_frame_id=frame_id,
             bev_image=bev_image,
+            road_context=road_context,
         )
 
     def shutdown(self):
@@ -277,6 +297,7 @@ class CarlaApplication:
         radar_diagnostics,
         lead_vehicle,
         control_info,
+        road_context=None,
     ):
         perception_result = perception_result or {}
         vehicles = perception_result.get("vehicles", [])
@@ -322,6 +343,23 @@ class CarlaApplication:
         speed_plan = control_info.get("speed_plan", {})
         message += f" speed_reason={speed_plan.get('speed_reason', 'unknown')}"
 
+        road_context = road_context or {}
+        light = road_context.get("lead_traffic_light")
+        if light is not None:
+            message += (
+                f" light={light.get('color', 'unknown')}"
+                f"@{light.get('estimated_distance_m')}m"
+            )
+        speed_limit = road_context.get("speed_limit_kmh")
+        if speed_limit is not None:
+            message += f" limit={speed_limit}km/h"
+        pedestrian_risk = road_context.get("pedestrian_risk", "NONE")
+        if pedestrian_risk != "NONE":
+            message += f" pedestrian={pedestrian_risk}"
+        lidar = road_context.get("lidar", {})
+        if lidar.get("available"):
+            message += f" lidar_age={lidar.get('age_frames')}"
+
         if lead_vehicle is not None:
             message += (
                 f" lead={float(lead_vehicle['distance_m']):.1f}m"
@@ -356,7 +394,7 @@ class CarlaApplication:
         """Kontrol modunun neden değiştiğini tek, okunaklı satırda anlatır."""
         mode = control_info["mode"]
         message = f"[CONTROL] frame={frame_id} mode={mode}"
-        if mode == "EMERGENCY":
+        if mode in ("EMERGENCY", "EMERGENCY_BRAKE"):
             safety = control_info.get("safety", {})
             message += (
                 f" reason={safety.get('reason')}"
@@ -364,7 +402,7 @@ class CarlaApplication:
                 f" distance={safety.get('distance_m')}m"
                 f" sensor_frame={safety.get('measurement_frame_id')}"
             )
-        elif mode in ("FOLLOW", "HOLD", "LEAD_FAR", "RESTART"):
+        elif mode in ("FOLLOW", "FOLLOW_VEHICLE", "HOLD", "LEAD_FAR", "RESTART"):
             lead = control_info.get("longitudinal_lead") or {}
             message += (
                 f" source={lead.get('source', 'unknown')}"

@@ -441,6 +441,30 @@ class LongitudinalControllerTests(unittest.TestCase):
 
 
 class EmergencyBrakeTests(unittest.TestCase):
+    def test_invalid_command_is_replaced_with_full_brake(self):
+        supervisor = EmergencyBrakeSupervisor()
+        throttle, brake, steer, info = supervisor.validate_control_command(
+            throttle=math.nan,
+            brake=0.0,
+            steer=0.2,
+            target_speed_mps=10.0,
+        )
+        self.assertEqual((throttle, brake, steer), (0.0, 1.0, 0.0))
+        self.assertEqual(info["reason"], "non_finite_command")
+
+    def test_pedal_conflict_keeps_brake_and_clears_throttle(self):
+        supervisor = EmergencyBrakeSupervisor()
+        throttle, brake, steer, info = supervisor.validate_control_command(
+            throttle=0.6,
+            brake=0.4,
+            steer=0.2,
+            target_speed_mps=10.0,
+        )
+        self.assertEqual(throttle, 0.0)
+        self.assertEqual(brake, 0.4)
+        self.assertEqual(steer, 0.2)
+        self.assertEqual(info["reason"], "pedal_conflict")
+
     def test_immediate_ttc_triggers_full_safety_request(self):
         supervisor = EmergencyBrakeSupervisor()
         emergency, info = supervisor.evaluate(

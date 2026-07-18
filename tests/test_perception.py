@@ -37,6 +37,44 @@ class VehicleDetectorTests(unittest.TestCase):
         names = {0: "person", 1: "sign"}
         self.assertEqual(detector._find_vehicle_class_ids(names), [])
 
+    def test_bundled_model_selects_all_supported_traffic_classes(self):
+        detector = VehicleDetector.__new__(VehicleDetector)
+        detector.vehicle_class_ids = [0, 1, 9]
+        names = {
+            0: "bike",
+            1: "motobike",
+            2: "person",
+            3: "traffic_light_green",
+            4: "traffic_light_orange",
+            5: "traffic_light_red",
+            6: "traffic_sign_30",
+            7: "traffic_sign_60",
+            8: "traffic_sign_90",
+            9: "vehicle",
+        }
+        self.assertEqual(detector._find_relevant_class_ids(names), list(range(10)))
+
+    def test_object_prediction_uses_all_relevant_classes(self):
+        captured = {}
+
+        class FakeModel:
+            def predict(self, **arguments):
+                captured.update(arguments)
+                return []
+
+        detector = VehicleDetector.__new__(VehicleDetector)
+        detector.model = FakeModel()
+        detector.confidence = 0.05
+        detector.image_size = 640
+        detector.device = "cpu"
+        detector.vehicle_class_ids = [0, 1, 9]
+        detector.relevant_class_ids = list(range(10))
+        detector._predict(
+            np.zeros((20, 30, 3), dtype=np.uint8),
+            detector.relevant_class_ids,
+        )
+        self.assertEqual(captured["classes"], list(range(10)))
+
     def test_predict_uses_configured_low_threshold_and_vehicle_classes(self):
         captured = {}
 

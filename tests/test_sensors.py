@@ -171,6 +171,47 @@ class SensorManagerTests(unittest.TestCase):
         self.assertEqual(captured["specs"], (camera, radar))
         self.assertIsNone(captured["sync"])
 
+    def test_lidar_fusion_adds_roof_lidar_to_control_sensors(self):
+        settings = types.SimpleNamespace(
+            enable_data_recording=False,
+            enable_lidar_fusion=True,
+            output_folder=None,
+            camera_width=800,
+            camera_height=600,
+            camera_fov=90.0,
+        )
+        camera = types.SimpleNamespace(name="camera_front_wide")
+        radar = types.SimpleNamespace(name="radar_front_long")
+        lidar = types.SimpleNamespace(name="lidar_roof")
+        layout = types.SimpleNamespace(
+            control_specs=(camera, radar),
+            lidar=lidar,
+            all_specs=(camera, radar, lidar),
+            sensor_names=[camera.name, radar.name, lidar.name],
+        )
+        captured = {}
+
+        def fake_spawn_layout(**arguments):
+            captured.update(arguments)
+            return []
+
+        manager = SensorManager(settings)
+        with (
+            patch(
+                "carla_app.sensors.manager.build_sensor_layout",
+                return_value=layout,
+            ),
+            patch(
+                "carla_app.sensors.manager.spawn_layout",
+                side_effect=fake_spawn_layout,
+            ),
+            redirect_stdout(io.StringIO()),
+        ):
+            manager.start(object(), object(), 0.05)
+
+        self.assertEqual(captured["specs"], (camera, radar, lidar))
+        self.assertIsNotNone(captured["live_stream"])
+
     def test_bev_mode_spawns_all_sensors_without_recording(self):
         settings = types.SimpleNamespace(
             enable_data_recording=False,

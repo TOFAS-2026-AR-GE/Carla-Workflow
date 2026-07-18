@@ -27,7 +27,11 @@ class SensorManager:
 
         self.camera_stream = CameraStream(max_frames=8)
         self.radar_stream = RadarStream()
-        self.live_stream = LatestSensorStream() if self.bev_enabled else None
+        lidar_fusion = bool(getattr(settings, "enable_lidar_fusion", False))
+        if self.bev_enabled or lidar_fusion:
+            self.live_stream = LatestSensorStream()
+        else:
+            self.live_stream = None
 
         if self.recording_enabled:
             self.writer = DatasetWriter(settings.output_folder)
@@ -49,6 +53,8 @@ class SensorManager:
             active_specs = self.layout.all_specs
         else:
             active_specs = self.layout.control_specs
+            if getattr(self.settings, "enable_lidar_fusion", False):
+                active_specs = active_specs + (self.layout.lidar,)
 
         self.actors = spawn_layout(
             world=world,
@@ -79,6 +85,13 @@ class SensorManager:
 
     def get_radar(self, sensor_name="radar_front_long"):
         return self.radar_stream.get_latest(sensor_name)
+
+    def get_lidar(self, frame_id, max_age_frames=2):
+        """Kontrol için en yeni, zaman sınırı içindeki LiDAR karesini verir."""
+        if self.live_stream is None or self.layout is None:
+            return None
+        snapshot = self.live_stream.get_snapshot(frame_id, max_age_frames)
+        return snapshot.get(self.layout.lidar.name)
 
     def get_bev_snapshot(self, frame_id, max_age_frames=10):
         """Sensörlerin en yeni geçerli verisini ana döngüyü bekletmeden verir."""

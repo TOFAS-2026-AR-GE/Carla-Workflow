@@ -6,11 +6,14 @@ tehlikede tam fren ister.
 
 import math
 
+from carla_app.config import DrivingParameters
+
 
 class EmergencyBrakeSupervisor:
     """Takip hedefi ile ham radar tehlikesinden daha riskli olanı inceler."""
 
-    def __init__(self):
+    def __init__(self, parameters=None):
+        self.parameters = parameters or DrivingParameters()
         self.stopping_clearance_m = 2.0
         self.hard_distance_m = 1.25
         self.immediate_distance_m = 0.65
@@ -21,13 +24,18 @@ class EmergencyBrakeSupervisor:
         self.hazard_count = 0
         self.last_hazard = None
 
-    def evaluate_candidates(self, lead_obstacle, radar_obstacle=None):
-        """İki güvenlik adayını karşılaştırıp acil fren kararını verir."""
+    def evaluate_candidates(
+        self,
+        lead_obstacle,
+        radar_obstacle=None,
+        rule_obstacle=None,
+    ):
+        """Bütün bağımsız güvenlik adaylarından en riskli olanı inceler."""
         selected_obstacle = None
         selected_metrics = None
         selected_priority = None
 
-        for obstacle in (lead_obstacle, radar_obstacle):
+        for obstacle in (lead_obstacle, radar_obstacle, rule_obstacle):
             metrics = self.calculate_metrics(obstacle)
             if metrics is None:
                 continue
@@ -48,6 +56,48 @@ class EmergencyBrakeSupervisor:
             selected_obstacle,
         )
         return emergency, info
+
+    def validate_control_command(
+        self,
+        throttle,
+        brake,
+        steer,
+        target_speed_mps,
+    ):
+        """Fiziksel sınırları ve gaz-fren çakışmasını son kez denetler."""
+        values = (throttle, brake, steer, target_speed_mps)
+        if not all(isinstance(value, (int, float)) for value in values):
+            return 0.0, 1.0, 0.0, {"overridden": True, "reason": "non_numeric_command"}
+        if not all(math.isfinite(float(value)) for value in values):
+            return 0.0, 1.0, 0.0, {
+                "overridden": True,
+                "reason": "non_finite_command",
+            }
+        if (
+            target_speed_mps < 0.0
+            or target_speed_mps > self.parameters.maximum_target_speed_mps
+        ):
+            return 0.0, 1.0, 0.0, {
+                "overridden": True,
+                "reason": "invalid_target_speed",
+            }
+
+        throttle = max(
+            0.0,
+            min(float(throttle), self.parameters.maximum_throttle),
+        )
+        brake = max(0.0, min(float(brake), self.parameters.maximum_brake))
+        steer = max(
+            -self.parameters.maximum_steer,
+            min(float(steer), self.parameters.maximum_steer),
+        )
+        if throttle > 0.05 and brake > 0.05:
+            throttle = 0.0
+            return throttle, brake, steer, {
+                "overridden": True,
+                "reason": "pedal_conflict",
+            }
+        return throttle, brake, steer, {"overridden": False, "reason": None}
 
     def evaluate(self, obstacle):
         """Tek bir tehlike adayını değerlendirir."""

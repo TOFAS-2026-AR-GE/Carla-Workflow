@@ -1,8 +1,15 @@
 """Gerekli Python paketleri ile model dosyalarının varlığını kontrol eder."""
 
+import sys
 from importlib.util import find_spec
+from pathlib import Path
 
-from carla_app.config import Settings
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# Betik doğrudan çalıştırıldığında proje yolu yerel importtan önce eklenmelidir.
+from carla_app.config import Settings  # noqa: E402
 
 PACKAGES = ["carla", "cv2", "numpy", "yaml", "ultralytics", "dotenv"]
 settings = Settings()

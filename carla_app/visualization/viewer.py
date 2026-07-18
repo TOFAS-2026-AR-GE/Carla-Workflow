@@ -18,6 +18,7 @@ class PerceptionViewer:
         fallback_frame_id=None,
         current_frame_id=None,
         bev_image=None,
+        road_context=None,
     ):
         if self.closed:
             return False
@@ -50,6 +51,13 @@ class PerceptionViewer:
             self._draw(frame, detection, (0, 220, 0), "VEH")
         for detection in signs:
             self._draw(frame, detection, (0, 165, 255), "SIGN")
+        road_context = road_context or {}
+        for detection in road_context.get("detections", []):
+            category = detection.get("category")
+            if category in {"vehicle", "two_wheeler", "speed_sign"}:
+                continue
+            color = (0, 0, 255) if category == "traffic_light" else (255, 0, 255)
+            self._draw(frame, detection, color, category.upper())
 
         lag = 0
         if current_frame_id is not None and result_frame_id is not None:
@@ -59,6 +67,14 @@ class PerceptionViewer:
             f"Frame {result_frame_id} | Vehicles {len(vehicles)} | "
             f"Signs {len(signs)} | Lag {lag} | {elapsed_ms:.1f} ms"
         )
+        lead_light = road_context.get("lead_traffic_light")
+        if lead_light is not None:
+            header += f" | Lead {lead_light.get('color', '?')}"
+        if road_context.get("speed_limit_kmh") is not None:
+            header += f" | Limit {road_context['speed_limit_kmh']}"
+        pedestrian_risk = road_context.get("pedestrian_risk", "NONE")
+        if pedestrian_risk != "NONE":
+            header += f" | Ped {pedestrian_risk}"
         header_color = (40, 40, 160) if errors else (20, 20, 20)
         cv2.rectangle(frame, (0, 0), (frame.shape[1], 32), header_color, -1)
         cv2.putText(

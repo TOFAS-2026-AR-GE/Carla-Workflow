@@ -18,6 +18,8 @@ recordings/
 *.avi
 *.png
 *.jpg
+!car_pedestrian_yolo11m_960/graphs/*.png
+!car_pedestrian_yolo11m_960/samples/*.jpg
 .vscode
 *.egg-info/
 dist/

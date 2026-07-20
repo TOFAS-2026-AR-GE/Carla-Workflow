@@ -382,6 +382,41 @@ class LongitudinalPIDControllerTests(unittest.TestCase):
         self.assertEqual(throttle, 0.0)
         self.assertEqual(brake, controller.hold_brake)
 
+    def test_zero_reference_does_not_hold_far_from_physical_lead(self):
+        controller = LongitudinalPIDController(dt=0.05)
+        far_stopped_lead = {
+            "distance_m": 8.0,
+            "relative_speed_mps": 0.0,
+            "source": "camera_radar_track",
+        }
+
+        _, _, info = controller.run_step(
+            straight_state(speed_mps=0.0),
+            far_stopped_lead,
+            target_speed=0.0,
+        )
+
+        self.assertEqual(info["mode"], "TRACKING")
+        self.assertFalse(info["hold_active"])
+
+    def test_stopped_physical_lead_holds_at_two_metres(self):
+        controller = LongitudinalPIDController(dt=0.05)
+        close_stopped_lead = {
+            "distance_m": 2.05,
+            "relative_speed_mps": 0.0,
+            "source": "camera_radar_track",
+        }
+
+        throttle, brake, info = controller.run_step(
+            straight_state(speed_mps=0.0),
+            close_stopped_lead,
+            target_speed=0.0,
+        )
+
+        self.assertEqual(info["mode"], "HOLD")
+        self.assertEqual(throttle, 0.0)
+        self.assertEqual(brake, controller.hold_brake)
+
     def test_confirmed_green_target_releases_hold_and_uses_breakaway_throttle(self):
         controller = LongitudinalPIDController(dt=0.05)
         controller.run_step(

@@ -38,7 +38,10 @@ class LongitudinalPIDController:
         # Tam duruşta aracın eğimde kaymasını engeller.
         self.hold_speed_mps = 0.20
         self.hold_release_target_mps = 0.10
-        self.hold_distance_m = 2.40
+        # Radar mesafesi bu değere geldiğinde duran fiziksel aracın arkasında
+        # mekanik HOLD'a geçilir. Küçük 10 cm pay, ölçüm gürültüsünde
+        # iki metrelik hedefin ileri-geri açılmasını önler.
+        self.hold_distance_m = 2.10
         self.hold_brake = 0.35
         self.hold_active = False
 
@@ -180,14 +183,23 @@ class LongitudinalPIDController:
         """Tam duruş frenine girme ve tekrar hareket etme kararını verir."""
         stopped_request = effective_speed <= 0.10
         lead_speed = self.lead_speed(ego_speed, lead)
+        stop_point = self.is_rule_obstacle(lead)
+        physical_lead = lead is not None and not stop_point
         close_stopped_lead = (
-            lead is not None
+            physical_lead
             and lead["distance_m"] <= self.hold_distance_m
             and (lead_speed or 0.0) <= 0.30
         )
-        stop_point = self.is_rule_obstacle(lead)
 
-        if ego_speed <= self.hold_speed_mps and (stopped_request or close_stopped_lead):
+        # Kırmızı ışık veya yaya kararı hedef hızı sıfırladığında
+        # bulunduğumuz yerde freni tutarız. Fiziksel bir ön araç varsa sıfır
+        # referans tek başına HOLD sebebi değildir; araç 2 metreye kadar
+        # kontrollü biçimde yaklaşmaya devam eder.
+        hold_from_speed_request = stopped_request and not physical_lead
+
+        if ego_speed <= self.hold_speed_mps and (
+            hold_from_speed_request or close_stopped_lead
+        ):
             self.hold_active = True
         elif (
             effective_speed > self.hold_release_target_mps

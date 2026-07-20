@@ -22,11 +22,11 @@ class IDMSpeedPlanner:
         self.maximum_deceleration_mps2 = 3.5
         self.acceleration_exponent = 4.0
 
-        # IDM ivmesini PID'nin takip edeceği hıza çeviren kısa tahmin süresi.
-        # İki saniyelik ufuk, 60 km/h hızda kırmızı ışığa konforlu biçimde
-        # duracak kadar erken; PID'yi ani tam fren komutuna zorlamayacak
-        # kadar da yumuşaktır.
-        self.reference_horizon_s = 2.0
+        # IDM ivmesi PID'ye zaten ileri besleme olarak verilir. Hız referansını
+        # iki saniye ileri taşımak, duran bir araca yaklaşırken hedefi gereğinden
+        # erken sıfıra indiriyordu. Kısa ufuk PID hatasını düzeltir; asıl
+        # yavaşlama kararı yine fiziksel IDM ivmesinden gelir.
+        self.reference_horizon_s = 0.75
 
         # Normal araç takibi iki yeni ölçümle doğrulanır. Trafik ışığı gibi
         # davranış katmanından gelen sanal engeller zaten doğrulanmıştır.

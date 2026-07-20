@@ -73,6 +73,7 @@ class IDMPIDClosedLoopTests(unittest.TestCase):
         pid = LongitudinalPIDController(0.05)
         speed = 60.0 / 3.6
         distance = 55.0
+        stopped_too_early = False
 
         for tick in range(500):
             lead = {
@@ -86,7 +87,7 @@ class IDMPIDClosedLoopTests(unittest.TestCase):
                 lead,
                 70.0 / 3.6,
             )
-            throttle, brake, _ = pid.run_step(
+            throttle, brake, pid_info = pid.run_step(
                 longitudinal_state(speed),
                 lead,
                 reference,
@@ -94,12 +95,15 @@ class IDMPIDClosedLoopTests(unittest.TestCase):
             )
             speed = self.simulate_step(speed, throttle, brake, 0.05)
             distance -= speed * 0.05
-            if speed <= 0.02 and brake >= pid.hold_brake:
+            if speed <= 0.02 and distance > 2.25:
+                stopped_too_early = True
+            if speed <= 0.02 and pid_info["hold_active"]:
                 break
 
         self.assertLess(tick, 499)
-        self.assertGreaterEqual(distance, 2.0)
-        self.assertLessEqual(distance, 3.0)
+        self.assertFalse(stopped_too_early)
+        self.assertGreaterEqual(distance, 1.90)
+        self.assertLessEqual(distance, 2.20)
 
     def test_settles_to_moving_lead_speed_and_dynamic_gap(self):
         idm = IDMSpeedPlanner(0.05)
@@ -138,6 +142,55 @@ class IDMPIDClosedLoopTests(unittest.TestCase):
         self.assertAlmostEqual(ego_speed, lead_speed, delta=0.15)
         self.assertGreaterEqual(distance, idm_info["desired_gap_m"])
         self.assertLess(distance - idm_info["desired_gap_m"], 1.5)
+
+    def test_closes_to_two_metres_after_moving_lead_stops(self):
+        idm = IDMSpeedPlanner(0.05)
+        pid = LongitudinalPIDController(0.05)
+        lead_speed = 10.0
+        ego_speed = 10.0
+        distance = 20.0
+        stopped_too_early = False
+
+        for tick in range(700):
+            # Ön araç dört saniye sonra 2 m/s² ile frenliyor. Fiziksel
+            # olmayan ani sıfır hız değişimi normal takip yerine bağımsız
+            # acil fren denetiminin test konusudur.
+            if tick >= 80:
+                lead_speed = max(0.0, lead_speed - 2.0 * 0.05)
+            lead = {
+                "track_id": 3,
+                "distance_m": distance,
+                "relative_speed_mps": lead_speed - ego_speed,
+                "source": "camera_radar_track",
+            }
+            state = longitudinal_state(ego_speed)
+            reference, idm_info = idm.run_step(
+                state,
+                lead,
+                70.0 / 3.6,
+            )
+            throttle, brake, pid_info = pid.run_step(
+                state,
+                lead,
+                reference,
+                idm_info["idm_acceleration_mps2"],
+            )
+            ego_speed = self.simulate_step(
+                ego_speed,
+                throttle,
+                brake,
+                0.05,
+            )
+            distance += (lead_speed - ego_speed) * 0.05
+            if ego_speed <= 0.02 and distance > 2.25:
+                stopped_too_early = True
+            if ego_speed <= 0.02 and pid_info["hold_active"]:
+                break
+
+        self.assertLess(tick, 699)
+        self.assertFalse(stopped_too_early)
+        self.assertGreaterEqual(distance, 1.90)
+        self.assertLessEqual(distance, 2.20)
 
 
 class PurePursuitMPCClosedLoopTests(unittest.TestCase):

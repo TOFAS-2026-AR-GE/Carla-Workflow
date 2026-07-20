@@ -340,8 +340,9 @@ IDM'ye karşı çalışmaz. Temel ayarlar:
 - En yüksek normal yavaşlama: `3.5 m/s²`
 - PID katsayıları: `Kp=0.55`, `Ki=0.10`, `Kd=0.08`
 
-IDM'nin ivmesi hem iki saniyelik PID hız referansına çevrilir hem de ileri
-besleme olarak PID'ye verilir. Bu, durma noktasına yaklaşırken referans hız
+IDM'nin ivmesi hem kısa ufuklu PID hız referansına çevrilir hem de ileri
+besleme olarak PID'ye verilir. Bu, duran ön araca yaklaşırken referansın erken
+sıfırlanmasını önler; durma noktasına yaklaşırken referans hız
 hatası küçülse bile gerekli fren isteğinin kaybolmamasını sağlar. Araç yaklaşık
 iki metre boşlukta tamamen durursa `HOLD` durumuna geçer ve eğimde kaymamak
 için freni tutar. Ön araç hareket ettiğinde yeniden kalkar. Gaz ile fren aynı

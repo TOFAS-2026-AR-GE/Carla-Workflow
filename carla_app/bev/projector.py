@@ -16,11 +16,16 @@ class BevProjector:
         calibrations=None,
         motion_compensator=None,
         maximum_lidar_points=12000,
+        maximum_measurement_age_frames=10,
     ):
         self.layout = layout
         self.calibrations = calibrations or CalibrationSet(layout)
         self.motion_compensator = motion_compensator
         self.maximum_lidar_points = int(maximum_lidar_points)
+        self.maximum_measurement_age_frames = max(
+            0,
+            int(maximum_measurement_age_frames),
+        )
         self.ground_z_m = self.calibrations.ground_z_m
 
     def build_scene(
@@ -31,7 +36,19 @@ class BevProjector:
         current_frame_id=None,
     ):
         """Füzyon ve çizim katmanlarının kullanacağı kalibre sahneyi üretir."""
+        lidar_entry = sensor_snapshot.get(self.layout.lidar.name)
+        measurement_frames = self.measurement_frames(sensor_snapshot)
+        evidence_frames = []
+        for sensor in (self.layout.lidar,) + tuple(self.layout.radars):
+            if sensor.name in measurement_frames:
+                evidence_frames.append(measurement_frames[sensor.name])
+        if perception_result:
+            for result in perception_result.get("camera_results", {}).values():
+                frame_id = result.get("frame_id")
+                if self.frame_is_fresh(frame_id, current_frame_id):
+                    evidence_frames.append(int(frame_id))
         return {
+            "frame_id": None if current_frame_id is None else int(current_frame_id),
             "lidar_points": self.project_lidar(
                 sensor_snapshot,
                 current_frame_id,
@@ -60,12 +77,25 @@ class BevProjector:
             "total_sensor_count": len(self.layout.all_specs),
             "vehicle_geometry": dict(self.layout.vehicle_geometry),
             "ground_z_m": self.ground_z_m,
+            "lidar_frame_id": (
+                None if lidar_entry is None else int(lidar_entry["frame_id"])
+            ),
+            "measurement_frames": measurement_frames,
+            "evidence_frame_id": (
+                max(evidence_frames) if evidence_frames else None
+            ),
+            "sensor_status": self.build_sensor_status(
+                sensor_snapshot,
+                current_frame_id,
+            ),
         }
 
     def project_lidar(self, sensor_snapshot, current_frame_id=None):
         """LiDAR XYZ noktalarını tam R-T dönüşümüyle ego karesine taşır."""
         entry = sensor_snapshot.get(self.layout.lidar.name)
         if entry is None:
+            return np.empty((0, 3), dtype=np.float32)
+        if not self.frame_is_fresh(entry.get("frame_id"), current_frame_id):
             return np.empty((0, 3), dtype=np.float32)
 
         points = np.asarray(entry["data"], dtype=np.float64)
@@ -97,6 +127,8 @@ class BevProjector:
         for radar in self.layout.radars:
             entry = sensor_snapshot.get(radar.name)
             if entry is None:
+                continue
+            if not self.frame_is_fresh(entry.get("frame_id"), current_frame_id):
                 continue
 
             local_points = []
@@ -187,6 +219,8 @@ class BevProjector:
             result = camera_results.get(camera.name)
             if result is None or result.get("image") is None:
                 continue
+            if not self.frame_is_fresh(result.get("frame_id"), current_frame_id):
+                continue
 
             image = result["image"]
             image_height, image_width = image.shape[:2]
@@ -212,6 +246,13 @@ class BevProjector:
                 distance = math.hypot(float(point[0]), float(point[1]))
                 confidence = float(detection.get("confidence", 0.0))
                 uncertainty = 0.70 + 0.035 * distance
+                lateral_uncertainty = 0.30 + 0.012 * distance
+                covariance = self.radial_covariance(
+                    point[0],
+                    point[1],
+                    uncertainty,
+                    lateral_uncertainty,
+                )
 
                 projected.append(
                     {
@@ -224,6 +265,7 @@ class BevProjector:
                         "class_name": detection.get("class_name", "vehicle"),
                         "confidence": confidence,
                         "uncertainty_m": uncertainty,
+                        "covariance_xy": covariance,
                         "measurement_ids": [
                             self.camera_measurement_id(
                                 camera.name,
@@ -274,6 +316,64 @@ class BevProjector:
             old_frame_id,
             current_frame_id,
         )
+
+    def frame_is_fresh(self, measurement_frame_id, current_frame_id):
+        if measurement_frame_id is None or current_frame_id is None:
+            return True
+        age = int(current_frame_id) - int(measurement_frame_id)
+        return 0 <= age <= self.maximum_measurement_age_frames
+
+    def measurement_frames(self, sensor_snapshot):
+        """Yalnız BEV kanıtı üreten sensörlerin gerçek frame kimlikleri."""
+        allowed = {self.layout.lidar.name}
+        allowed.update(camera.name for camera in self.layout.cameras)
+        allowed.update(radar.name for radar in self.layout.radars)
+        frames = {}
+        for sensor_name, entry in sensor_snapshot.items():
+            if sensor_name not in allowed or entry.get("frame_id") is None:
+                continue
+            frames[sensor_name] = int(entry["frame_id"])
+        return frames
+
+    def build_sensor_status(self, sensor_snapshot, current_frame_id):
+        status = {}
+        for sensor in self.layout.all_specs:
+            if sensor.kind not in {"camera", "radar", "lidar"}:
+                continue
+            entry = sensor_snapshot.get(sensor.name)
+            frame_id = None if entry is None else entry.get("frame_id")
+            age = None
+            if frame_id is not None and current_frame_id is not None:
+                age = int(current_frame_id) - int(frame_id)
+            status[sensor.name] = {
+                "kind": sensor.kind,
+                "frame_id": None if frame_id is None else int(frame_id),
+                "age_frames": age,
+                "fresh": self.frame_is_fresh(frame_id, current_frame_id)
+                if frame_id is not None
+                else False,
+            }
+        return status
+
+    def radial_covariance(
+        self,
+        x_m,
+        y_m,
+        radial_uncertainty_m,
+        lateral_uncertainty_m,
+    ):
+        """Menzil ve yanal hatayı ego XY covariance matrisine döndürür."""
+        angle = math.atan2(float(y_m), float(x_m))
+        cosine = math.cos(angle)
+        sine = math.sin(angle)
+        rotation = np.array(
+            [[cosine, -sine], [sine, cosine]],
+            dtype=np.float64,
+        )
+        local = np.diag(
+            [float(radial_uncertainty_m) ** 2, float(lateral_uncertainty_m) ** 2]
+        )
+        return rotation @ local @ rotation.T
 
     def sensor_origin(self, sensor_name, sensor_snapshot, current_frame_id):
         """Sensör merkezini ölçüm anından güncel ego karesine taşır."""

@@ -4,7 +4,6 @@ import sys
 import types
 import unittest
 
-
 if "carla" not in sys.modules:
     carla = types.ModuleType("carla")
     sys.modules["carla"] = carla

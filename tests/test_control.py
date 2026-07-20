@@ -9,8 +9,8 @@ if "dotenv" not in sys.modules:
     dotenv.load_dotenv = lambda *arguments, **keywords: None
     sys.modules["dotenv"] = dotenv
 
-from carla_app.controller.vehicle.lead_vehicle import LeadVehicleTracker
 from carla_app.controller.vehicle.idm_speed_planner import IDMSpeedPlanner
+from carla_app.controller.vehicle.lead_vehicle import LeadVehicleTracker
 from carla_app.controller.vehicle.longitudinal_pid_controller import (
     LongitudinalPIDController,
 )
@@ -52,6 +52,25 @@ def curved_state(radius_m=20.0, speed_mps=8.0):
         )
         for angle in angles
     ]
+    state = straight_state(speed_mps=speed_mps)
+    state["reference_path"] = path
+    return state
+
+
+def approaching_curve_state(
+    radius_m=8.0,
+    curve_start_m=52,
+    speed_mps=70.0 / 3.6,
+):
+    path = [location(x) for x in range(curve_start_m + 1)]
+    for distance_m in range(1, 82 - len(path)):
+        angle = distance_m / radius_m
+        path.append(
+            location(
+                curve_start_m + radius_m * math.sin(angle),
+                radius_m * (1.0 - math.cos(angle)),
+            )
+        )
     state = straight_state(speed_mps=speed_mps)
     state["reference_path"] = path
     return state
@@ -169,18 +188,50 @@ class SpeedPlannerTests(unittest.TestCase):
         self.assertAlmostEqual(speed, 90.0 / 3.6, places=4)
         self.assertEqual(info["speed_reason"], "speed_limit")
 
-    def test_curve_target_never_drops_below_twenty_three_kmh(self):
+    def test_tight_curve_can_drop_below_twenty_three_for_physical_safety(self):
         planner = CurvatureSpeedPlanner(dt=0.05)
         state = curved_state(radius_m=8.0, speed_mps=15.0)
 
         for _ in range(300):
             speed, info = planner.run_step(state)
 
-        self.assertAlmostEqual(speed, 23.0 / 3.6, places=3)
-        self.assertAlmostEqual(info["desired_speed_mps"], 23.0 / 3.6, places=3)
+        safe_speed = math.sqrt(planner.maximum_lateral_acceleration_mps2 * 8.0)
+        self.assertAlmostEqual(speed, safe_speed, places=3)
+        self.assertAlmostEqual(info["desired_speed_mps"], safe_speed, places=3)
         self.assertEqual(info["speed_reason"], "curve")
 
-    def test_lower_speed_sign_has_priority_over_curve_floor(self):
+    def test_tight_curve_target_respects_lateral_acceleration_limit(self):
+        planner = CurvatureSpeedPlanner(dt=0.05)
+
+        _, info = planner.run_step(curved_state(radius_m=8.0, speed_mps=15.0))
+
+        self.assertLessEqual(
+            info["predicted_lateral_acceleration_mps2"],
+            planner.maximum_lateral_acceleration_mps2 + 1e-9,
+        )
+
+    def test_high_speed_preview_detects_curve_before_braking_distance_closes(self):
+        planner = CurvatureSpeedPlanner(dt=0.05)
+
+        target, info = planner.run_step(approaching_curve_state())
+
+        self.assertGreater(info["curvature_1pm"], 0.05)
+        self.assertLess(target, 70.0 / 3.6)
+
+    def test_curve_radius_and_entry_speed_matrix_respects_lateral_limit(self):
+        for radius_m in (5.0, 8.0, 12.0, 20.0, 40.0, 100.0):
+            for speed_mps in (2.0, 5.0, 10.0, 15.0, 70.0 / 3.6):
+                with self.subTest(radius_m=radius_m, speed_mps=speed_mps):
+                    planner = CurvatureSpeedPlanner(dt=0.05)
+                    _, info = planner.run_step(
+                        curved_state(radius_m=radius_m, speed_mps=speed_mps)
+                    )
+                    self.assertLessEqual(
+                        info["predicted_lateral_acceleration_mps2"],
+                        planner.maximum_lateral_acceleration_mps2 + 1e-9,
+                    )
+
+    def test_speed_sign_is_an_upper_bound_not_a_tight_curve_override(self):
         planner = CurvatureSpeedPlanner(dt=0.05)
 
         _, info = planner.run_step(
@@ -188,7 +239,9 @@ class SpeedPlannerTests(unittest.TestCase):
             speed_limit_kmh=20,
         )
 
-        self.assertAlmostEqual(info["desired_speed_mps"], 20.0 / 3.6)
+        safe_speed = math.sqrt(planner.maximum_lateral_acceleration_mps2 * 8.0)
+        self.assertAlmostEqual(info["desired_speed_mps"], safe_speed)
+        self.assertLess(info["desired_speed_mps"], 20.0 / 3.6)
 
     def test_sustained_large_lane_error_requests_twenty_three_kmh(self):
         planner = CurvatureSpeedPlanner(dt=0.05)
@@ -203,6 +256,46 @@ class SpeedPlannerTests(unittest.TestCase):
             )
 
         self.assertAlmostEqual(info["recovery_speed_mps"], 23.0 / 3.6)
+
+    def test_lane_recovery_survives_one_clean_frame_without_mode_chatter(self):
+        planner = CurvatureSpeedPlanner(dt=0.05)
+        severe_error = {
+            "cross_track_error_m": 2.0,
+            "heading_error_rad": math.radians(35.0),
+        }
+        for _ in range(planner.recovery_confirmation_ticks):
+            planner.run_step(
+                straight_state(speed_mps=12.0),
+                lateral_info=severe_error,
+            )
+
+        _, info = planner.run_step(
+            straight_state(speed_mps=12.0),
+            lateral_info={
+                "cross_track_error_m": 0.0,
+                "heading_error_rad": 0.0,
+            },
+        )
+
+        self.assertIsNotNone(info["recovery_speed_mps"])
+        self.assertEqual(info["speed_reason"], "lane_recovery")
+
+    def test_lane_recovery_releases_after_sustained_clean_evidence(self):
+        planner = CurvatureSpeedPlanner(dt=0.05)
+        severe_error = {
+            "cross_track_error_m": 2.0,
+            "heading_error_rad": math.radians(35.0),
+        }
+        clean = {"cross_track_error_m": 0.0, "heading_error_rad": 0.0}
+        for _ in range(planner.recovery_confirmation_ticks):
+            planner.run_step(straight_state(speed_mps=12.0), severe_error)
+        for _ in range(planner.recovery_release_confirmation_ticks - 1):
+            _, info = planner.run_step(straight_state(speed_mps=12.0), clean)
+            self.assertIsNotNone(info["recovery_speed_mps"])
+
+        _, info = planner.run_step(straight_state(speed_mps=12.0), clean)
+
+        self.assertIsNone(info["recovery_speed_mps"])
 
 
 class IDMSpeedPlannerTests(unittest.TestCase):
@@ -291,6 +384,28 @@ class IDMSpeedPlannerTests(unittest.TestCase):
 
         self.assertFalse(info["lead_confirmed"])
 
+    def test_radar_fallback_keeps_filter_continuity_for_same_physical_lead(self):
+        planner = IDMSpeedPlanner(dt=0.05)
+        state = straight_state(speed_mps=5.0)
+        camera_lead = {
+            "track_id": 21,
+            "distance_m": 10.0,
+            "relative_speed_mps": -1.0,
+            "source": "camera_radar_track",
+        }
+        radar_fallback = {
+            "track_id": -1,
+            "distance_m": 12.2,
+            "relative_speed_mps": -1.0,
+            "source": "radar_direct",
+        }
+
+        planner.run_step(state, camera_lead, 70.0 / 3.6)
+        planner.run_step(state, camera_lead, 70.0 / 3.6)
+        _, info = planner.run_step(state, radar_fallback, 70.0 / 3.6)
+
+        self.assertLess(info["filtered_lead_distance_m"], 11.0)
+
 
 class LongitudinalPIDControllerTests(unittest.TestCase):
     def test_accelerates_toward_target_without_brake(self):
@@ -331,6 +446,23 @@ class LongitudinalPIDControllerTests(unittest.TestCase):
 
         self.assertEqual(throttle, 0.0)
         self.assertGreater(brake, 0.0)
+
+    def test_target_drop_never_commands_throttle_while_overspeeding(self):
+        controller = LongitudinalPIDController(dt=0.05)
+        for _ in range(20):
+            controller.run_step(
+                straight_state(speed_mps=10.0),
+                lead_vehicle=None,
+                target_speed=20.0,
+            )
+
+        throttle, _, _ = controller.run_step(
+            straight_state(speed_mps=15.0),
+            lead_vehicle=None,
+            target_speed=8.0,
+        )
+
+        self.assertEqual(throttle, 0.0)
 
     def test_acceleration_change_respects_jerk_limit(self):
         controller = LongitudinalPIDController(dt=0.05)
@@ -486,6 +618,28 @@ class EmergencyBrakeTests(unittest.TestCase):
         )
         self.assertTrue(emergency)
         self.assertAlmostEqual(info["ttc_s"], 0.5)
+
+    def test_comfortably_stoppable_short_ttc_does_not_trigger_full_brake(self):
+        supervisor = EmergencyBrakeSupervisor()
+        controlled_stop = {
+            "track_id": 5,
+            "distance_m": 9.0,
+            "relative_speed_mps": -6.0,
+            "source": "camera_radar_track",
+            "measurement_frame_id": 1,
+        }
+
+        first, _ = supervisor.evaluate(controlled_stop)
+        controlled_stop["measurement_frame_id"] = 2
+        second, info = supervisor.evaluate(controlled_stop)
+
+        self.assertAlmostEqual(info["ttc_s"], 1.5)
+        self.assertLess(
+            info["required_deceleration_mps2"],
+            supervisor.required_deceleration_threshold_mps2,
+        )
+        self.assertFalse(first)
+        self.assertFalse(second)
 
     def test_stationary_two_metre_gap_is_left_to_normal_hold_control(self):
         supervisor = EmergencyBrakeSupervisor()
@@ -736,6 +890,29 @@ class LeadVehicleTrackerTests(unittest.TestCase):
         self.assertIsNone(first)
         self.assertIsNone(repeated)
         self.assertIsNotNone(confirmed)
+
+    def test_confirmed_radar_lead_survives_short_sensor_dropout(self):
+        tracker = LeadVehicleTracker(0.05, 800, 90.0)
+        state = straight_state(speed_mps=8.0)
+        points = [
+            {
+                "depth_m": 20.0 + offset,
+                "azimuth_deg": offset,
+                "altitude_deg": 0.0,
+                "relative_velocity_mps": -2.0,
+            }
+            for offset in (-0.3, 0.0, 0.3)
+        ]
+        tracker.update(1, state, None, 1, points)
+        self.assertIsNotNone(tracker.update(2, state, None, 2, points))
+
+        held = []
+        for frame_id in range(3, 8):
+            held.append(tracker.update(frame_id, state, None, frame_id, []))
+
+        self.assertTrue(all(lead is not None for lead in held))
+        self.assertTrue(all(lead["source"] == "radar_predicted" for lead in held))
+        self.assertIsNone(tracker.update(8, state, None, 8, []))
 
     def test_stale_radar_frame_is_ignored(self):
         tracker = LeadVehicleTracker(0.05, 800, 90.0)

@@ -17,8 +17,15 @@ class OccupancyGrid:
         rear_range_m=20.0,
         side_range_m=30.0,
         cell_size_m=0.25,
+        fixed_delta_seconds=0.05,
+        decay_half_life_seconds=2.0,
     ):
         self.cell_size_m = float(cell_size_m)
+        self.fixed_delta_seconds = max(1e-3, float(fixed_delta_seconds))
+        self.decay_half_life_seconds = max(
+            self.fixed_delta_seconds,
+            float(decay_half_life_seconds),
+        )
         width = int(math.ceil(2.0 * side_range_m / self.cell_size_m))
         height = int(
             math.ceil((forward_range_m + rear_range_m) / self.cell_size_m)
@@ -32,6 +39,7 @@ class OccupancyGrid:
         )
         self.log_odds = np.zeros((height, width), dtype=np.float32)
         self.previous_frame_id = None
+        self.last_measurement_frames = {}
 
     def update(
         self,
@@ -42,16 +50,37 @@ class OccupancyGrid:
         ground_z_m,
         motion_compensator,
         current_frame_id,
+        measurement_frames=None,
     ):
         self.compensate_old_grid(motion_compensator, current_frame_id)
-        self.log_odds *= 0.97
+        frame_delta = 1
+        if self.previous_frame_id is not None:
+            frame_delta = max(1, int(current_frame_id) - self.previous_frame_id)
+        elapsed_seconds = frame_delta * self.fixed_delta_seconds
+        self.log_odds *= 0.5 ** (elapsed_seconds / self.decay_half_life_seconds)
 
-        self.add_lidar(lidar_points, lidar_origin, ground_z_m)
-        self.add_radar(radar_points)
-        self.add_tracked_objects(tracked_objects)
+        measurement_frames = dict(measurement_frames or {})
+        lidar_frame = measurement_frames.get("lidar_roof")
+        if self.is_new_measurement("lidar_roof", lidar_frame):
+            self.add_lidar(lidar_points, lidar_origin, ground_z_m)
+            self.remember_measurement("lidar_roof", lidar_frame)
+
+        fresh_radar_points = self.fresh_radar_points(radar_points)
+        self.add_radar(fresh_radar_points)
+        self.remember_radar_frames(fresh_radar_points)
         np.clip(self.log_odds, -4.0, 4.0, out=self.log_odds)
+
+        # Kalıcı grid yalnız ham sensör kanıtını tutar. Track kutuları geçici
+        # görsel overlay'dir; doğrulamanın kendi sonucunu tekrar kanıt olarak
+        # kullanmasını önlemek için sensor_probability'ye karışmaz.
+        composite_log_odds = self.log_odds.copy()
+        self.add_tracked_objects(tracked_objects, composite_log_odds)
+        np.clip(composite_log_odds, -4.0, 4.0, out=composite_log_odds)
         self.previous_frame_id = int(current_frame_id)
-        return self.build_state()
+        return self.build_state(
+            composite_log_odds,
+            sensor_log_odds=self.log_odds,
+        )
 
     def compensate_old_grid(self, motion_compensator, current_frame_id):
         if self.previous_frame_id is None:
@@ -105,9 +134,12 @@ class OccupancyGrid:
                 occupied_delta=0.55,
             )
 
-    def add_tracked_objects(self, tracked_objects):
+    def add_tracked_objects(self, tracked_objects, log_odds=None):
+        target = self.log_odds if log_odds is None else log_odds
         for tracked in tracked_objects:
             if not tracked.get("confirmed", False):
+                continue
+            if int(tracked.get("misses", 0)) > 0:
                 continue
             center_x, center_y = self.grid.to_pixel(
                 tracked["x_m"],
@@ -120,7 +152,40 @@ class OccupancyGrid:
             y1 = max(0, center_y - half_length)
             y2 = min(self.grid.height - 1, center_y + half_length)
             if x1 <= x2 and y1 <= y2:
-                self.log_odds[y1 : y2 + 1, x1 : x2 + 1] += 0.75
+                target[y1 : y2 + 1, x1 : x2 + 1] += 0.75
+
+    def is_new_measurement(self, sensor_name, frame_id):
+        if frame_id is None:
+            return True
+        previous = self.last_measurement_frames.get(sensor_name)
+        return previous is None or int(frame_id) > previous
+
+    def remember_measurement(self, sensor_name, frame_id):
+        if frame_id is not None:
+            self.last_measurement_frames[sensor_name] = int(frame_id)
+
+    def fresh_radar_points(self, radar_points):
+        fresh = []
+        for point in radar_points:
+            sensor_name = str(point.get("sensor_name", "radar"))
+            frame_id = point.get("frame_id")
+            if self.is_new_measurement(sensor_name, frame_id):
+                fresh.append(point)
+        return fresh
+
+    def remember_radar_frames(self, radar_points):
+        newest = {}
+        for point in radar_points:
+            sensor_name = str(point.get("sensor_name", "radar"))
+            frame_id = point.get("frame_id")
+            if frame_id is None:
+                continue
+            newest[sensor_name] = max(
+                int(frame_id),
+                newest.get(sensor_name, int(frame_id)),
+            )
+        for sensor_name, frame_id in newest.items():
+            self.remember_measurement(sensor_name, frame_id)
 
     def add_ray(
         self,
@@ -171,15 +236,23 @@ class OccupancyGrid:
                 pixel_y += step_y
         return cells
 
-    def build_state(self):
-        probability = 1.0 / (1.0 + np.exp(-self.log_odds))
-        known = np.abs(self.log_odds) >= 0.20
+    def build_state(self, log_odds=None, sensor_log_odds=None):
+        combined = self.log_odds if log_odds is None else log_odds
+        sensor = self.log_odds if sensor_log_odds is None else sensor_log_odds
+        probability = 1.0 / (1.0 + np.exp(-combined))
+        sensor_probability = 1.0 / (1.0 + np.exp(-sensor))
+        known = np.abs(combined) >= 0.20
         occupied = probability >= 0.62
         free = probability <= 0.42
         return {
             "probability": probability.astype(np.float32),
+            "sensor_probability": sensor_probability.astype(np.float32),
             "known": known,
             "occupied": occupied,
             "free": free,
             "cell_size_m": self.cell_size_m,
+            "forward_range_m": self.grid.forward_range_m,
+            "rear_range_m": self.grid.rear_range_m,
+            "side_range_m": self.grid.side_range_m,
+            "measurement_frames": dict(self.last_measurement_frames),
         }

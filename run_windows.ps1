@@ -66,6 +66,7 @@ $env:VEHICLE_DEVICE = "auto"
 $env:CAMERA_WAIT_TIMEOUT_MS = "10"
 $env:PERCEPTION_EVERY_N_FRAMES = "1"
 $env:VEHICLE_IMAGE_SIZE = "640"
+$env:ENABLE_SIGN_DETECTION = "false"
 $env:PYTHONUNBUFFERED = "1"
 
 Write-Host "[RUN] Windows | RTX 5070 profili | mode=$SensorMode"

@@ -17,7 +17,6 @@ class EmergencyBrakeSupervisor:
         self.stopping_clearance_m = 2.0
         self.hard_distance_m = 1.25
         self.immediate_distance_m = 0.65
-        self.ttc_threshold_s = 1.50
         self.immediate_ttc_s = 0.80
         self.required_deceleration_threshold_mps2 = 4.0
         self.confirmation_ticks = 2
@@ -124,7 +123,6 @@ class EmergencyBrakeSupervisor:
             )
         ordinary_hazard = (
             metrics["distance_m"] <= self.hard_distance_m
-            or metrics["ttc_s"] <= self.ttc_threshold_s
             or metrics["required_deceleration_mps2"]
             >= self.required_deceleration_threshold_mps2
         )
@@ -198,7 +196,7 @@ class EmergencyBrakeSupervisor:
     def hazard_reason(self, metrics, immediate_hazard):
         if metrics["distance_m"] <= self.immediate_distance_m:
             return "critical_distance"
-        if immediate_hazard or metrics["ttc_s"] <= self.ttc_threshold_s:
+        if immediate_hazard:
             return "short_ttc"
         if metrics["distance_m"] <= self.hard_distance_m:
             return "short_distance"
@@ -242,7 +240,6 @@ class EmergencyBrakeSupervisor:
         )
         ordinary = (
             metrics["distance_m"] <= self.hard_distance_m
-            or metrics["ttc_s"] <= self.ttc_threshold_s
             or metrics["required_deceleration_mps2"]
             >= self.required_deceleration_threshold_mps2
         )

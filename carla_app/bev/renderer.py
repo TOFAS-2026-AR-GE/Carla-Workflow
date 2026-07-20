@@ -272,7 +272,11 @@ class BevRenderer:
             velocity_forward = float(track.get("velocity_x_mps", 0.0))
             velocity_right = float(track.get("velocity_y_mps", 0.0))
             object_speed = math.hypot(velocity_forward, velocity_right)
-            heading = math.atan2(velocity_right, velocity_forward) if object_speed > 0.5 else 0.0
+            heading = (
+                math.atan2(velocity_right, velocity_forward)
+                if object_speed > 0.5
+                else 0.0
+            )
             corners = self.metric_box_corners(track, heading)
             polygon = np.array(
                 [self.to_pixel(forward, right) for forward, right in corners],
@@ -324,14 +328,25 @@ class BevRenderer:
             float(track["x_m"]) + float(track.get("velocity_x_mps", 0.0)) * 1.2,
             float(track["y_m"]) + float(track.get("velocity_y_mps", 0.0)) * 1.2,
         )
-        cv2.arrowedLine(canvas, start, end, (255, 184, 80), 2, cv2.LINE_AA, tipLength=0.22)
+        cv2.arrowedLine(
+            canvas,
+            start,
+            end,
+            (255, 184, 80),
+            2,
+            cv2.LINE_AA,
+            tipLength=0.22,
+        )
 
     def draw_track_label(self, canvas, track, center, object_speed):
         """Onaylı takip için kısa kimlik ve hız etiketi yazar."""
         if not track.get("confirmed", False):
             return
         class_name = str(track.get("class_name", "object")).upper()[:10]
-        label = f"#{int(track.get('track_id', 0))} {class_name} {object_speed * 3.6:.0f} km/h"
+        label = (
+            f"#{int(track.get('track_id', 0))} {class_name} "
+            f"{object_speed * 3.6:.0f} km/h"
+        )
         text_x = min(self.width - 175, center[0] + 9)
         text_y = max(70, center[1] - 10)
         cv2.rectangle(
@@ -461,7 +476,13 @@ class BevRenderer:
         """Alt köşede nesne ve occupancy renklerini kısa biçimde açıklar."""
         tracks = len(scene.get("tracks", []))
         text = f"360 SURROUND  |  {tracks} TAKIP  |  MAVI ROTA  |  TURUNCU DOLU ALAN"
-        cv2.rectangle(canvas, (0, self.height - 27), (self.width, self.height), (17, 19, 22), -1)
+        cv2.rectangle(
+            canvas,
+            (0, self.height - 27),
+            (self.width, self.height),
+            (17, 19, 22),
+            -1,
+        )
         cv2.putText(
             canvas,
             text,

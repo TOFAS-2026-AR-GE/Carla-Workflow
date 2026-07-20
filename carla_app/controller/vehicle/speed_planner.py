@@ -17,12 +17,17 @@ class CurvatureSpeedPlanner:
     def __init__(self, dt=0.05, cruise_speed_kmh=70.0):
         self.dt = float(dt)
         self.cruise_speed_mps = max(10.0, float(cruise_speed_kmh)) / 3.6
-        self.minimum_curve_speed_mps = 23.0 / 3.6
         self.maximum_lateral_acceleration_mps2 = 2.0
         self.maximum_speed_increase_mps2 = 1.5
         self.maximum_speed_decrease_mps2 = 3.0
         self.recovery_confirmation_ticks = max(2, int(round(0.15 / self.dt)))
+        self.recovery_release_confirmation_ticks = max(
+            2,
+            int(round(0.40 / self.dt)),
+        )
         self.recovery_evidence_ticks = 0
+        self.recovery_release_ticks = 0
+        self.active_recovery_speed_mps = None
         self.previous_target_speed_mps = self.cruise_speed_mps
 
     def run_step(self, state, lateral_info=None, speed_limit_kmh=None):
@@ -35,7 +40,7 @@ class CurvatureSpeedPlanner:
         curve_speed = self.calculate_curve_speed(curvature, road_speed_mps)
         desired_speed = clamp(
             curve_speed,
-            min(self.minimum_curve_speed_mps, road_speed_mps),
+            0.0,
             road_speed_mps,
         )
 
@@ -44,18 +49,46 @@ class CurvatureSpeedPlanner:
             lateral_info,
         )
         if requested_recovery_speed is None:
-            self.recovery_evidence_ticks = max(0, self.recovery_evidence_ticks - 1)
+            if self.active_recovery_speed_mps is None:
+                self.recovery_evidence_ticks = max(
+                    0,
+                    self.recovery_evidence_ticks - 1,
+                )
+            else:
+                self.recovery_release_ticks += 1
+                if (
+                    self.recovery_release_ticks
+                    >= self.recovery_release_confirmation_ticks
+                ):
+                    self.active_recovery_speed_mps = None
+                    self.recovery_evidence_ticks = 0
+                    self.recovery_release_ticks = 0
         else:
-            self.recovery_evidence_ticks += 1
+            self.recovery_release_ticks = 0
+            if self.active_recovery_speed_mps is None:
+                self.recovery_evidence_ticks += 1
+                if (
+                    self.recovery_evidence_ticks
+                    >= self.recovery_confirmation_ticks
+                ):
+                    self.active_recovery_speed_mps = requested_recovery_speed
+            else:
+                # Hata büyürse hemen daha güvenli hıza geç; iyileşme ise çıkış
+                # doğrulanana kadar mevcut kısıtı korusun.
+                self.active_recovery_speed_mps = min(
+                    self.active_recovery_speed_mps,
+                    requested_recovery_speed,
+                )
 
-        recovery_speed = None
-        if self.recovery_evidence_ticks >= self.recovery_confirmation_ticks:
-            recovery_speed = requested_recovery_speed
+        recovery_speed = self.active_recovery_speed_mps
         if recovery_speed is not None:
             desired_speed = min(desired_speed, recovery_speed)
 
         previous_target_speed = self.previous_target_speed_mps
         target_speed = self.limit_speed_change(desired_speed)
+        # Konfor amaçlı hedef-hız slew limiti, fiziksel viraj sınırının önüne
+        # geçemez. Pedal katmanı gerçek yavaşlamayı kendi jerk sınırıyla yapar.
+        target_speed = min(target_speed, curve_speed)
         self.previous_target_speed_mps = target_speed
         speed_reason = "cruise"
         if speed_limit_kmh is not None:
@@ -78,6 +111,7 @@ class CurvatureSpeedPlanner:
             "requested_recovery_speed_mps": requested_recovery_speed,
             "recovery_speed_mps": recovery_speed,
             "recovery_evidence_ticks": self.recovery_evidence_ticks,
+            "recovery_release_ticks": self.recovery_release_ticks,
             "speed_reason": speed_reason,
             "predicted_yaw_rate_radps": float(predicted_yaw_rate),
             "predicted_lateral_acceleration_mps2": float(
@@ -111,12 +145,9 @@ class CurvatureSpeedPlanner:
         comfortable_speed = math.sqrt(
             self.maximum_lateral_acceleration_mps2 / curvature
         )
-        # 23 km/s alt sınırı yalnızca viraj planına aittir. Daha düşük bir
-        # tabela, kırmızı ışık, yaya veya acil durum bu değerin önüne geçer.
-        return min(
-            road_speed_mps,
-            max(self.minimum_curve_speed_mps, comfortable_speed),
-        )
+        # 23 km/sa, yalnız bu hızda yanal ivme sınırı sağlanıyorsa doğal olarak
+        # korunur. Dar virajda sabit bir taban fiziksel sınırla çelişir.
+        return min(road_speed_mps, comfortable_speed)
 
     def calculate_lane_recovery_speed(self, state, lateral_info):
         """Şerit kenarında güvenli toparlanma hızını verir."""
@@ -177,10 +208,11 @@ class CurvatureSpeedPlanner:
         if not curvatures:
             return 0.0
 
-        # Yüzde 85 değeri gerçek virajı yakalar fakat tek bir bozuk harita
-        # noktasının bütün hedef hızı belirlemesine izin vermez.
+        # Yüzde 90 değeri, yüksek hızda bakış ufkunun son 5-6 metresinde başlayan
+        # virajı fren mesafesi kapanmadan yakalar; tek bir bozuk harita noktası
+        # ise bütün hedef hızı belirleyemez.
         curvatures.sort()
-        index = int(round(0.85 * (len(curvatures) - 1)))
+        index = int(round(0.90 * (len(curvatures) - 1)))
         return curvatures[index]
 
     def three_point_curvature(self, first, middle, last):

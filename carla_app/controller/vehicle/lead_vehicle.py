@@ -77,6 +77,7 @@ class LeadVehicleTracker:
         self.radar_candidate_ticks = 0
         self.last_radar_lead = None
         self.radar_missing_ticks = 0
+        self.radar_hold_ticks = max(2, int(round(0.25 / self.dt)))
         self.last_direct_radar_frame_id = None
         self.emergency_obstacle = None
 
@@ -575,7 +576,7 @@ class LeadVehicleTracker:
             return None
 
         self.radar_missing_ticks += 1
-        if self.radar_missing_ticks > 2:
+        if self.radar_missing_ticks > self.radar_hold_ticks:
             self.last_radar_lead = None
             return None
 

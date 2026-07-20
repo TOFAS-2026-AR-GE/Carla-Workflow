@@ -41,6 +41,8 @@ class CarlaApplication:
         self.status_every_frames = 1
         self.perception_period = 1
         self.previous_control_mode = None
+        self.previous_bev_validation_status = None
+        self.previous_bev_contribution_track_id = None
 
     def run(self):
         """Uygulamayı açar, ana döngüyü çalıştırır ve her durumda temizler."""
@@ -205,6 +207,21 @@ class CarlaApplication:
         )
         radar_diagnostics = self.lead_tracker.get_radar_diagnostics()
         emergency_obstacle = self.lead_tracker.get_emergency_obstacle()
+        bev_validation = None
+        bev_contribution = None
+        if self.bev_module is not None:
+            bev_validation = self.bev_module.validate(
+                frame_id,
+                lead_vehicle=lead_vehicle,
+                emergency_obstacle=emergency_obstacle,
+            )
+            bev_contribution = self.bev_module.contribute(
+                frame_id,
+                state,
+                lead_vehicle=lead_vehicle,
+            )
+            if bev_contribution["applied"]:
+                lead_vehicle = bev_contribution["lead_vehicle"]
 
         control, control_info = self.controller.run_step(
             state,
@@ -212,6 +229,10 @@ class CarlaApplication:
             emergency_obstacle=emergency_obstacle,
             road_context=road_context,
         )
+        if bev_validation is not None:
+            control_info["bev_validation"] = bev_validation
+        if bev_contribution is not None:
+            control_info["bev_contribution"] = bev_contribution
         self.vehicle.apply_control(control)
         update_spectator(self.world, self.vehicle)
 
@@ -219,6 +240,32 @@ class CarlaApplication:
         if current_mode != self.previous_control_mode:
             print(self.control_event_message(frame_id, control_info))
             self.previous_control_mode = current_mode
+
+        if bev_validation is not None:
+            validation_status = bev_validation["status"]
+            if validation_status != self.previous_bev_validation_status:
+                print(
+                    f"[BEV-VALIDATION] frame={frame_id} "
+                    f"status={validation_status} "
+                    f"health={bev_validation['health']['status']} "
+                    f"lead={bev_validation['lead']['status']}"
+                )
+                self.previous_bev_validation_status = validation_status
+
+        contribution_track_id = None
+        if bev_contribution is not None and bev_contribution["applied"]:
+            contribution_track_id = bev_contribution["track_id"]
+        if contribution_track_id != self.previous_bev_contribution_track_id:
+            if contribution_track_id is None:
+                print(f"[BEV-CONTROL] frame={frame_id} recovery=released")
+            else:
+                recovered_lead = bev_contribution["lead_vehicle"]
+                print(
+                    f"[BEV-CONTROL] frame={frame_id} recovery=active "
+                    f"track={contribution_track_id} "
+                    f"distance={recovered_lead['distance_m']:.1f}m"
+                )
+            self.previous_bev_contribution_track_id = contribution_track_id
 
         if self.settings.enable_data_recording:
             self.sensors.save_if_needed(
@@ -456,6 +503,17 @@ class CarlaApplication:
             )
             if ttc is not None and math.isfinite(float(ttc)):
                 message += f" ttc={float(ttc):.2f}s"
+        bev_validation = control_info.get("bev_validation")
+        if bev_validation is not None:
+            message += (
+                f" bev={bev_validation.get('status', 'UNAVAILABLE')}"
+                f" bev_lead={bev_validation.get('lead', {}).get('status', 'UNKNOWN')}"
+            )
+        bev_contribution = control_info.get("bev_contribution")
+        if bev_contribution is not None and bev_contribution.get("applied"):
+            message += (
+                f" bev_ctrl=track#{bev_contribution.get('track_id')}"
+            )
         if errors:
             message += f" detector_errors={','.join(sorted(errors))}"
 

@@ -34,14 +34,14 @@ class LongitudinalPIDController:
         self.maximum_throttle = 0.75
         self.maximum_brake = 0.75
         self.breakaway_throttle = 0.18
+        self.overspeed_throttle_deadband_mps = 0.15
 
         # Tam duruşta aracın eğimde kaymasını engeller.
         self.hold_speed_mps = 0.20
         self.hold_release_target_mps = 0.10
-        # Radar mesafesi bu değere geldiğinde duran fiziksel aracın arkasında
-        # mekanik HOLD'a geçilir. Küçük 10 cm pay, ölçüm gürültüsünde
-        # iki metrelik hedefin ileri-geri açılmasını önler.
-        self.hold_distance_m = 2.10
+        # STOPPING profili nominal 2 m standstill aralığına ölçüm/aktüatör
+        # payı ekleyerek 2.4 m hedefler. Mekanik HOLD profilin sonunda devralır.
+        self.hold_distance_m = 2.45
         self.hold_brake = 0.35
         self.hold_active = False
 
@@ -96,7 +96,20 @@ class LongitudinalPIDController:
                 ego_speed,
                 feedforward_acceleration,
             )
-            acceleration = self.limit_jerk(desired_acceleration)
+            acceleration = self.limit_jerk(
+                desired_acceleration,
+                ego_speed=ego_speed,
+                target_speed=effective_speed,
+            )
+            overspeed_throttle_inhibited = (
+                ego_speed
+                > effective_speed + self.overspeed_throttle_deadband_mps
+            )
+            if overspeed_throttle_inhibited and acceleration > 0.0:
+                # Eski pozitif jerk belleğinin, yeni ve daha düşük hedefe karşı
+                # aracı itmesine izin verme. Gazı kesmek ani fren uygulamak değildir.
+                acceleration = 0.0
+                self.previous_acceleration_mps2 = 0.0
             throttle, brake = self.acceleration_to_pedals(
                 acceleration,
                 ego_speed,
@@ -106,6 +119,8 @@ class LongitudinalPIDController:
                 mode = "RESTART"
             else:
                 mode = "TRACKING"
+        if self.hold_active:
+            overspeed_throttle_inhibited = False
 
         info = {
             "controller": "pid",
@@ -126,6 +141,7 @@ class LongitudinalPIDController:
             ),
             "hold_active": self.hold_active,
             "hold_released": hold_released,
+            "overspeed_throttle_inhibited": overspeed_throttle_inhibited,
         }
         return throttle, brake, info
 
@@ -226,8 +242,26 @@ class LongitudinalPIDController:
             "sensor_fault",
         }
 
-    def limit_jerk(self, desired_acceleration):
+    def limit_jerk(
+        self,
+        desired_acceleration,
+        ego_speed=None,
+        target_speed=None,
+    ):
         """İvmenin çevrimler arasında sert değişmesini önler."""
+        # Araç zaten durmuş ve tekrar ilerlemesi istenmişse eski negatif
+        # ivme fiziksel bir jerk koruması sağlamaz; yalnızca freni gereksiz
+        # yere tutup stop-creep-stop davranışı üretir.
+        restart_requested = (
+            ego_speed is not None
+            and target_speed is not None
+            and ego_speed <= self.hold_speed_mps
+            and target_speed > self.hold_release_target_mps
+            and desired_acceleration > 0.0
+        )
+        if restart_requested and self.previous_acceleration_mps2 < 0.0:
+            self.previous_acceleration_mps2 = 0.0
+
         jerk_limit = (
             self.acceleration_jerk_mps3
             if desired_acceleration >= self.previous_acceleration_mps2
@@ -246,6 +280,12 @@ class LongitudinalPIDController:
         """İvme isteğini aynı anda çalışmayan gaz veya frene dönüştürür."""
         if target_speed <= 0.05 and ego_speed <= self.hold_speed_mps:
             return 0.0, self.hold_brake
+
+        if (
+            ego_speed > target_speed + self.overspeed_throttle_deadband_mps
+            and acceleration >= -self.rolling_resistance_acceleration_mps2
+        ):
+            return 0.0, 0.0
 
         if acceleration >= -self.rolling_resistance_acceleration_mps2:
             throttle = (

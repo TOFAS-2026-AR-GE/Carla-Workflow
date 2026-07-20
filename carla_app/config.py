@@ -176,7 +176,10 @@ class Settings:
             os.getenv("SIGN_CLASSIFIER_IMAGE_SIZE", "96")
         )
 
-        self.enable_sign_detection = _boolean("ENABLE_SIGN_DETECTION", True)
+        # Birleşik araç modeli trafik ışığı ve 30/60/90 tabelalarını da tek
+        # GPU geçişinde üretir. Eski iki-aşamalı ONNX tabela hattı yalnız
+        # özellikle istenirse açılır; aksi halde aynı işi tekrarlayıp gecikme ekler.
+        self.enable_sign_detection = _boolean("ENABLE_SIGN_DETECTION", False)
         self.enable_lidar_fusion = _boolean("ENABLE_LIDAR_FUSION", True)
         old_recording_setting = _boolean("ENABLE_DATA_RECORDING", False)
         requested_sensor_mode = os.getenv("SENSOR_MODE", "").strip().lower()

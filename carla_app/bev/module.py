@@ -13,6 +13,7 @@ from carla_app.bev.occupancy import OccupancyGrid
 from carla_app.bev.projector import BevProjector
 from carla_app.bev.renderer import BevRenderer
 from carla_app.bev.tracking import BevTracker
+from carla_app.bev.validation import BevValidationLayer
 
 
 class BevModule:
@@ -44,8 +45,10 @@ class BevModule:
             forward_range_m=self.grid.forward_range_m,
             rear_range_m=self.grid.rear_range_m,
             side_range_m=self.grid.side_range_m,
+            fixed_delta_seconds=fixed_delta_seconds,
         )
         self.renderer = BevRenderer(grid=self.grid)
+        self.validator = BevValidationLayer()
 
         self.asynchronous = bool(asynchronous)
         self.work_queue = queue.Queue(maxsize=1)
@@ -86,6 +89,7 @@ class BevModule:
         camera_results = self.camera_results_for_ipm(
             sensor_snapshot,
             perception_result,
+            current_frame_id,
         )
         ipm_image, coverage, ipm_cameras = self.camera_ipm.build_mosaic(
             camera_results,
@@ -101,12 +105,14 @@ class BevModule:
             scene["camera_objects"],
             scene["radar_points"],
             object_lidar_points,
+            lidar_frame_id=scene["lidar_frame_id"],
         )
         ego_pose = self.motion.get_pose(current_frame_id)
         tracks = self.tracker.update(
             fused_objects,
             current_frame_id,
             ego_pose,
+            evidence_frame_id=scene["evidence_frame_id"],
         )
         occupancy = self.occupancy.update(
             scene["lidar_points"],
@@ -116,6 +122,7 @@ class BevModule:
             scene["ground_z_m"],
             self.motion,
             current_frame_id,
+            measurement_frames=scene["measurement_frames"],
         )
 
         scene["ipm_image"] = ipm_image
@@ -190,6 +197,33 @@ class BevModule:
         with self.lock:
             return self.latest_scene
 
+    def validate(
+        self,
+        current_frame_id,
+        lead_vehicle=None,
+        emergency_obstacle=None,
+    ):
+        """En son BEV sahnesiyle kontrol algısını yalnızca çapraz doğrular."""
+        with self.lock:
+            scene = self.latest_scene
+        return self.validator.evaluate(
+            scene,
+            current_frame_id,
+            lead_vehicle=lead_vehicle,
+            emergency_obstacle=emergency_obstacle,
+        )
+
+    def contribute(self, current_frame_id, vehicle_state, lead_vehicle=None):
+        """Güvenli BEV lead recovery sonucunu kontrol girişi için döndürür."""
+        with self.lock:
+            scene = self.latest_scene
+        return self.validator.contribute(
+            scene,
+            current_frame_id,
+            vehicle_state,
+            lead_vehicle=lead_vehicle,
+        )
+
     def worker_loop(self):
         while not self.stop_event.is_set():
             try:
@@ -249,18 +283,32 @@ class BevModule:
         mask &= ~inside_ego
         return points[mask]
 
-    def camera_results_for_ipm(self, sensor_snapshot, perception_result):
+    def camera_results_for_ipm(
+        self,
+        sensor_snapshot,
+        perception_result,
+        current_frame_id=None,
+    ):
         """IPM için algılamadan bağımsız en güncel yedi kamerayı seçer."""
         results = {}
         if perception_result:
             for camera_name, result in perception_result.get(
                 "camera_results", {}
             ).items():
-                results[camera_name] = result
+                if self.projector.frame_is_fresh(
+                    result.get("frame_id"),
+                    current_frame_id,
+                ):
+                    results[camera_name] = result
 
         for camera in self.layout.cameras:
             entry = sensor_snapshot.get(camera.name)
             if entry is None:
+                continue
+            if not self.projector.frame_is_fresh(
+                entry.get("frame_id"),
+                current_frame_id,
+            ):
                 continue
             results[camera.name] = {
                 "camera_name": camera.name,

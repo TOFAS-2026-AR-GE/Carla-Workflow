@@ -3,6 +3,9 @@
 import math
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
+
+from carla_app.bev.association import measurement_covariance
 
 
 class BevTracker:
@@ -13,10 +16,19 @@ class BevTracker:
         self.tracks = {}
         self.next_track_id = 1
         self.used_measurements = {}
+        self.last_evidence_frame_id = None
 
-    def update(self, measurements, current_frame_id, ego_pose):
+    def update(
+        self,
+        measurements,
+        current_frame_id,
+        ego_pose,
+        evidence_frame_id=None,
+    ):
         current_frame_id = int(current_frame_id)
         self.predict_tracks(current_frame_id)
+        evidence_delta = self.evidence_delta(evidence_frame_id)
+        evidence_advanced = evidence_delta > 0
 
         fresh_measurements = []
         for measurement in measurements:
@@ -36,9 +48,7 @@ class BevTracker:
                 self.used_measurements[key] = current_frame_id
 
         self.remove_old_measurement_keys(current_frame_id)
-        matches, unmatched_measurements = self.match_measurements(
-            fresh_measurements
-        )
+        matches, unmatched_measurements = self.match_measurements(fresh_measurements)
 
         matched_track_ids = set()
         for track_id, measurement_index in matches:
@@ -47,11 +57,15 @@ class BevTracker:
             matched_track_ids.add(track_id)
 
         for track_id, track in self.tracks.items():
-            if track_id not in matched_track_ids:
-                track["misses"] += 1
+            if evidence_advanced and track_id not in matched_track_ids:
+                track["misses"] += evidence_delta
+                track["confidence"] *= 0.92**evidence_delta
 
         for measurement_index in unmatched_measurements:
             self.create_track(fresh_measurements[measurement_index], current_frame_id)
+
+        if evidence_advanced and evidence_frame_id is not None:
+            self.last_evidence_frame_id = int(evidence_frame_id)
 
         expired = []
         for track_id, track in self.tracks.items():
@@ -96,33 +110,70 @@ class BevTracker:
             track["frame_id"] = current_frame_id
 
     def match_measurements(self, measurements):
-        candidates = []
-        for track_id, track in self.tracks.items():
+        track_ids = sorted(self.tracks)
+        if not track_ids or not measurements:
+            return [], list(range(len(measurements)))
+
+        invalid_cost = 1e9
+        costs = np.full(
+            (len(track_ids), len(measurements)),
+            invalid_cost,
+            dtype=np.float64,
+        )
+        for track_index, track_id in enumerate(track_ids):
+            track = self.tracks[track_id]
+            track_covariance = np.asarray(
+                track.get("covariance", np.diag([4.0, 4.0, 16.0, 16.0])),
+                dtype=np.float64,
+            )[:2, :2]
             for measurement_index, measurement in enumerate(measurements):
                 distance = math.hypot(
                     float(track["state"][0]) - measurement["world_x"],
                     float(track["state"][1]) - measurement["world_y"],
                 )
                 gate = 3.0 + 1.5 * float(measurement["uncertainty_m"])
-                if distance <= min(6.0, gate):
-                    candidates.append((distance, track_id, measurement_index))
+                if distance > min(6.0, gate):
+                    continue
+                innovation = np.array(
+                    [
+                        measurement["world_x"] - float(track["state"][0]),
+                        measurement["world_y"] - float(track["state"][1]),
+                    ],
+                    dtype=np.float64,
+                )
+                innovation_covariance = (
+                    track_covariance + measurement_covariance(measurement)
+                )
+                innovation_covariance += np.eye(2, dtype=np.float64) * 0.04
+                mahalanobis = float(
+                    innovation.T
+                    @ np.linalg.solve(innovation_covariance, innovation)
+                )
+                if mahalanobis > 9.21:
+                    continue
+                costs[track_index, measurement_index] = mahalanobis + 1e-3 * distance
 
-        candidates.sort()
-        used_tracks = set()
+        rows, columns = linear_sum_assignment(costs)
         used_measurements = set()
         matches = []
-        for _distance, track_id, measurement_index in candidates:
-            if track_id in used_tracks or measurement_index in used_measurements:
+        for row, measurement_index in zip(rows, columns):
+            if costs[row, measurement_index] >= invalid_cost:
                 continue
-            used_tracks.add(track_id)
             used_measurements.add(measurement_index)
-            matches.append((track_id, measurement_index))
+            matches.append((track_ids[row], int(measurement_index)))
 
         unmatched = []
         for index in range(len(measurements)):
             if index not in used_measurements:
                 unmatched.append(index)
         return matches, unmatched
+
+    def evidence_delta(self, evidence_frame_id):
+        if evidence_frame_id is None:
+            return 1
+        if self.last_evidence_frame_id is None:
+            return 1
+        return max(0, int(evidence_frame_id) - self.last_evidence_frame_id)
 
     def correct_track(self, track, measurement):
         observation = np.array(
@@ -133,8 +184,7 @@ class BevTracker:
             [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
             dtype=np.float64,
         )
-        variance = max(0.04, float(measurement["uncertainty_m"]) ** 2)
-        measurement_noise = np.eye(2, dtype=np.float64) * variance
+        measurement_noise = measurement_covariance(measurement)
 
         innovation = observation - observation_matrix @ track["state"]
         innovation_covariance = (
@@ -150,9 +200,11 @@ class BevTracker:
         )
         track["state"] = track["state"] + kalman_gain @ innovation
         identity = np.eye(4, dtype=np.float64)
+        residual_matrix = identity - kalman_gain @ observation_matrix
         track["covariance"] = (
-            identity - kalman_gain @ observation_matrix
-        ) @ track["covariance"]
+            residual_matrix @ track["covariance"] @ residual_matrix.T
+            + kalman_gain @ measurement_noise @ kalman_gain.T
+        )
 
         track["hits"] += 1
         track["misses"] = 0
@@ -165,19 +217,19 @@ class BevTracker:
         track["sensor_names"] = measurement["sensor_names"]
         track["length_m"] = measurement["length_m"]
         track["width_m"] = measurement["width_m"]
+        track["source_frames"].update(measurement.get("source_frames", {}))
+        if measurement.get("frame_ids"):
+            track["last_measurement_frame_id"] = max(measurement["frame_ids"])
 
     def create_track(self, measurement, current_frame_id):
         state = np.array(
             [measurement["world_x"], measurement["world_y"], 0.0, 0.0],
             dtype=np.float64,
         )
-        position_variance = max(
-            0.04,
-            float(measurement["uncertainty_m"]) ** 2,
-        )
-        covariance = np.diag(
-            [position_variance, position_variance, 16.0, 16.0]
-        ).astype(np.float64)
+        position_covariance = measurement_covariance(measurement)
+        covariance = np.zeros((4, 4), dtype=np.float64)
+        covariance[:2, :2] = position_covariance
+        covariance[2:, 2:] = np.eye(2, dtype=np.float64) * 16.0
         track_id = self.next_track_id
         self.next_track_id += 1
         self.tracks[track_id] = {
@@ -193,6 +245,10 @@ class BevTracker:
             "sensor_names": measurement["sensor_names"],
             "length_m": measurement["length_m"],
             "width_m": measurement["width_m"],
+            "source_frames": dict(measurement.get("source_frames", {})),
+            "last_measurement_frame_id": max(
+                measurement.get("frame_ids", [current_frame_id])
+            ),
         }
 
     def build_output(self, ego_pose):
@@ -228,6 +284,10 @@ class BevTracker:
                     "width_m": track["width_m"],
                     "confirmed": track["hits"] >= 2,
                     "misses": track["misses"],
+                    "source_frames": dict(track.get("source_frames", {})),
+                    "last_measurement_frame_id": track.get(
+                        "last_measurement_frame_id"
+                    ),
                 }
             )
         return output

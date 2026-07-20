@@ -176,6 +176,26 @@ class TrafficSignDetectorTests(unittest.TestCase):
 
 
 class PerceptionSystemTests(unittest.TestCase):
+    def test_unified_model_keeps_traffic_signs_without_legacy_detector(self):
+        system = PerceptionSystem.__new__(PerceptionSystem)
+        system.vehicle_detector = types.SimpleNamespace(
+            detect_objects=lambda image: [
+                {
+                    "type": "road_object",
+                    "bbox": (10, 10, 30, 30),
+                    "confidence": 0.9,
+                    "class_name": "traffic_sign_60",
+                }
+            ]
+        )
+        system.sign_detector = None
+        system._last_errors = {}
+
+        result = system.detect(7, np.zeros((20, 30, 3), dtype=np.uint8))
+
+        self.assertEqual(len(result["signs"]), 1)
+        self.assertEqual(result["signs"][0]["class_name"], "traffic_sign_60")
+
     def test_sign_failure_does_not_discard_vehicle_boxes(self):
         system = PerceptionSystem.__new__(PerceptionSystem)
         system.vehicle_detector = types.SimpleNamespace(

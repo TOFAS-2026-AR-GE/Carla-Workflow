@@ -6,7 +6,6 @@ import types
 import unittest
 from types import SimpleNamespace
 
-
 if "dotenv" not in sys.modules:
     dotenv = types.ModuleType("dotenv")
     dotenv.load_dotenv = lambda *arguments, **keywords: None
@@ -19,6 +18,7 @@ from carla_app.controller.vehicle.longitudinal_pid_controller import (
 from carla_app.controller.vehicle.pure_pursuit_mpc_controller import (
     PurePursuitMPCController,
 )
+from carla_app.controller.vehicle.safety_supervisor import EmergencyBrakeSupervisor
 
 
 def point(x, y=0.0):
@@ -95,7 +95,7 @@ class IDMPIDClosedLoopTests(unittest.TestCase):
             )
             speed = self.simulate_step(speed, throttle, brake, 0.05)
             distance -= speed * 0.05
-            if speed <= 0.02 and distance > 2.25:
+            if speed <= 0.02 and distance > 2.55:
                 stopped_too_early = True
             if speed <= 0.02 and pid_info["hold_active"]:
                 break
@@ -103,7 +103,46 @@ class IDMPIDClosedLoopTests(unittest.TestCase):
         self.assertLess(tick, 499)
         self.assertFalse(stopped_too_early)
         self.assertGreaterEqual(distance, 1.90)
-        self.assertLessEqual(distance, 2.20)
+        self.assertLessEqual(distance, 2.50)
+
+    def test_does_not_stop_then_creep_from_forty_metres(self):
+        """Normal duruşta araç HOLD bölgesinden önce sıfıra düşmemeli."""
+        idm = IDMSpeedPlanner(0.05)
+        pid = LongitudinalPIDController(0.05)
+        speed = 50.0 / 3.6
+        distance = 40.0
+        premature_stop_gaps = []
+
+        for tick in range(500):
+            lead = {
+                "track_id": 11,
+                "distance_m": distance,
+                "relative_speed_mps": -speed,
+                "source": "camera_radar_track",
+            }
+            state = longitudinal_state(speed)
+            reference, idm_info = idm.run_step(
+                state,
+                lead,
+                70.0 / 3.6,
+            )
+            throttle, brake, pid_info = pid.run_step(
+                state,
+                lead,
+                reference,
+                idm_info["idm_acceleration_mps2"],
+            )
+            speed = self.simulate_step(speed, throttle, brake, 0.05)
+            distance -= speed * 0.05
+            if speed <= 0.02 and distance > 2.55:
+                premature_stop_gaps.append(distance)
+            if speed <= 0.02 and pid_info["hold_active"]:
+                break
+
+        self.assertLess(tick, 499)
+        self.assertEqual(premature_stop_gaps, [])
+        self.assertGreaterEqual(distance, 1.90)
+        self.assertLessEqual(distance, 2.50)
 
     def test_settles_to_moving_lead_speed_and_dynamic_gap(self):
         idm = IDMSpeedPlanner(0.05)
@@ -182,7 +221,7 @@ class IDMPIDClosedLoopTests(unittest.TestCase):
                 0.05,
             )
             distance += (lead_speed - ego_speed) * 0.05
-            if ego_speed <= 0.02 and distance > 2.25:
+            if ego_speed <= 0.02 and distance > 2.55:
                 stopped_too_early = True
             if ego_speed <= 0.02 and pid_info["hold_active"]:
                 break
@@ -190,7 +229,213 @@ class IDMPIDClosedLoopTests(unittest.TestCase):
         self.assertLess(tick, 699)
         self.assertFalse(stopped_too_early)
         self.assertGreaterEqual(distance, 1.90)
-        self.assertLessEqual(distance, 2.20)
+        self.assertLessEqual(distance, 2.50)
+
+    def test_low_speed_lead_source_switches_do_not_create_brake_chatter(self):
+        for lead_speed_kmh in (5.0, 10.0):
+            with self.subTest(lead_speed_kmh=lead_speed_kmh):
+                idm = IDMSpeedPlanner(0.05)
+                pid = LongitudinalPIDController(0.05)
+                lead_speed = lead_speed_kmh / 3.6
+                ego_speed = 50.0 / 3.6
+                distance = 40.0
+                settled_brakes = []
+                stopped_ticks = 0
+
+                for tick in range(1200):
+                    phase = tick % 12
+                    offset = 2.2 if phase < 3 else (-1.5 if phase < 6 else 0.0)
+                    track_id = 31 if phase < 6 else -1
+                    source = (
+                        "camera_radar_track"
+                        if track_id == 31
+                        else "radar_direct"
+                    )
+                    lead = {
+                        "track_id": track_id,
+                        "distance_m": max(0.25, distance + offset),
+                        "relative_speed_mps": lead_speed - ego_speed,
+                        "source": source,
+                    }
+                    state = longitudinal_state(ego_speed)
+                    reference, idm_info = idm.run_step(
+                        state,
+                        lead,
+                        70.0 / 3.6,
+                    )
+                    throttle, brake, _ = pid.run_step(
+                        state,
+                        lead,
+                        reference,
+                        idm_info["idm_acceleration_mps2"],
+                    )
+                    if tick > 400:
+                        settled_brakes.append(brake)
+                    ego_speed = self.simulate_step(
+                        ego_speed,
+                        throttle,
+                        brake,
+                        0.05,
+                    )
+                    distance += (lead_speed - ego_speed) * 0.05
+                    stopped_ticks += int(ego_speed <= 0.02)
+
+                self.assertEqual(stopped_ticks, 0)
+                self.assertAlmostEqual(ego_speed, lead_speed, delta=0.08)
+                self.assertGreater(distance, 3.0)
+                self.assertLessEqual(max(settled_brakes), 0.01)
+
+    def test_noisy_stationary_lead_stops_once_and_holds_safely(self):
+        idm = IDMSpeedPlanner(0.05)
+        pid = LongitudinalPIDController(0.05)
+        ego_speed = 50.0 / 3.6
+        distance = 40.0
+        stop_entries = 0
+        restarts = 0
+        was_stopped = False
+
+        for tick in range(700):
+            phase = tick % 12
+            offset = 2.2 if phase < 3 else (-1.5 if phase < 6 else 0.0)
+            track_id = 41 if phase < 6 else -1
+            source = (
+                "camera_radar_track" if track_id == 41 else "radar_direct"
+            )
+            lead = {
+                "track_id": track_id,
+                "distance_m": max(0.25, distance + offset),
+                "relative_speed_mps": -ego_speed,
+                "source": source,
+            }
+            state = longitudinal_state(ego_speed)
+            reference, idm_info = idm.run_step(state, lead, 70.0 / 3.6)
+            throttle, brake, pid_info = pid.run_step(
+                state,
+                lead,
+                reference,
+                idm_info["idm_acceleration_mps2"],
+            )
+            ego_speed = self.simulate_step(
+                ego_speed,
+                throttle,
+                brake,
+                0.05,
+            )
+            distance -= ego_speed * 0.05
+            stopped = ego_speed <= 0.02
+            stop_entries += int(stopped and not was_stopped)
+            restarts += int(was_stopped and ego_speed > 0.20)
+            was_stopped = stopped
+            if stopped and pid_info["hold_active"]:
+                break
+
+        self.assertLess(tick, 699)
+        self.assertEqual(stop_entries, 1)
+        self.assertEqual(restarts, 0)
+        self.assertGreaterEqual(distance, 1.90)
+        self.assertLessEqual(distance, 2.65)
+
+    def test_restarts_smoothly_after_stationary_lead_moves(self):
+        idm = IDMSpeedPlanner(0.05)
+        pid = LongitudinalPIDController(0.05)
+        ego_speed = 50.0 / 3.6
+        lead_speed = 0.0
+        distance = 40.0
+        held_tick = None
+        restart_tick = None
+
+        for tick in range(400):
+            if held_tick is not None:
+                lead_speed = min(2.0, lead_speed + 1.0 * 0.05)
+            lead = {
+                "track_id": 51,
+                "distance_m": distance,
+                "relative_speed_mps": lead_speed - ego_speed,
+                "source": "camera_radar_track",
+            }
+            state = longitudinal_state(ego_speed)
+            reference, idm_info = idm.run_step(state, lead, 70.0 / 3.6)
+            throttle, brake, pid_info = pid.run_step(
+                state,
+                lead,
+                reference,
+                idm_info["idm_acceleration_mps2"],
+            )
+            ego_speed = self.simulate_step(
+                ego_speed,
+                throttle,
+                brake,
+                0.05,
+            )
+            distance += (lead_speed - ego_speed) * 0.05
+            if held_tick is None and ego_speed <= 0.02 and pid_info["hold_active"]:
+                held_tick = tick
+            if held_tick is not None and ego_speed > 0.50:
+                restart_tick = tick
+                break
+
+        self.assertIsNotNone(held_tick)
+        self.assertIsNotNone(restart_tick)
+        self.assertLess((restart_tick - held_tick) * 0.05, 2.5)
+        self.assertEqual(idm_info["follow_state"], "FOLLOW")
+        self.assertEqual(brake, 0.0)
+
+    def test_feasible_stationary_stops_do_not_need_emergency_brake(self):
+        scenarios = (
+            (20.0, 15.0),
+            (30.0, 25.0),
+            (50.0, 40.0),
+            (60.0, 55.0),
+            (70.0, 80.0),
+        )
+        for initial_speed_kmh, initial_distance_m in scenarios:
+            with self.subTest(initial_speed_kmh=initial_speed_kmh):
+                idm = IDMSpeedPlanner(0.05)
+                pid = LongitudinalPIDController(0.05)
+                safety = EmergencyBrakeSupervisor()
+                ego_speed = initial_speed_kmh / 3.6
+                distance = initial_distance_m
+                emergency_ticks = 0
+
+                for tick in range(1200):
+                    lead = {
+                        "track_id": 61,
+                        "distance_m": distance,
+                        "relative_speed_mps": -ego_speed,
+                        "source": "camera_radar_track",
+                        "measurement_frame_id": tick,
+                    }
+                    state = longitudinal_state(ego_speed)
+                    reference, idm_info = idm.run_step(
+                        state,
+                        lead,
+                        70.0 / 3.6,
+                    )
+                    throttle, brake, pid_info = pid.run_step(
+                        state,
+                        lead,
+                        reference,
+                        idm_info["idm_acceleration_mps2"],
+                    )
+                    emergency, _ = safety.evaluate(lead)
+                    if emergency:
+                        emergency_ticks += 1
+                        throttle, brake = 0.0, 1.0
+                        pid.notify_emergency_stop()
+                    ego_speed = self.simulate_step(
+                        ego_speed,
+                        throttle,
+                        brake,
+                        0.05,
+                    )
+                    distance -= ego_speed * 0.05
+                    if ego_speed <= 0.02 and pid_info["hold_active"]:
+                        break
+
+                self.assertLess(tick, 1199)
+                self.assertEqual(emergency_ticks, 0)
+                self.assertGreaterEqual(distance, 1.90)
+                self.assertLessEqual(distance, 2.50)
 
 
 class PurePursuitMPCClosedLoopTests(unittest.TestCase):

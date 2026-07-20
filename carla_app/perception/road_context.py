@@ -326,6 +326,9 @@ class RoadContextTracker:
         return 0.35 * camera_distance + 0.65 * lidar_distance, "camera_lidar", False
 
     def update_tracks(self, detections, frame_id):
+        # Yeni kutuyu eşleştirmeden önce süresi dolmuş takipleri silmek,
+        # eski bir kırmızı ışığın tek kareyle yeniden doğrulanmasını önler.
+        self.remove_expired_tracks(frame_id)
         used_track_ids = set()
         for detection in detections:
             track = self.find_matching_track(detection, used_track_ids)
@@ -335,14 +338,24 @@ class RoadContextTracker:
                 self.update_track(track, detection, frame_id)
             used_track_ids.add(track["track_id"])
 
+        self.remove_expired_tracks(frame_id)
+        return self.active_track_outputs(frame_id)
+
+    def remove_expired_tracks(self, frame_id):
+        """Takip türüne uygun kayıp süresi aşılmış kayıtları siler."""
         old_track_ids = []
         for track_id, track in self.tracks.items():
             track["missed_frames"] = max(0, frame_id - track["last_frame_id"])
-            if track["missed_frames"] > self.parameters.tracker_lost_tolerance_frames:
+            if track["missed_frames"] > self.track_lost_tolerance(track):
                 old_track_ids.append(track_id)
         for track_id in old_track_ids:
             del self.tracks[track_id]
-        return self.active_track_outputs(frame_id)
+
+    def track_lost_tolerance(self, track):
+        """Trafik ışıklarını normal kutulardan daha uzun süre hatırlar."""
+        if track.get("family") == "traffic_light":
+            return self.parameters.traffic_light_dropout_tolerance_frames
+        return self.parameters.tracker_lost_tolerance_frames
 
     def find_matching_track(self, detection, used_track_ids):
         best_track = None
@@ -422,7 +435,8 @@ class RoadContextTracker:
         outputs = []
         for track in self.tracks.values():
             missed = max(0, int(frame_id) - int(track["last_frame_id"]))
-            if missed > self.parameters.tracker_lost_tolerance_frames:
+            tolerance = self.track_lost_tolerance(track)
+            if missed > tolerance:
                 continue
             item = dict(track["detection"])
             item["track_id"] = track["track_id"]
@@ -433,7 +447,7 @@ class RoadContextTracker:
             item["velocity_x_px_per_frame"] = track["velocity_x_px_per_frame"]
             item["valid"] = bool(
                 item["valid"]
-                and missed <= self.parameters.tracker_lost_tolerance_frames
+                and missed <= tolerance
             )
             outputs.append(item)
         return outputs
@@ -492,6 +506,12 @@ class RoadContextTracker:
             if alignment > 0.28:
                 continue
             distance = detection.get("estimated_distance_m")
+            if (
+                distance is not None
+                and float(distance)
+                > self.parameters.traffic_light_maximum_distance_m
+            ):
+                continue
             distance_score = float(distance) if distance is not None else 120.0
             area_ratio = (
                 detection["bbox_width"] * detection["bbox_height"]

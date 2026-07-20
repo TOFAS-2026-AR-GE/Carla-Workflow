@@ -8,33 +8,30 @@ import carla
 
 from carla_app.config import DrivingParameters
 from carla_app.controller.vehicle.behavior_planner import BehaviorPlanner
-from carla_app.controller.vehicle.longitudinal_controller import (
-    LongitudinalController,
+from carla_app.controller.vehicle.longitudinal_pid_controller import (
+    LongitudinalPIDController,
 )
-from carla_app.controller.vehicle.mpc_controller import LateralMPCController
+from carla_app.controller.vehicle.pure_pursuit_controller import (
+    PurePursuitController,
+)
 from carla_app.controller.vehicle.safety_supervisor import EmergencyBrakeSupervisor
 from carla_app.controller.vehicle.speed_planner import CurvatureSpeedPlanner
-from carla_app.controller.vehicle.stanley_controller import StanleyController
 
 
 class VehicleController:
-    """Dört bağımsız kontrol parçasını doğru sırayla çalıştırır."""
+    """Pure Pursuit ve PID kontrolcülerini planlama katmanlarıyla birleştirir."""
 
     def __init__(
         self,
         dt=0.05,
-        cruise_speed_kmh=60.0,
+        cruise_speed_kmh=70.0,
         parameters=None,
-        lateral_controller="stanley",
     ):
         self.parameters = parameters or DrivingParameters(dt)
-        if str(lateral_controller).strip().lower() == "mpc":
-            self.lateral = LateralMPCController(dt, self.parameters)
-        else:
-            self.lateral = StanleyController(dt)
+        self.lateral = PurePursuitController(dt)
         self.speed_planner = CurvatureSpeedPlanner(dt, cruise_speed_kmh)
         self.behavior = BehaviorPlanner(dt, self.parameters)
-        self.longitudinal = LongitudinalController(dt)
+        self.longitudinal = LongitudinalPIDController(dt)
         self.safety = EmergencyBrakeSupervisor(self.parameters)
 
     def run_step(
@@ -50,6 +47,7 @@ class VehicleController:
         target_speed, speed_plan = self.speed_planner.run_step(
             state,
             lateral_info=lateral_info,
+            speed_limit_kmh=(road_context or {}).get("speed_limit_kmh"),
         )
         behavior = self.behavior.plan(
             state=state,

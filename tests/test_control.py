@@ -1,14 +1,23 @@
 import math
+import sys
+import types
 import unittest
 from types import SimpleNamespace
 
+if "dotenv" not in sys.modules:
+    dotenv = types.ModuleType("dotenv")
+    dotenv.load_dotenv = lambda *arguments, **keywords: None
+    sys.modules["dotenv"] = dotenv
+
 from carla_app.controller.vehicle.lead_vehicle import LeadVehicleTracker
-from carla_app.controller.vehicle.longitudinal_controller import (
-    LongitudinalController,
+from carla_app.controller.vehicle.longitudinal_pid_controller import (
+    LongitudinalPIDController,
+)
+from carla_app.controller.vehicle.pure_pursuit_controller import (
+    PurePursuitController,
 )
 from carla_app.controller.vehicle.safety_supervisor import EmergencyBrakeSupervisor
 from carla_app.controller.vehicle.speed_planner import CurvatureSpeedPlanner
-from carla_app.controller.vehicle.stanley_controller import StanleyController
 
 
 def location(x, y=0.0):
@@ -30,8 +39,8 @@ def straight_state(speed_mps=0.0, y=0.0):
     }
 
 
-def curved_state(radius_m=20.0):
-    angles = [index / radius_m for index in range(41)]
+def curved_state(radius_m=20.0, speed_mps=8.0):
+    angles = [index / radius_m for index in range(81)]
     path = [
         location(
             radius_m * math.sin(angle),
@@ -39,445 +48,207 @@ def curved_state(radius_m=20.0):
         )
         for angle in angles
     ]
-    state = straight_state(speed_mps=8.0)
+    state = straight_state(speed_mps=speed_mps)
     state["reference_path"] = path
     return state
 
 
-class StanleyControllerTests(unittest.TestCase):
-    def test_steers_left_when_vehicle_is_right_of_path(self):
-        controller = StanleyController(dt=0.05)
-        steer = controller.run_step(straight_state(speed_mps=8.0, y=1.0))
-        self.assertLess(steer, 0.0)
+class PurePursuitControllerTests(unittest.TestCase):
+    def test_steers_toward_route_when_vehicle_is_right_of_path(self):
+        controller = PurePursuitController(dt=0.05)
 
-    def test_steers_right_when_vehicle_is_left_of_path(self):
-        controller = StanleyController(dt=0.05)
-        steer = controller.run_step(straight_state(speed_mps=8.0, y=-1.0))
+        steer = controller.run_step(straight_state(speed_mps=10.0, y=1.0))
+
+        self.assertLess(steer, 0.0)
+        self.assertGreater(controller.last_info["cross_track_error_m"], 0.0)
+
+    def test_steers_into_left_curve(self):
+        controller = PurePursuitController(dt=0.05)
+
+        steer = controller.run_step(curved_state(radius_m=25.0))
+
         self.assertGreater(steer, 0.0)
+        self.assertEqual(controller.last_info["controller"], "pure_pursuit")
+
+    def test_lookahead_grows_with_speed(self):
+        controller = PurePursuitController(dt=0.05)
+
+        slow = controller.calculate_lookahead(3.0)
+        fast = controller.calculate_lookahead(20.0)
+
+        self.assertGreater(fast, slow)
+        self.assertLessEqual(fast, controller.maximum_lookahead_m)
 
     def test_steering_change_is_rate_limited(self):
-        controller = StanleyController(dt=0.05)
+        controller = PurePursuitController(dt=0.05)
         first = controller.run_step(straight_state(speed_mps=10.0, y=1.5))
         second = controller.run_step(straight_state(speed_mps=10.0, y=-1.5))
-        self.assertLessEqual(abs(second - first), 0.8 * 0.05 + 1e-9)
 
-    def test_curved_path_steers_into_the_bend(self):
-        controller = StanleyController(dt=0.05)
-        steer = controller.run_step(curved_state())
-        self.assertGreater(controller.last_info["curvature_1pm"], 0.0)
-        self.assertGreater(steer, 0.0)
+        maximum_change = (0.90 - 0.020 * 10.0) * controller.dt
+        self.assertLessEqual(abs(second - first), maximum_change + 1e-9)
 
-    def test_lane_edge_increases_centering_correction(self):
-        controller = StanleyController(dt=0.05)
-        state = straight_state(speed_mps=8.0)
+    def test_short_path_returns_finite_command(self):
+        controller = PurePursuitController(dt=0.05)
+        state = straight_state(speed_mps=5.0)
+        state["reference_path"] = [location(0.0)]
 
-        corrected_error = controller.calculate_lane_edge_error(0.70, state)
+        steer = controller.run_step(state)
 
-        self.assertGreater(corrected_error, 0.70)
-
-    def test_closed_loop_curve_tracking_stays_near_the_path(self):
-        controller = StanleyController(dt=0.05)
-        radius = 25.0
-        path = [
-            location(
-                radius * math.sin(index * 0.01),
-                radius * (1.0 - math.cos(index * 0.01)),
-            )
-            for index in range(250)
-        ]
-        x = 0.0
-        y = 0.0
-        yaw = 0.0
-        speed = 6.0
-        errors = []
-
-        for _ in range(180):
-            nearest_index = min(
-                range(len(path)),
-                key=lambda index: (path[index].x - x) ** 2 + (path[index].y - y) ** 2,
-            )
-            reference_path = path[
-                max(0, nearest_index - 2) : min(len(path), nearest_index + 80)
-            ]
-            steer = controller.run_step(
-                {
-                    "location": location(x, y),
-                    "yaw": math.degrees(yaw),
-                    "speed_mps": speed,
-                    "reference_path": reference_path,
-                }
-            )
-            wheel_angle = steer * controller.maximum_wheel_angle_rad
-            x += speed * math.cos(yaw) * controller.dt
-            y += speed * math.sin(yaw) * controller.dt
-            yaw += (
-                speed / controller.wheelbase_m * math.tan(wheel_angle) * controller.dt
-            )
-            errors.append(abs(controller.last_info["cross_track_error_m"]))
-
-        mean_recent_error = sum(errors[-80:]) / 80
-        self.assertLess(mean_recent_error, 0.15)
+        self.assertTrue(math.isfinite(steer))
+        self.assertEqual(controller.last_info["reason"], "short_path")
 
 
 class SpeedPlannerTests(unittest.TestCase):
-    def test_straight_road_keeps_cruise_speed(self):
+    def test_no_sign_uses_seventy_kmh(self):
         planner = CurvatureSpeedPlanner(dt=0.05)
-        speed, info = planner.run_step(straight_state(speed_mps=8.0))
-        self.assertAlmostEqual(speed, 60.0 / 3.6)
-        self.assertAlmostEqual(info["curvature_1pm"], 0.0)
 
-    def test_cruise_speed_can_be_configured_in_kmh(self):
-        planner = CurvatureSpeedPlanner(dt=0.05, cruise_speed_kmh=50.0)
-        speed, _ = planner.run_step(straight_state(speed_mps=8.0))
-        self.assertAlmostEqual(speed, 50.0 / 3.6)
+        speed, info = planner.run_step(straight_state(speed_mps=10.0))
 
-    def test_curve_reduces_speed_with_a_rate_limit(self):
+        self.assertAlmostEqual(speed, 70.0 / 3.6)
+        self.assertAlmostEqual(info["road_speed_mps"], 70.0 / 3.6)
+
+    def test_speed_sign_becomes_straight_road_target(self):
         planner = CurvatureSpeedPlanner(dt=0.05)
-        speed, info = planner.run_step(curved_state(radius_m=20.0))
-        self.assertAlmostEqual(info["curvature_1pm"], 1.0 / 20.0, places=3)
-        self.assertLess(info["desired_speed_mps"], planner.cruise_speed_mps)
-        expected = planner.cruise_speed_mps - (
-            planner.maximum_speed_decrease_mps2 * planner.dt
-        )
-        self.assertAlmostEqual(speed, expected)
 
-    def test_one_lane_error_sample_does_not_drop_target_speed(self):
-        planner = CurvatureSpeedPlanner(dt=0.05, cruise_speed_kmh=80.0)
-        speed, info = planner.run_step(
-            straight_state(speed_mps=15.0),
-            lateral_info={
-                "cross_track_error_m": 0.70,
-                "heading_error_rad": math.radians(24.0),
-            },
-        )
-
-        self.assertAlmostEqual(speed, planner.cruise_speed_mps)
-        self.assertIsNone(info["recovery_speed_mps"])
-        self.assertAlmostEqual(info["requested_recovery_speed_mps"], 23.0 / 3.6)
-
-    def test_high_speed_preview_sees_curve_beyond_thirty_five_metres(self):
-        planner = CurvatureSpeedPlanner(dt=0.05, cruise_speed_kmh=80.0)
-        path = [location(x) for x in range(41)]
-        radius_m = 20.0
-        for index in range(1, 41):
-            angle = index / radius_m
-            path.append(
-                location(
-                    40.0 + radius_m * math.sin(angle),
-                    radius_m * (1.0 - math.cos(angle)),
-                )
+        for _ in range(400):
+            speed, info = planner.run_step(
+                straight_state(speed_mps=20.0),
+                speed_limit_kmh=90,
             )
-        state = straight_state(speed_mps=80.0 / 3.6)
-        state["reference_path"] = path
 
-        speed, info = planner.run_step(state)
+        self.assertAlmostEqual(speed, 90.0 / 3.6, places=4)
+        self.assertEqual(info["speed_reason"], "speed_limit")
 
-        self.assertGreater(info["curvature_1pm"], 0.0)
-        self.assertLess(speed, planner.cruise_speed_mps)
-
-    def test_large_lane_error_sets_recovery_speed(self):
+    def test_curve_target_never_drops_below_twenty_three_kmh(self):
         planner = CurvatureSpeedPlanner(dt=0.05)
+        state = curved_state(radius_m=8.0, speed_mps=15.0)
+
+        for _ in range(300):
+            speed, info = planner.run_step(state)
+
+        self.assertAlmostEqual(speed, 23.0 / 3.6, places=3)
+        self.assertAlmostEqual(info["desired_speed_mps"], 23.0 / 3.6, places=3)
+        self.assertEqual(info["speed_reason"], "curve")
+
+    def test_lower_speed_sign_has_priority_over_curve_floor(self):
+        planner = CurvatureSpeedPlanner(dt=0.05)
+
+        _, info = planner.run_step(
+            curved_state(radius_m=8.0),
+            speed_limit_kmh=20,
+        )
+
+        self.assertAlmostEqual(info["desired_speed_mps"], 20.0 / 3.6)
+
+    def test_sustained_large_lane_error_requests_twenty_three_kmh(self):
+        planner = CurvatureSpeedPlanner(dt=0.05)
+
         for _ in range(planner.recovery_confirmation_ticks):
-            speed, info = planner.run_step(
-                straight_state(speed_mps=8.0),
-                lateral_info={
-                    "cross_track_error_m": 2.0,
-                    "heading_error_rad": 0.0,
-                },
-            )
-        self.assertAlmostEqual(info["recovery_speed_mps"], 23.0 / 3.6)
-        self.assertGreater(speed, info["recovery_speed_mps"])
-        self.assertEqual(info["speed_reason"], "lane_recovery")
-
-    def test_curve_and_lane_recovery_never_command_below_23_kmh(self):
-        planner = CurvatureSpeedPlanner(dt=0.05)
-        state = curved_state(radius_m=12.0)
-        minimum_speed = 23.0 / 3.6
-
-        for _ in range(250):
-            speed, info = planner.run_step(
-                state,
+            _, info = planner.run_step(
+                straight_state(speed_mps=12.0),
                 lateral_info={
                     "cross_track_error_m": 2.0,
                     "heading_error_rad": math.radians(35.0),
                 },
             )
 
-        self.assertGreaterEqual(speed, minimum_speed)
-        self.assertGreaterEqual(info["desired_speed_mps"], minimum_speed)
-        self.assertGreaterEqual(info["recovery_speed_mps"], minimum_speed)
-        self.assertIn("predicted_yaw_rate_radps", info)
-        self.assertIn("predicted_lateral_acceleration_mps2", info)
+        self.assertAlmostEqual(info["recovery_speed_mps"], 23.0 / 3.6)
 
 
-class LongitudinalControllerTests(unittest.TestCase):
-    def test_free_road_accelerates_toward_target(self):
-        controller = LongitudinalController(dt=0.05)
+class LongitudinalPIDControllerTests(unittest.TestCase):
+    def test_accelerates_toward_target_without_brake(self):
+        controller = LongitudinalPIDController(dt=0.05)
+
         throttle, brake, info = controller.run_step(
             straight_state(speed_mps=2.0),
             lead_vehicle=None,
-            target_speed=30.0 / 3.6,
+            target_speed=70.0 / 3.6,
         )
-        self.assertEqual(info["mode"], "CRUISE")
+
+        self.assertEqual(info["controller"], "pid")
         self.assertGreater(throttle, 0.0)
         self.assertEqual(brake, 0.0)
 
-    def test_free_road_converges_to_sixty_kmh(self):
-        controller = LongitudinalController(dt=0.05)
-        speed = 0.0
+    def test_overspeed_produces_brake_without_throttle(self):
+        controller = LongitudinalPIDController(dt=0.05)
 
-        for _ in range(500):
-            throttle, brake, _ = controller.run_step(
-                straight_state(speed_mps=speed),
-                lead_vehicle=None,
-                target_speed=60.0 / 3.6,
-            )
-            acceleration = 2.8 * throttle - 5.0 * brake
-            if speed > 0.02:
-                acceleration -= 0.12
-            speed = max(0.0, speed + acceleration * controller.dt)
-
-        self.assertAlmostEqual(speed * 3.6, 60.0, delta=1.0)
-
-    def test_far_non_closing_lead_does_not_cause_braking(self):
-        controller = LongitudinalController(dt=0.05)
-        lead = {
-            "track_id": 10,
-            "distance_m": 60.0,
-            "relative_speed_mps": 0.0,
-        }
-        controller.run_step(straight_state(speed_mps=8.0), lead, 30.0 / 3.6)
-        throttle, brake, info = controller.run_step(
-            straight_state(speed_mps=8.0), lead, 30.0 / 3.6
+        throttle, brake, _ = controller.run_step(
+            straight_state(speed_mps=20.0),
+            lead_vehicle=None,
+            target_speed=10.0,
         )
-        self.assertEqual(info["mode"], "LEAD_FAR")
-        self.assertGreater(throttle, 0.0)
-        self.assertEqual(brake, 0.0)
 
-    def test_close_lead_activates_following_and_braking(self):
-        controller = LongitudinalController(dt=0.05)
-        state = straight_state(speed_mps=8.0)
-        lead = {
-            "track_id": 10,
-            "distance_m": 9.0,
-            "relative_speed_mps": -2.0,
-        }
-        controller.run_step(state, lead, 30.0 / 3.6)
-        controller.run_step(state, lead, 30.0 / 3.6)
-        throttle, brake, info = controller.run_step(state, lead, 30.0 / 3.6)
-        self.assertEqual(info["mode"], "FOLLOW")
         self.assertEqual(throttle, 0.0)
         self.assertGreater(brake, 0.0)
 
-    def test_reported_low_speed_gap_produces_throttle(self):
-        """Bildirilen CARLA kaydındaki 5840-6000 karelerini tekrarlar."""
-        controller = LongitudinalController(dt=0.05)
-        samples = [
-            (1.0 / 3.6, 3.7, -0.26),
-            (1.0 / 3.6, 3.7, -0.27),
-            (1.0 / 3.6, 3.8, -0.26),
-            (0.9 / 3.6, 3.8, -0.26),
-            (0.9 / 3.6, 3.7, -0.25),
-        ]
+    def test_acceleration_change_respects_jerk_limit(self):
+        controller = LongitudinalPIDController(dt=0.05)
 
-        outputs = []
-        for speed, control_gap, relative_speed in samples:
-            outputs.append(
-                controller.run_step(
-                    straight_state(speed_mps=speed),
-                    {
-                        "track_id": 11,
-                        "distance_m": control_gap,
-                        "relative_speed_mps": relative_speed,
-                        "source": "radar_direct",
-                    },
-                    15.7 / 3.6,
-                )
-            )
+        _, _, first = controller.run_step(
+            straight_state(speed_mps=0.0),
+            None,
+            70.0 / 3.6,
+        )
+        _, _, second = controller.run_step(
+            straight_state(speed_mps=0.0),
+            None,
+            70.0 / 3.6,
+        )
 
-        for throttle, brake, info in outputs[1:]:
-            self.assertEqual(info["mode"], "FOLLOW")
-            self.assertGreaterEqual(throttle, controller.low_speed_throttle_floor)
-            self.assertEqual(brake, 0.0)
-            self.assertGreater(info["desired_acceleration_mps2"], 0.0)
+        maximum_change = controller.acceleration_jerk_mps3 * controller.dt
+        difference = second["acceleration_mps2"] - first["acceleration_mps2"]
+        self.assertLessEqual(difference, maximum_change + 1e-9)
 
-    def test_two_metres_is_held_as_the_standstill_gap(self):
-        controller = LongitudinalController(dt=0.05)
-        stopped_lead = {
-            "track_id": 11,
-            "distance_m": 2.0,
-            "relative_speed_mps": 0.0,
+    def test_close_stopped_lead_reduces_pid_target(self):
+        controller = LongitudinalPIDController(dt=0.05)
+        lead = {
+            "distance_m": 8.0,
+            "relative_speed_mps": -10.0,
+            "source": "camera_radar_track",
         }
+
+        throttle, brake, info = controller.run_step(
+            straight_state(speed_mps=10.0),
+            lead,
+            70.0 / 3.6,
+        )
+
+        self.assertLess(
+            info["effective_target_speed_mps"],
+            info["target_speed_mps"],
+        )
+        self.assertEqual(throttle, 0.0)
+        self.assertGreater(brake, 0.0)
+
+    def test_zero_target_holds_stopped_vehicle(self):
+        controller = LongitudinalPIDController(dt=0.05)
+
         throttle, brake, info = controller.run_step(
             straight_state(speed_mps=0.0),
-            stopped_lead,
-            30.0 / 3.6,
-        )
-        self.assertEqual(info["mode"], "HOLD")
-        self.assertEqual(throttle, 0.0)
-        self.assertEqual(brake, controller.hold_brake)
-
-    def test_lead_pulling_away_restarts_after_two_ticks(self):
-        controller = LongitudinalController(dt=0.05)
-        state = straight_state(speed_mps=0.0)
-        stopped_lead = {
-            "track_id": 11,
-            "distance_m": 2.0,
-            "relative_speed_mps": 0.0,
-        }
-        controller.run_step(state, stopped_lead, 30.0 / 3.6)
-
-        moving_lead = {
-            "track_id": 11,
-            "distance_m": 2.2,
-            "relative_speed_mps": 0.8,
-        }
-        first = controller.run_step(state, moving_lead, 30.0 / 3.6)
-        second = controller.run_step(state, moving_lead, 30.0 / 3.6)
-
-        self.assertEqual(first[2]["mode"], "HOLD")
-        self.assertEqual(second[2]["mode"], "RESTART")
-        self.assertGreater(second[0], 0.0)
-        self.assertEqual(second[1], 0.0)
-
-    def test_temporary_sensor_dropout_does_not_release_hold(self):
-        controller = LongitudinalController(dt=0.05)
-        stopped_lead = {
-            "track_id": 11,
-            "distance_m": 2.0,
-            "relative_speed_mps": 0.0,
-        }
-        controller.run_step(straight_state(speed_mps=0.0), stopped_lead, 30.0 / 3.6)
-
-        throttle, brake, info = controller.run_step(
-            straight_state(speed_mps=0.0), None, 30.0 / 3.6
+            None,
+            0.0,
         )
 
         self.assertEqual(info["mode"], "HOLD")
         self.assertEqual(throttle, 0.0)
         self.assertEqual(brake, controller.hold_brake)
 
-    def test_sustained_missing_lead_releases_hold_and_restarts(self):
-        controller = LongitudinalController(dt=0.05)
-        state = straight_state(speed_mps=0.0)
-        stopped_lead = {
-            "track_id": 11,
-            "distance_m": 2.0,
-            "relative_speed_mps": 0.0,
-        }
-        controller.run_step(state, stopped_lead, 30.0 / 3.6)
+    def test_pid_converges_near_seventy_kmh(self):
+        controller = LongitudinalPIDController(dt=0.05)
+        speed = 0.0
 
-        outputs = [
-            controller.run_step(state, None, 30.0 / 3.6)
-            for _ in range(20)
-        ]
-
-        throttle, brake, info = outputs[-1]
-        self.assertEqual(info["mode"], "CRUISE")
-        self.assertGreater(throttle, 0.0)
-        self.assertEqual(brake, 0.0)
-
-    def test_noisy_stationary_lead_stops_once_near_two_metres(self):
-        controller = LongitudinalController(dt=0.05)
-        speed = 8.0
-        distance = 25.0
-        distance_noise = [0.0, 0.15, -0.12, 0.08, -0.05]
-        modes = []
-        last_pedal = None
-        pedal_switches = 0
-
-        for tick in range(500):
-            throttle, brake, info = controller.run_step(
-                straight_state(speed_mps=speed),
-                {
-                    "track_id": 11,
-                    "distance_m": distance + distance_noise[tick % len(distance_noise)],
-                    "relative_speed_mps": -speed,
-                },
-                30.0 / 3.6,
-            )
-            modes.append(info["mode"])
-            pedal = "throttle" if throttle > 0.01 else "brake" if brake > 0.01 else None
-            if last_pedal is not None and pedal is not None and pedal != last_pedal:
-                pedal_switches += 1
-            if pedal is not None:
-                last_pedal = pedal
-
-            acceleration = 2.8 * throttle - 5.0 * brake
-            if speed > 0.02:
-                acceleration -= 0.12
-            speed = max(0.0, speed + acceleration * controller.dt)
-            distance -= speed * controller.dt
-
-            if info["mode"] == "HOLD" and speed <= 0.02:
-                break
-
-        self.assertEqual(info["mode"], "HOLD")
-        self.assertNotIn("RESTART", modes)
-        self.assertLessEqual(pedal_switches, 1)
-        self.assertGreaterEqual(distance, 1.9)
-        self.assertLessEqual(distance, 2.35)
-
-    def test_sixty_kmh_approach_stops_near_two_metres(self):
-        controller = LongitudinalController(dt=0.05)
-        speed = 60.0 / 3.6
-        distance = 60.0
-
-        for _ in range(500):
-            throttle, brake, info = controller.run_step(
-                straight_state(speed_mps=speed),
-                {
-                    "track_id": 11,
-                    "distance_m": distance,
-                    "relative_speed_mps": -speed,
-                },
-                60.0 / 3.6,
-            )
-            acceleration = 2.8 * throttle - 5.0 * brake
-            if speed > 0.02:
-                acceleration -= 0.12
-            speed = max(0.0, speed + acceleration * controller.dt)
-            distance -= speed * controller.dt
-            if info["mode"] == "HOLD" and speed <= 0.02:
-                break
-
-        self.assertEqual(info["mode"], "HOLD")
-        self.assertGreaterEqual(distance, 1.9)
-        self.assertLessEqual(distance, 2.20)
-
-    def test_moving_lead_converges_without_repeated_pedal_chatter(self):
-        controller = LongitudinalController(dt=0.05)
-        lead_speed = 1.0
-        ego_speed = 0.0
-        distance = 10.0
-        last_pedal = None
-        pedal_switches = 0
-
-        for _ in range(400):
+        for _ in range(900):
             throttle, brake, _ = controller.run_step(
-                straight_state(speed_mps=ego_speed),
-                {
-                    "track_id": 11,
-                    "distance_m": distance,
-                    "relative_speed_mps": lead_speed - ego_speed,
-                },
-                30.0 / 3.6,
+                straight_state(speed_mps=speed),
+                None,
+                70.0 / 3.6,
             )
-            pedal = "throttle" if throttle > 0.01 else "brake" if brake > 0.01 else None
-            if last_pedal is not None and pedal is not None and pedal != last_pedal:
-                pedal_switches += 1
-            if pedal is not None:
-                last_pedal = pedal
-
-            acceleration = 2.8 * throttle - 5.0 * brake
-            if ego_speed > 0.02:
+            acceleration = 3.0 * throttle - 5.0 * brake
+            if speed > 0.02:
                 acceleration -= 0.12
-            ego_speed = max(0.0, ego_speed + acceleration * controller.dt)
-            distance += (lead_speed - ego_speed) * controller.dt
+            speed = max(0.0, speed + acceleration * controller.dt)
 
-        self.assertAlmostEqual(ego_speed, lead_speed, delta=0.10)
-        self.assertGreater(distance, controller.standstill_gap_m)
-        self.assertLessEqual(pedal_switches, 2)
+        self.assertAlmostEqual(speed * 3.6, 70.0, delta=1.0)
 
 
 class EmergencyBrakeTests(unittest.TestCase):

@@ -1,152 +1,144 @@
-"""Yanal kontrolün kapalı çevrim kararlılık regresyonları."""
+"""Pure Pursuit yanal kontrolünün kapalı çevrim kararlılık testleri."""
 
 import math
 import unittest
 from types import SimpleNamespace
 
-from carla_app.config import DrivingParameters
-from carla_app.controller.vehicle.mpc_controller import LateralMPCController
+from carla_app.controller.vehicle.pure_pursuit_controller import (
+    PurePursuitController,
+)
+
+
+def point(x, y):
+    return SimpleNamespace(x=float(x), y=float(y))
+
+
+def nearest_index(path, x, y):
+    return min(
+        range(len(path)),
+        key=lambda index: (path[index].x - x) ** 2 + (path[index].y - y) ** 2,
+    )
+
+
+def distance_to_path(path, x, y, near_index):
+    """Nokta aralığından etkilenmeyen doğru parçası mesafesini hesaplar."""
+    best_squared = math.inf
+    start_index = max(0, near_index - 3)
+    end_index = min(len(path) - 1, near_index + 3)
+    for index in range(start_index, end_index):
+        start = path[index]
+        end = path[index + 1]
+        segment_x = end.x - start.x
+        segment_y = end.y - start.y
+        length_squared = segment_x**2 + segment_y**2
+        if length_squared <= 1e-12:
+            continue
+        ratio = (
+            (x - start.x) * segment_x + (y - start.y) * segment_y
+        ) / length_squared
+        ratio = max(0.0, min(1.0, ratio))
+        error_x = x - (start.x + ratio * segment_x)
+        error_y = y - (start.y + ratio * segment_y)
+        best_squared = min(best_squared, error_x**2 + error_y**2)
+    return math.sqrt(best_squared)
 
 
 class LateralStabilityTests(unittest.TestCase):
-    def test_straight_road_offset_settles_quickly_without_slalom(self):
-        dt = 0.05
-        parameters = DrivingParameters(dt)
-        parameters.mpc_time_budget_ms = 1000.0
-        controller = LateralMPCController(dt, parameters)
-        path = [
-            SimpleNamespace(x=index * 0.5, y=0.0)
-            for index in range(401)
-        ]
-        x = 0.0
-        y = 0.8
+    def simulate(self, controller, path, speed_mps, initial_y=0.0, steps=180):
+        x = float(path[0].x)
+        y = float(initial_y)
         yaw = 0.0
-        speed_mps = 10.0
         errors = []
         steering = []
 
-        for _ in range(120):
-            nearest = min(
-                range(len(path)),
-                key=lambda index: (path[index].x - x) ** 2 + (path[index].y - y) ** 2,
-            )
+        for _ in range(steps):
+            nearest = nearest_index(path, x, y)
+            reference_path = path[
+                max(0, nearest - 3) : min(len(path), nearest + 140)
+            ]
             state = {
-                "location": SimpleNamespace(x=x, y=y),
+                "location": point(x, y),
                 "yaw": math.degrees(yaw),
                 "speed_mps": speed_mps,
-                "reference_path": path[max(0, nearest - 3) : nearest + 120],
+                "reference_path": reference_path,
                 "lane_width": 3.5,
                 "vehicle_half_width_m": 0.95,
             }
             steer = controller.run_step(state)
             wheel_angle = steer * controller.maximum_wheel_angle_rad
-            x += speed_mps * math.cos(yaw) * dt
-            y += speed_mps * math.sin(yaw) * dt
-            yaw += speed_mps / controller.wheelbase_m * math.tan(wheel_angle) * dt
-            errors.append(abs(y))
+            x += speed_mps * math.cos(yaw) * controller.dt
+            y += speed_mps * math.sin(yaw) * controller.dt
+            yaw += (
+                speed_mps
+                / controller.wheelbase_m
+                * math.tan(wheel_angle)
+                * controller.dt
+            )
+            nearest_after_step = nearest_index(path, x, y)
+            errors.append(distance_to_path(path, x, y, nearest_after_step))
             steering.append(steer)
 
-        settling_index = next(
-            index
-            for index in range(len(errors))
-            if max(errors[index:]) <= 0.10
+        return errors, steering
+
+    def test_straight_offset_settles_without_sustained_slalom(self):
+        controller = PurePursuitController(0.05)
+        path = [point(index * 0.5, 0.0) for index in range(501)]
+
+        errors, steering = self.simulate(
+            controller,
+            path,
+            speed_mps=10.0,
+            initial_y=0.8,
         )
+
+        self.assertLess(max(errors[-60:]), 0.12)
         active_signs = [
-            1 if steer > 0.0 else -1
-            for steer in steering
-            if abs(steer) >= 0.015
+            1 if value > 0.0 else -1
+            for value in steering
+            if abs(value) >= 0.015
         ]
         reversals = sum(
             current != previous
             for previous, current in zip(active_signs, active_signs[1:])
         )
+        self.assertLessEqual(reversals, 2)
 
-        self.assertLessEqual(settling_index * dt, 0.85 + 1e-9)
-        self.assertLessEqual(reversals, 1)
-
-    def test_waypoint_noise_does_not_create_sustained_slalom(self):
-        dt = 0.05
-        parameters = DrivingParameters(dt)
-        parameters.mpc_time_budget_ms = 1000.0
-        controller = LateralMPCController(dt, parameters)
+    def test_waypoint_noise_does_not_create_large_steering(self):
+        controller = PurePursuitController(0.05)
         path = [
-            SimpleNamespace(
-                x=float(index),
-                y=0.01 if index % 2 else -0.01,
-            )
-            for index in range(120)
+            point(index * 0.5, 0.01 if index % 2 else -0.01)
+            for index in range(501)
         ]
 
-        x = 0.0
-        y = 0.0
-        yaw = 0.0
-        speed_mps = 13.9
-        steering = []
-        lateral_errors = []
-        active_controllers = set()
-
-        for _ in range(100):
-            state = {
-                "location": SimpleNamespace(x=x, y=y),
-                "yaw": math.degrees(yaw),
-                "speed_mps": speed_mps,
-                "reference_path": path,
-                "lane_width": 3.5,
-                "vehicle_half_width_m": 0.95,
-            }
-            steer = controller.run_step(state)
-            active_controllers.add(controller.last_info["controller"])
-            wheel_angle = steer * controller.maximum_wheel_angle_rad
-            yaw += (
-                speed_mps
-                / controller.wheelbase_m
-                * math.tan(wheel_angle)
-                * dt
-            )
-            x += speed_mps * math.cos(yaw) * dt
-            y += speed_mps * math.sin(yaw) * dt
-            steering.append(steer)
-            lateral_errors.append(y)
-
-        active_signs = []
-        for steer in steering[20:]:
-            if abs(steer) >= 0.015:
-                active_signs.append(1 if steer > 0.0 else -1)
-        reversals = 0
-        for previous, current in zip(active_signs, active_signs[1:]):
-            if current != previous:
-                reversals += 1
-
-        self.assertLessEqual(
-            reversals,
-            2,
-            (
-                f"sustained steering reversals={reversals}, "
-                f"tail={[round(value, 3) for value in steering[20:]]}"
-            ),
+        errors, steering = self.simulate(
+            controller,
+            path,
+            speed_mps=70.0 / 3.6,
+            steps=150,
         )
-        self.assertLess(abs(lateral_errors[-1]), 0.08)
-        self.assertLess(max(abs(value) for value in lateral_errors[40:]), 0.20)
-        self.assertLess(max(abs(value) for value in steering[40:]), 0.02)
-        self.assertEqual(active_controllers, {"mpc"})
 
-    def test_reference_smoothing_preserves_real_curve_radius(self):
-        controller = LateralMPCController(0.05, DrivingParameters(0.05))
-        radius_m = 40.0
-        path = []
-        for distance_m in range(80):
-            angle = distance_m / radius_m
-            path.append(
-                SimpleNamespace(
-                    x=radius_m * math.sin(angle),
-                    y=radius_m * (1.0 - math.cos(angle)),
-                )
+        self.assertLess(max(errors[-50:]), 0.15)
+        self.assertLess(max(abs(value) for value in steering[-50:]), 0.03)
+
+    def test_constant_radius_curve_is_tracked_at_curve_floor_speed(self):
+        controller = PurePursuitController(0.05)
+        radius_m = 25.0
+        path = [
+            point(
+                radius_m * math.sin(index * 0.25 / radius_m),
+                radius_m * (1.0 - math.cos(index * 0.25 / radius_m)),
             )
+            for index in range(900)
+        ]
 
-        smoothed = controller.smooth_reference_path(path)
-        curvature = controller.calculate_path_curvature(smoothed, 15)
+        errors, _ = self.simulate(
+            controller,
+            path,
+            speed_mps=23.0 / 3.6,
+            steps=220,
+        )
 
-        self.assertAlmostEqual(curvature, 1.0 / radius_m, delta=0.0025)
+        self.assertLess(sum(errors[-80:]) / 80, 0.20)
 
 
 if __name__ == "__main__":

@@ -12,15 +12,12 @@ def clamp(value, minimum, maximum):
 
 
 class CurvatureSpeedPlanner:
-    """Aracın rotayı koruyabileceği rahat ve güvenli hızı seçer."""
+    """Düz yol, hız tabelası ve virajdan açıklanabilir hedef hız seçer."""
 
-    def __init__(self, dt=0.05, cruise_speed_kmh=60.0):
+    def __init__(self, dt=0.05, cruise_speed_kmh=70.0):
         self.dt = float(dt)
         self.cruise_speed_mps = max(10.0, float(cruise_speed_kmh)) / 3.6
-        self.minimum_curve_speed_mps = min(
-            15.0 / 3.6,
-            self.cruise_speed_mps,
-        )
+        self.minimum_curve_speed_mps = 23.0 / 3.6
         self.maximum_lateral_acceleration_mps2 = 2.0
         self.maximum_speed_increase_mps2 = 1.5
         self.maximum_speed_decrease_mps2 = 3.0
@@ -28,17 +25,18 @@ class CurvatureSpeedPlanner:
         self.recovery_evidence_ticks = 0
         self.previous_target_speed_mps = self.cruise_speed_mps
 
-    def run_step(self, state, lateral_info=None):
+    def run_step(self, state, lateral_info=None, speed_limit_kmh=None):
         """Viraj ve şerit hatasından bu çevrimin hedef hızını seçer."""
+        road_speed_mps = self.select_road_speed(speed_limit_kmh)
         curvature = self.calculate_preview_curvature(
             state.get("reference_path", []),
             state.get("speed_mps", 0.0),
         )
-        curve_speed = self.calculate_curve_speed(curvature)
+        curve_speed = self.calculate_curve_speed(curvature, road_speed_mps)
         desired_speed = clamp(
             curve_speed,
-            self.minimum_curve_speed_mps,
-            self.cruise_speed_mps,
+            min(self.minimum_curve_speed_mps, road_speed_mps),
+            road_speed_mps,
         )
 
         requested_recovery_speed = self.calculate_lane_recovery_speed(
@@ -56,27 +54,69 @@ class CurvatureSpeedPlanner:
         if recovery_speed is not None:
             desired_speed = min(desired_speed, recovery_speed)
 
+        previous_target_speed = self.previous_target_speed_mps
         target_speed = self.limit_speed_change(desired_speed)
         self.previous_target_speed_mps = target_speed
         speed_reason = "cruise"
-        if curve_speed < self.cruise_speed_mps:
+        if speed_limit_kmh is not None:
+            speed_reason = "speed_limit"
+        if curve_speed < road_speed_mps - 0.05:
             speed_reason = "curve"
         if recovery_speed is not None and recovery_speed <= desired_speed:
             speed_reason = "lane_recovery"
+        predicted_yaw_rate = target_speed * curvature
+        predicted_lateral_acceleration = target_speed**2 * curvature
+        planned_longitudinal_acceleration = (
+            target_speed - previous_target_speed
+        ) / self.dt
         return target_speed, {
             "curvature_1pm": float(curvature),
             "curve_speed_mps": float(curve_speed),
+            "road_speed_mps": float(road_speed_mps),
+            "speed_limit_kmh": speed_limit_kmh,
             "desired_speed_mps": float(desired_speed),
             "requested_recovery_speed_mps": requested_recovery_speed,
             "recovery_speed_mps": recovery_speed,
             "recovery_evidence_ticks": self.recovery_evidence_ticks,
             "speed_reason": speed_reason,
+            "predicted_yaw_rate_radps": float(predicted_yaw_rate),
+            "predicted_lateral_acceleration_mps2": float(
+                predicted_lateral_acceleration
+            ),
+            "planned_longitudinal_acceleration_mps2": float(
+                planned_longitudinal_acceleration
+            ),
         }
 
-    def calculate_curve_speed(self, curvature):
-        if curvature < 1e-4:
+    def select_road_speed(self, speed_limit_kmh):
+        """Tabela varsa tabela hızını, yoksa varsayılan 70 km/sa hedefini seçer."""
+        if speed_limit_kmh is None:
             return self.cruise_speed_mps
-        return math.sqrt(self.maximum_lateral_acceleration_mps2 / curvature)
+        try:
+            limit_mps = float(speed_limit_kmh) / 3.6
+        except (TypeError, ValueError):
+            return self.cruise_speed_mps
+        if not math.isfinite(limit_mps) or limit_mps <= 0.0:
+            return self.cruise_speed_mps
+        return limit_mps
+
+    def calculate_curve_speed(self, curvature, road_speed_mps=None):
+        road_speed_mps = (
+            self.cruise_speed_mps
+            if road_speed_mps is None
+            else max(0.0, float(road_speed_mps))
+        )
+        if curvature < 1e-4:
+            return road_speed_mps
+        comfortable_speed = math.sqrt(
+            self.maximum_lateral_acceleration_mps2 / curvature
+        )
+        # 23 km/s alt sınırı yalnızca viraj planına aittir. Daha düşük bir
+        # tabela, kırmızı ışık, yaya veya acil durum bu değerin önüne geçer.
+        return min(
+            road_speed_mps,
+            max(self.minimum_curve_speed_mps, comfortable_speed),
+        )
 
     def calculate_lane_recovery_speed(self, state, lateral_info):
         """Şerit kenarında güvenli toparlanma hızını verir."""
@@ -97,11 +137,11 @@ class CurvatureSpeedPlanner:
         edge_ratio = lateral_error / usable_center_offset
 
         if edge_ratio >= 1.00 or heading_error >= math.radians(30.0):
-            return 8.0 / 3.6
+            return 23.0 / 3.6
         if edge_ratio >= 0.75 or heading_error >= math.radians(20.0):
-            return 12.0 / 3.6
+            return 30.0 / 3.6
         if edge_ratio >= 0.50 or heading_error >= math.radians(12.0):
-            return 18.0 / 3.6
+            return 40.0 / 3.6
         return None
 
     def calculate_preview_curvature(self, path, speed_mps=0.0):

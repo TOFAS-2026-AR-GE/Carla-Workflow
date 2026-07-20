@@ -10,7 +10,7 @@ def clamp(value, minimum, maximum):
 
 
 class BehaviorPlanner:
-    """Trafik ışığı, hız tabelası, yaya ve viraj kısıtlarını önceliklendirir."""
+    """Trafik kuralı ve viraj kısıtlarını önceliklendirir."""
 
     def __init__(self, dt=0.05, parameters=None):
         self.dt = float(dt)
@@ -18,6 +18,7 @@ class BehaviorPlanner:
         self.previous_target_speed_mps = None
         self.last_light_color = None
         self.yellow_decisions = {}
+        self.latched_stop_light = None
 
     def plan(
         self,
@@ -81,6 +82,8 @@ class BehaviorPlanner:
             brake_urgency = "EMERGENCY" if pedestrian_risk == "EMERGENCY" else "NORMAL"
 
         light = context.get("lead_traffic_light")
+        if light is None:
+            light = self.recall_stop_light(state)
         if light is not None and pedestrian_risk not in {"PREPARE_STOP", "EMERGENCY"}:
             light_decision = self.evaluate_traffic_light(light, state, ego_speed)
             if light_decision["applies"]:
@@ -155,6 +158,8 @@ class BehaviorPlanner:
         self.last_light_color = color
 
         if color == "red":
+            if not light.get("latched_without_detection", False):
+                self.latch_stop_light(light, state)
             target_speed = self.approach_speed_mps(stop_distance)
             stopped_at_line = ego_speed <= 0.15 and stop_distance <= 3.0
             mode = "STOPPED_AT_RED" if stopped_at_line else "APPROACH_RED_LIGHT"
@@ -185,6 +190,7 @@ class BehaviorPlanner:
                 decision = "stop" if can_stop else "proceed"
                 self.yellow_decisions[track_id] = decision
             if decision == "proceed":
+                self.latched_stop_light = None
                 return {
                     "applies": True,
                     "mode": "YELLOW_DECISION",
@@ -193,6 +199,8 @@ class BehaviorPlanner:
                     "stop_obstacle": None,
                     "brake_urgency": "NONE",
                 }
+            if not light.get("latched_without_detection", False):
+                self.latch_stop_light(light, state)
             return {
                 "applies": True,
                 "mode": "YELLOW_DECISION",
@@ -208,6 +216,7 @@ class BehaviorPlanner:
             }
 
         if color == "green":
+            self.latched_stop_light = None
             for track_id in list(self.yellow_decisions):
                 self.yellow_decisions.pop(track_id, None)
             if previous_color in {"red", "orange"} and ego_speed <= 0.50:
@@ -220,6 +229,42 @@ class BehaviorPlanner:
                     "brake_urgency": "NONE",
                 }
         return self.no_light_decision()
+
+    def latch_stop_light(self, light, state):
+        """Dur ışığının dünya üzerindeki yaklaşık yerini saklar."""
+        distance = self.detection_distance(light)
+        location = state.get("location")
+        if distance is None or location is None:
+            return
+        yaw = math.radians(float(state.get("yaw", 0.0)))
+        self.latched_stop_light = {
+            "light": dict(light),
+            "world_x": float(location.x) + distance * math.cos(yaw),
+            "world_y": float(location.y) + distance * math.sin(yaw),
+        }
+
+    def recall_stop_light(self, state):
+        """Kamera kutuyu kaçırsa da kırmızı durma noktasını korur."""
+        if self.latched_stop_light is None:
+            return None
+        location = state.get("location")
+        if location is None:
+            return None
+
+        yaw = math.radians(float(state.get("yaw", 0.0)))
+        delta_x = self.latched_stop_light["world_x"] - float(location.x)
+        delta_y = self.latched_stop_light["world_y"] - float(location.y)
+        forward_distance = delta_x * math.cos(yaw) + delta_y * math.sin(yaw)
+
+        # Araç ışık çizgisini tamamen geçtiyse eski ışık artık kontrol etmez.
+        if forward_distance < -2.0:
+            self.latched_stop_light = None
+            return None
+
+        light = dict(self.latched_stop_light["light"])
+        light["estimated_distance_m"] = max(0.25, forward_distance)
+        light["latched_without_detection"] = True
+        return light
 
     def no_light_decision(self):
         return {

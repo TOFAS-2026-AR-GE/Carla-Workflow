@@ -1,12 +1,18 @@
+import sys
 import types
 import unittest
 
 import numpy as np
 
+if "dotenv" not in sys.modules:
+    dotenv = types.ModuleType("dotenv")
+    dotenv.load_dotenv = lambda *arguments, **keywords: None
+    sys.modules["dotenv"] = dotenv
+
 from carla_app.config import DrivingParameters
 from carla_app.controller.vehicle.behavior_planner import BehaviorPlanner
-from carla_app.controller.vehicle.longitudinal_controller import (
-    LongitudinalController,
+from carla_app.controller.vehicle.longitudinal_pid_controller import (
+    LongitudinalPIDController,
 )
 from carla_app.perception.road_context import RoadContextTracker
 
@@ -311,7 +317,7 @@ class BehaviorPlannerTests(unittest.TestCase):
         self.assertEqual(decision["control_obstacle"]["source"], "traffic_light_red")
 
     def test_vehicle_stops_before_red_line_when_camera_loses_close_light(self):
-        longitudinal = LongitudinalController(0.05)
+        longitudinal = LongitudinalPIDController(0.05)
         speed_mps = 60.0 / 3.6
         signal_distance_m = 55.0
         decision = None

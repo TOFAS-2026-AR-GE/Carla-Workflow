@@ -2,6 +2,11 @@ import sys
 import types
 import unittest
 
+if "dotenv" not in sys.modules:
+    dotenv = types.ModuleType("dotenv")
+    dotenv.load_dotenv = lambda *arguments, **keywords: None
+    sys.modules["dotenv"] = dotenv
+
 if "carla" not in sys.modules:
     sys.modules["carla"] = types.ModuleType("carla")
 

@@ -78,19 +78,6 @@ class DrivingParameters:
         self.maximum_brake = 1.0
         self.maximum_steer = 1.0
 
-        # Yanal MPC ufku, maliyetleri ve güvenli fallback sınırları.
-        self.mpc_horizon_steps = 18
-        self.mpc_step_s = 0.10
-        self.mpc_minimum_speed_mps = 0.75
-        self.mpc_lateral_error_weight = 12.0
-        self.mpc_heading_error_weight = 7.0
-        self.mpc_steering_weight = 0.30
-        self.mpc_steering_rate_weight = 2.00
-        self.mpc_solver_tolerance = 1e-3
-        self.mpc_maximum_iterations = 400
-        self.mpc_time_budget_ms = 30.0
-        self.mpc_maximum_predicted_error_m = 2.50
-
 
 class Settings:
     """`.env` içindeki bütün uygulama ayarlarını normal alanlarda tutar."""
@@ -170,7 +157,7 @@ class Settings:
             os.getenv("SIGN_CLASSIFIER_IMAGE_SIZE", "96")
         )
 
-        self.enable_sign_detection = _boolean("ENABLE_SIGN_DETECTION", False)
+        self.enable_sign_detection = _boolean("ENABLE_SIGN_DETECTION", True)
         self.enable_lidar_fusion = _boolean("ENABLE_LIDAR_FUSION", True)
         old_recording_setting = _boolean("ENABLE_DATA_RECORDING", False)
         requested_sensor_mode = os.getenv("SENSOR_MODE", "").strip().lower()
@@ -204,17 +191,8 @@ class Settings:
         )
         self.maximum_speed_kmh = max(
             10.0,
-            float(os.getenv("MAXIMUM_SPEED_KMH", "60.0")),
+            float(os.getenv("MAXIMUM_SPEED_KMH", "70.0")),
         )
-        self.lateral_controller = os.getenv(
-            "LATERAL_CONTROLLER",
-            "mpc",
-        ).strip().lower()
-        if self.lateral_controller not in {"mpc", "stanley"}:
-            raise ValueError(
-                "LATERAL_CONTROLLER mpc veya stanley olmali; "
-                f"gelen deger: {self.lateral_controller!r}"
-            )
 
     def check_models(self):
         required_models = [self.vehicle_model]

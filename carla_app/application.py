@@ -107,7 +107,6 @@ class CarlaApplication:
             self.dt,
             cruise_speed_kmh=self.settings.maximum_speed_kmh,
             parameters=DrivingParameters(self.dt),
-            lateral_controller=self.settings.lateral_controller,
         )
         self.road_context_tracker = RoadContextTracker(
             layout=self.sensors.layout,
@@ -134,9 +133,8 @@ class CarlaApplication:
 
         print("[INFO] Q, ESC veya pencerenin X düğmesi ile çıkış.")
         print(
-            "[INFO] Kontrol: Kalıcı rota + "
-            f"{self.settings.lateral_controller.upper()} direksiyon + "
-            "IDM araç takibi + bağımsız acil fren"
+            "[INFO] Kontrol: Kalıcı rota + Pure Pursuit direksiyon + "
+            "PID gaz-fren + bağımsız acil fren"
         )
         print(f"[INFO] Sensör modu: {self.settings.sensor_mode}")
 
@@ -350,16 +348,11 @@ class CarlaApplication:
             f" cte={cross_track_error:+.2f}m"
             f" heading={math.degrees(heading_error):+.1f}deg"
         )
-        lateral_controller = lateral.get("controller", "stanley")
+        lateral_controller = lateral.get("controller", "pure_pursuit")
         message += f" lateral={lateral_controller}"
-        if "mpc_solve_ms" in lateral:
-            message += f" mpc_ms={float(lateral.get('mpc_solve_ms', 0.0)):.2f}"
-        predicted_error = lateral.get("predicted_max_error_m")
-        if predicted_error is not None and math.isfinite(float(predicted_error)):
-            message += f" mpc_pred={float(predicted_error):.2f}m"
-        fallback_reason = lateral.get("fallback_reason")
-        if fallback_reason:
-            message += f" lateral_fallback={fallback_reason}"
+        lookahead = lateral.get("lookahead_m")
+        if lookahead is not None:
+            message += f" lookahead={float(lookahead):.1f}m"
 
         speed_plan = control_info.get("speed_plan", {})
         speed_reason = speed_plan.get("speed_reason", "unknown")

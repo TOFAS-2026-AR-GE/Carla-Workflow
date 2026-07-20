@@ -16,8 +16,6 @@ PACKAGES = [
     "carla",
     "cv2",
     "numpy",
-    "osqp",
-    "scipy",
     "torch",
     "yaml",
     "ultralytics",

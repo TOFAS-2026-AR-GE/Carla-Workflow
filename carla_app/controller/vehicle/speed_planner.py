@@ -1,44 +1,72 @@
-"""Yol virajina ve serit hatasina gore guvenli hedef hizini hesaplar."""
+"""Comfortable curve-speed planning with lane-recovery protection."""
+
+from __future__ import annotations
 
 import math
 
 
-def clamp(value, minimum, maximum):
+def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(value, maximum))
 
 
-class CurvatureSpeedPlanner:
-    """Aracin rotayi koruyabilecegi rahat ve guvenli hizi secer."""
+def smoothstep(value: float) -> float:
+    value = clamp(value, 0.0, 1.0)
+    return value * value * (3.0 - 2.0 * value)
 
-    def __init__(self, dt=0.05, cruise_speed_kmh=60.0):
-        self.dt = float(dt)
-        self.cruise_speed_mps = max(10.0, float(cruise_speed_kmh)) / 3.6
-        self.minimum_curve_speed_mps = min(
-            15.0 / 3.6,
-            self.cruise_speed_mps,
-        )
-        self.maximum_lateral_acceleration_mps2 = 2.0
-        self.maximum_speed_increase_mps2 = 1.5
-        self.maximum_speed_decrease_mps2 = 3.0
+
+class CurvatureSpeedPlanner:
+    """Limit reference speed before the pedal controller sees it."""
+
+    def __init__(self, dt: float = 0.05, cruise_speed_kmh: float = 60.0) -> None:
+        self.dt = max(1e-3, float(dt))
+        self.cruise_speed_mps = max(5.0, float(cruise_speed_kmh)) / 3.6
+        self.minimum_curve_speed_mps = min(10.0 / 3.6, self.cruise_speed_mps)
+
+        # Urban passenger-car comfort targets. This is below the tire-friction
+        # limit and deliberately slows down tight Town02/Town03 corners.
+        self.maximum_lateral_acceleration_mps2 = 1.60
+        self.maximum_target_acceleration_mps2 = 1.25
+        self.maximum_target_deceleration_mps2 = 2.20
+
+        # Backward-compatible names used by the original test suite.
+        self.maximum_speed_increase_mps2 = self.maximum_target_acceleration_mps2
+        self.maximum_speed_decrease_mps2 = self.maximum_target_deceleration_mps2
+
         self.recovery_confirmation_ticks = max(2, int(round(0.15 / self.dt)))
         self.recovery_evidence_ticks = 0
-        self.previous_target_speed_mps = self.cruise_speed_mps
+        self.previous_target_speed_mps: float | None = None
+        self.filtered_curvature_1pm = 0.0
+        self.curvature_filter_time_s = 0.30
 
-    def run_step(self, state, lateral_info=None):
-        curvature = self.calculate_preview_curvature(
+    def run_step(
+        self,
+        state: dict,
+        lateral_info: dict | None = None,
+        requested_speed_mps: float | None = None,
+    ) -> tuple[float, dict]:
+        current_speed = max(0.0, float(state.get("speed_mps", 0.0)))
+        if self.previous_target_speed_mps is None:
+            self.previous_target_speed_mps = current_speed
+
+        requested_speed = (
+            self.cruise_speed_mps
+            if requested_speed_mps is None
+            else clamp(float(requested_speed_mps), 0.0, self.cruise_speed_mps)
+        )
+        raw_curvature = self.calculate_preview_curvature(
             state.get("reference_path", []),
-            state.get("speed_mps", 0.0),
+            current_speed,
+            location=state.get("location"),
         )
+        curvature = self.filter_curvature(raw_curvature)
         curve_speed = self.calculate_curve_speed(curvature)
-        desired_speed = clamp(
-            curve_speed,
-            self.minimum_curve_speed_mps,
-            self.cruise_speed_mps,
-        )
+        desired_speed = min(requested_speed, curve_speed, self.cruise_speed_mps)
 
-        requested_recovery_speed = self.calculate_lane_recovery_speed(
-            state,
-            lateral_info,
+        requested_recovery_speed, recovery_risk = self._calculate_lane_recovery_speed(
+            state=state,
+            lateral_info=lateral_info,
+            requested_speed_mps=requested_speed,
+            curvature=curvature,
         )
         if requested_recovery_speed is None:
             self.recovery_evidence_ticks = max(0, self.recovery_evidence_ticks - 1)
@@ -46,36 +74,90 @@ class CurvatureSpeedPlanner:
             self.recovery_evidence_ticks += 1
 
         recovery_speed = None
-        if self.recovery_evidence_ticks >= self.recovery_confirmation_ticks:
+        if (
+            requested_recovery_speed is not None
+            and self.recovery_evidence_ticks >= self.recovery_confirmation_ticks
+        ):
             recovery_speed = requested_recovery_speed
-        if recovery_speed is not None:
             desired_speed = min(desired_speed, recovery_speed)
 
-        target_speed = self.limit_speed_change(desired_speed)
+        # A normal curve or a temporary heading error may slow the vehicle, but
+        # must never request a complete stop. Stop commands are reserved for
+        # traffic lights, lead vehicles and AEB in the longitudinal controller.
+        if requested_speed > 0.5:
+            desired_speed = max(
+                desired_speed,
+                min(self.minimum_curve_speed_mps, requested_speed),
+            )
+
+        target_speed = self.limit_speed_change(max(0.0, desired_speed))
         self.previous_target_speed_mps = target_speed
-        speed_reason = "cruise"
-        if curve_speed < self.cruise_speed_mps:
-            speed_reason = "curve"
-        if recovery_speed is not None and recovery_speed <= desired_speed:
-            speed_reason = "lane_recovery"
+
+        limiting_candidates = {
+            "reference": requested_speed,
+            "curve": curve_speed,
+        }
+        if recovery_speed is not None:
+            limiting_candidates["lane_recovery"] = recovery_speed
+        speed_reason = min(limiting_candidates, key=limiting_candidates.get)
+
         return target_speed, {
+            "requested_speed_mps": requested_speed,
             "curvature_1pm": float(curvature),
+            "raw_curvature_1pm": float(raw_curvature),
             "curve_speed_mps": float(curve_speed),
             "desired_speed_mps": float(desired_speed),
+            "target_speed_mps": float(target_speed),
             "requested_recovery_speed_mps": requested_recovery_speed,
             "recovery_speed_mps": recovery_speed,
+            "recovery_risk": float(recovery_risk),
             "recovery_evidence_ticks": self.recovery_evidence_ticks,
             "speed_reason": speed_reason,
         }
 
-    def calculate_curve_speed(self, curvature):
+    def filter_curvature(self, raw_curvature: float) -> float:
+        alpha = clamp(
+            self.dt / (self.curvature_filter_time_s + self.dt),
+            0.08,
+            1.0,
+        )
+        self.filtered_curvature_1pm += alpha * (
+            abs(float(raw_curvature)) - self.filtered_curvature_1pm
+        )
+        return self.filtered_curvature_1pm
+
+    def calculate_curve_speed(self, curvature: float) -> float:
+        curvature = abs(float(curvature))
         if curvature < 1e-4:
             return self.cruise_speed_mps
-        return math.sqrt(self.maximum_lateral_acceleration_mps2 / curvature)
+        return clamp(
+            math.sqrt(self.maximum_lateral_acceleration_mps2 / curvature),
+            self.minimum_curve_speed_mps,
+            self.cruise_speed_mps,
+        )
 
-    def calculate_lane_recovery_speed(self, state, lateral_info):
+    def calculate_lane_recovery_speed(
+        self,
+        state: dict,
+        lateral_info: dict | None,
+    ) -> float | None:
+        speed, _risk = self._calculate_lane_recovery_speed(
+            state=state,
+            lateral_info=lateral_info,
+            requested_speed_mps=self.cruise_speed_mps,
+            curvature=0.0,
+        )
+        return speed
+
+    def _calculate_lane_recovery_speed(
+        self,
+        state: dict,
+        lateral_info: dict | None,
+        requested_speed_mps: float,
+        curvature: float,
+    ) -> tuple[float | None, float]:
         if not lateral_info:
-            return None
+            return None, 0.0
 
         lane_width = max(2.5, float(state.get("lane_width", 3.5)))
         vehicle_half_width = max(
@@ -84,38 +166,57 @@ class CurvatureSpeedPlanner:
         )
         lateral_error = abs(float(lateral_info.get("cross_track_error_m", 0.0)))
         heading_error = abs(float(lateral_info.get("heading_error_rad", 0.0)))
+
         usable_center_offset = max(
             0.35,
             0.5 * lane_width - vehicle_half_width - 0.20,
         )
         edge_ratio = lateral_error / usable_center_offset
 
-        if edge_ratio >= 1.00 or heading_error >= math.radians(30.0):
-            return 8.0 / 3.6
-        if edge_ratio >= 0.75 or heading_error >= math.radians(20.0):
-            return 12.0 / 3.6
-        if edge_ratio >= 0.50 or heading_error >= math.radians(12.0):
-            return 18.0 / 3.6
-        return None
+        # A heading difference is normal while entering a tight bend. Do not
+        # punish that as aggressively as actually approaching the lane edge.
+        heading_reference = (
+            math.radians(35.0)
+            if abs(curvature) >= 0.035
+            else math.radians(24.0)
+        )
+        heading_ratio = heading_error / heading_reference
+        heading_weight = 0.52 if abs(curvature) >= 0.035 else 0.70
+        risk = max(edge_ratio, heading_weight * heading_ratio)
 
-    def calculate_preview_curvature(self, path, speed_mps=0.0):
+        if risk < 0.55:
+            return None, risk
+
+        normalized = smoothstep((risk - 0.55) / (1.10 - 0.55))
+        minimum_recovery_speed = min(12.0 / 3.6, requested_speed_mps)
+        recovery_speed = (
+            requested_speed_mps
+            - normalized * (requested_speed_mps - minimum_recovery_speed)
+        )
+        return recovery_speed, risk
+
+    def calculate_preview_curvature(
+        self,
+        path,
+        speed_mps: float = 0.0,
+        location=None,
+    ) -> float:
         if len(path) < 5:
             return 0.0
 
-        # Hiz arttikca daha uzagi tara. 80 km/sa hizda 35 metrelik eski
-        # pencere viraji gec gosterebiliyordu; uc saniyelik yol daha guvenli.
-        preview_distance_m = clamp(float(speed_mps) * 3.0, 35.0, 75.0)
-        preview = [path[0]]
+        start_index = self.nearest_path_index(path, location)
+        preview_distance_m = clamp(float(speed_mps) * 2.8 + 8.0, 24.0, 65.0)
+
+        preview = [path[start_index]]
         travelled_m = 0.0
-        for point in path[1:]:
+        for point in path[start_index + 1 :]:
             previous = preview[-1]
             travelled_m += math.hypot(point.x - previous.x, point.y - previous.y)
             preview.append(point)
             if travelled_m >= preview_distance_m:
                 break
+
         curvatures = []
-        # Dort noktalik aralik, 1 metrelik waypoint basamaklarinin
-        # tek basina yanlis viraj uretmesini azaltir.
         for middle_index in range(2, len(preview) - 2):
             curvature = abs(
                 self.three_point_curvature(
@@ -130,13 +231,25 @@ class CurvatureSpeedPlanner:
         if not curvatures:
             return 0.0
 
-        # Yuzde 85 degeri gercek viraji yakalar fakat tek bir bozuk harita
-        # noktasinin tum hedef hizi belirlemesine izin vermez.
         curvatures.sort()
-        index = int(round(0.85 * (len(curvatures) - 1)))
+        index = int(round(0.80 * (len(curvatures) - 1)))
         return curvatures[index]
 
-    def three_point_curvature(self, first, middle, last):
+    @staticmethod
+    def nearest_path_index(path, location):
+        if location is None or not path:
+            return 0
+        search_count = min(30, len(path))
+        return min(
+            range(search_count),
+            key=lambda index: math.hypot(
+                path[index].x - location.x,
+                path[index].y - location.y,
+            ),
+        )
+
+    @staticmethod
+    def three_point_curvature(first, middle, last) -> float:
         side_a = math.hypot(middle.x - first.x, middle.y - first.y)
         side_b = math.hypot(last.x - middle.x, last.y - middle.y)
         chord = math.hypot(last.x - first.x, last.y - first.y)
@@ -149,15 +262,21 @@ class CurvatureSpeedPlanner:
         ) * (last.x - first.x)
         return 2.0 * twice_area / denominator
 
-    def limit_speed_change(self, desired_speed):
-        difference = desired_speed - self.previous_target_speed_mps
-        if difference >= 0.0:
-            maximum_change = self.maximum_speed_increase_mps2 * self.dt
-            return self.previous_target_speed_mps + min(difference, maximum_change)
+    def limit_speed_change(self, desired_speed: float) -> float:
+        previous = float(self.previous_target_speed_mps or 0.0)
+        difference = desired_speed - previous
+        rate = (
+            self.maximum_target_acceleration_mps2
+            if difference >= 0.0
+            else self.maximum_target_deceleration_mps2
+        )
+        maximum_change = rate * self.dt
+        return previous + clamp(difference, -maximum_change, maximum_change)
 
-        maximum_change = self.maximum_speed_decrease_mps2 * self.dt
-        return self.previous_target_speed_mps + max(difference, -maximum_change)
-
-    def limit_speed_increase(self, desired_speed):
-        """Eski cagri adini kullanan kodlar icin geriye uyumluluk."""
+    def limit_speed_increase(self, desired_speed: float) -> float:
         return self.limit_speed_change(desired_speed)
+
+    def reset(self, speed_mps: float = 0.0) -> None:
+        self.previous_target_speed_mps = max(0.0, float(speed_mps))
+        self.filtered_curvature_1pm = 0.0
+        self.recovery_evidence_ticks = 0

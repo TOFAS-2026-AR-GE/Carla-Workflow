@@ -1,41 +1,70 @@
-"""Direksiyon, hiz, arac takip ve acil freni bir araya getirir."""
+"""Integrated lateral, speed, following, traffic-light and AEB control."""
+
+from __future__ import annotations
 
 import carla
 
-from carla_app.controller.vehicle.longitudinal_controller import (
-    LongitudinalController,
-)
+from carla_app.controller.vehicle.longitudinal_controller import LongitudinalController
 from carla_app.controller.vehicle.safety_supervisor import EmergencyBrakeSupervisor
 from carla_app.controller.vehicle.speed_planner import CurvatureSpeedPlanner
-from carla_app.controller.vehicle.stanley_controller import StanleyController
+from carla_app.controller.vehicle.pure_pursuit_controller import PurePursuitController
+from carla_app.controller.vehicle.turn_signal import TurnSignalController
 
 
 class VehicleController:
-    """Rota takibi, hiz plani, IDM ve bagimsiz AEB'yi birlikte calistirir."""
+    """Keep the existing lane controller and add layered longitudinal control."""
 
-    def __init__(self, dt=0.05, cruise_speed_kmh=60.0):
-        self.lateral = StanleyController(dt)
+    def __init__(
+        self,
+        dt: float = 0.05,
+        cruise_speed_kmh: float = 60.0,
+        follow_gap_m: float = 10.0,
+        follow_gap_margin_m: float = 1.5,
+    ) -> None:
+        self.lateral = PurePursuitController(dt)
         self.speed_planner = CurvatureSpeedPlanner(dt, cruise_speed_kmh)
-        self.longitudinal = LongitudinalController(dt)
+        self.longitudinal = LongitudinalController(
+            dt,
+            follow_gap_m=follow_gap_m,
+            follow_gap_margin_m=follow_gap_margin_m,
+        )
         self.safety = EmergencyBrakeSupervisor()
+        self.turn_signal = TurnSignalController(dt)
 
-    def run_step(self, state, lead_vehicle, emergency_obstacle=None):
+    def run_step(
+        self,
+        state: dict,
+        lead_vehicle: dict | None,
+        emergency_obstacle: dict | None = None,
+        requested_speed_mps: float | None = None,
+        traffic_light: dict | None = None,
+    ):
         steer = self.lateral.run_step(state)
         lateral_info = self.lateral.last_info
+        turn_signal_info = self.turn_signal.update(state, lateral_info)
         target_speed, speed_plan = self.speed_planner.run_step(
             state,
             lateral_info=lateral_info,
+            requested_speed_mps=requested_speed_mps,
         )
 
-        # Tek bir ham radar noktasi sadece AEB'ye gider. Normal IDM takibi,
-        # kamera-radar takibini veya dogrulanmis radar kumesini kullanir.
-        control_lead = lead_vehicle
+        traffic_obstacle = (
+            traffic_light.get("obstacle")
+            if isinstance(traffic_light, dict)
+            else None
+        )
+        control_lead = self.choose_longitudinal_constraint(
+            lead_vehicle,
+            traffic_obstacle,
+        )
         throttle, brake, longitudinal_info = self.longitudinal.run_step(
             state,
             control_lead,
             target_speed,
         )
 
+        # A traffic-light stop is intentionally not an AEB candidate. AEB stays
+        # independent and reacts only to physical collision threats.
         emergency, safety_info = self.safety.evaluate_candidates(
             lead_vehicle,
             emergency_obstacle,
@@ -53,15 +82,40 @@ class VehicleController:
         )
         info = {
             "mode": longitudinal_info["mode"],
-            "steer": steer,
-            "throttle": throttle,
-            "brake": brake,
-            "target_speed_mps": target_speed,
+            "steer": float(steer),
+            "throttle": float(throttle),
+            "brake": float(brake),
+            "requested_speed_mps": (
+                float(requested_speed_mps)
+                if requested_speed_mps is not None
+                else self.speed_planner.cruise_speed_mps
+            ),
+            "target_speed_mps": float(target_speed),
             "lateral": lateral_info,
             "speed_plan": speed_plan,
             "longitudinal": longitudinal_info,
             "safety": safety_info,
             "emergency_obstacle": emergency_obstacle,
             "longitudinal_lead": control_lead,
+            "physical_lead": lead_vehicle,
+            "traffic_light": traffic_light or {},
+            "turn_signal": turn_signal_info,
         }
         return control, info
+
+    @staticmethod
+    def choose_longitudinal_constraint(
+        lead_vehicle: dict | None,
+        traffic_obstacle: dict | None,
+    ) -> dict | None:
+        candidates = []
+        for candidate in (lead_vehicle, traffic_obstacle):
+            if not isinstance(candidate, dict):
+                continue
+            try:
+                distance = float(candidate["distance_m"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if distance > 0.0:
+                candidates.append(candidate)
+        return min(candidates, key=lambda item: float(item["distance_m"]), default=None)

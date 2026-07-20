@@ -1,0 +1,329 @@
+"""Traffic-light state filtering and stop-line constraint generation."""
+
+from __future__ import annotations
+
+from collections import deque
+import math
+
+
+def clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(value, maximum))
+
+
+class TrafficLightObserver:
+    """Fuse model colour classification with CARLA traffic-light geometry.
+
+    Colour is taken from the trained camera model whenever a fresh and relevant
+    detection is available. CARLA actor geometry is used only to locate the stop
+    line, because a 2-D box alone is not a reliable metric-distance sensor.
+    Optional state fallback can be enabled for scenario debugging.
+    """
+
+    VALID_STATES = {"red", "yellow", "green", "unknown"}
+
+    def __init__(
+        self,
+        dt: float,
+        image_width: int,
+        image_height: int,
+        use_ground_truth_state_fallback: bool = False,
+        maximum_distance_m: float = 70.0,
+    ) -> None:
+        self.dt = max(1e-3, float(dt))
+        self.image_width = max(1, int(image_width))
+        self.image_height = max(1, int(image_height))
+        self.use_ground_truth_state_fallback = bool(use_ground_truth_state_fallback)
+        self.maximum_distance_m = max(10.0, float(maximum_distance_m))
+
+        self.maximum_perception_age_frames = max(1, int(round(0.50 / self.dt)))
+        self.vote_window = deque(maxlen=max(3, int(round(0.35 / self.dt))))
+        self.confirmation_votes = 2
+        self.confirmed_state = "unknown"
+        self.last_detection_frame_id = None
+        self.last_confidence = 0.0
+        self.last_bbox = None
+        self.traffic_light_actors = None
+
+        self.comfortable_deceleration_mps2 = 2.2
+        self.driver_reaction_equivalent_s = 0.35
+        self.stop_line_gap_m = 2.5
+
+    def update(
+        self,
+        current_frame_id: int,
+        state: dict,
+        vehicle,
+        world,
+        perception_result: dict | None,
+    ) -> dict:
+        detection = self.select_relevant_detection(perception_result)
+        detection_fresh = False
+        if detection is not None:
+            detection_frame_id = int(perception_result.get("frame_id", current_frame_id))
+            age = int(current_frame_id) - detection_frame_id
+            detection_fresh = 0 <= age <= self.maximum_perception_age_frames
+            if detection_fresh and detection_frame_id != self.last_detection_frame_id:
+                self.last_detection_frame_id = detection_frame_id
+                self.last_confidence = float(detection.get("confidence", 0.0))
+                self.last_bbox = tuple(detection.get("bbox", ()))
+                self._add_vote(self.class_name_to_state(detection.get("class_name")))
+
+        actor, distance_m = self.find_relevant_actor(vehicle, world, state)
+        actor_state = self.actor_state(actor)
+        observed_state = self.confirmed_state
+        source = "vision"
+
+        if observed_state == "unknown" and self.use_ground_truth_state_fallback:
+            observed_state = actor_state
+            source = "carla_state_fallback"
+        elif actor is not None:
+            source = "vision+carla_geometry"
+
+        if not detection_fresh and self.last_detection_frame_id is not None:
+            age = int(current_frame_id) - int(self.last_detection_frame_id)
+            if age > self.maximum_perception_age_frames:
+                # Do not indefinitely retain a stale red light.
+                self.vote_window.clear()
+                self.confirmed_state = "unknown"
+                if not self.use_ground_truth_state_fallback:
+                    observed_state = "unknown"
+                    source = "stale"
+
+        requires_stop = self.requires_stop(
+            light_state=observed_state,
+            distance_m=distance_m,
+            speed_mps=float(state.get("speed_mps", 0.0)),
+        )
+        obstacle = None
+        if requires_stop and distance_m is not None:
+            obstacle = {
+                "track_id": -100,
+                "class_name": f"traffic_light_{observed_state}",
+                "distance_m": max(0.25, float(distance_m)),
+                "lateral_m": 0.0,
+                "lead_speed_mps": 0.0,
+                "relative_speed_mps": -max(0.0, float(state.get("speed_mps", 0.0))),
+                "source": f"traffic_light_{observed_state}",
+                "measurement_frame_id": self.last_detection_frame_id,
+            }
+
+        return {
+            "state": observed_state,
+            "confirmed_vision_state": self.confirmed_state,
+            "actor_state": actor_state,
+            "distance_m": distance_m,
+            "requires_stop": requires_stop,
+            "source": source,
+            "confidence": self.last_confidence,
+            "bbox": self.last_bbox,
+            "measurement_frame_id": self.last_detection_frame_id,
+            "obstacle": obstacle,
+        }
+
+    def select_relevant_detection(self, perception_result: dict | None) -> dict | None:
+        if not perception_result:
+            return None
+        detections = perception_result.get("traffic_lights", []) or []
+        best = None
+        best_score = -math.inf
+
+        for detection in detections:
+            try:
+                x1, y1, x2, y2 = [float(value) for value in detection["bbox"]]
+                confidence = float(detection.get("confidence", 0.0))
+            except (KeyError, TypeError, ValueError):
+                continue
+            width = max(0.0, x2 - x1)
+            height = max(0.0, y2 - y1)
+            if width < 3.0 or height < 5.0:
+                continue
+
+            center_x = 0.5 * (x1 + x2)
+            center_y = 0.5 * (y1 + y2)
+            normalized_x = center_x / self.image_width
+            normalized_y = center_y / self.image_height
+            if not 0.15 <= normalized_x <= 0.85:
+                continue
+            if not 0.02 <= normalized_y <= 0.78:
+                continue
+
+            centrality = 1.0 - abs(normalized_x - 0.5) / 0.5
+            area_ratio = (width * height) / (self.image_width * self.image_height)
+            score = 2.0 * confidence + 0.8 * centrality + 20.0 * area_ratio
+            if score > best_score:
+                best = detection
+                best_score = score
+        return best
+
+    def _add_vote(self, state: str) -> None:
+        if state == "unknown":
+            return
+        self.vote_window.append(state)
+        counts = {candidate: self.vote_window.count(candidate) for candidate in ("red", "yellow", "green")}
+        winner = max(counts, key=counts.get)
+        if counts[winner] >= self.confirmation_votes:
+            self.confirmed_state = winner
+
+    @staticmethod
+    def class_name_to_state(class_name) -> str:
+        normalized = str(class_name or "").strip().lower().replace("-", "_")
+        if "traffic" not in normalized or "light" not in normalized:
+            return "unknown"
+        if "red" in normalized:
+            return "red"
+        if "orange" in normalized or "yellow" in normalized or "amber" in normalized:
+            return "yellow"
+        if "green" in normalized:
+            return "green"
+        return "unknown"
+
+    def find_relevant_actor(self, vehicle, world, state: dict):
+        actor = None
+        try:
+            actor = vehicle.get_traffic_light()
+        except (AttributeError, RuntimeError):
+            actor = None
+
+        if actor is not None:
+            distance = self.distance_to_trigger(actor, state["location"])
+            if distance is not None and distance <= self.maximum_distance_m:
+                return actor, distance
+
+        if self.traffic_light_actors is None:
+            try:
+                self.traffic_light_actors = list(
+                    world.get_actors().filter("traffic.traffic_light*")
+                )
+            except (AttributeError, RuntimeError):
+                return None, None
+
+        traffic_lights = [
+            light for light in self.traffic_light_actors
+            if getattr(light, "is_alive", True)
+        ]
+        best_actor = None
+        best_distance = None
+        for candidate in traffic_lights:
+            trigger_location = self.trigger_world_location(candidate)
+            if trigger_location is None:
+                continue
+            route_position = self.route_relative_position(trigger_location, state)
+            if route_position is None:
+                continue
+            forward_m, lateral_m = route_position
+            if not 0.0 < forward_m <= self.maximum_distance_m:
+                continue
+            lane_width = max(2.5, float(state.get("lane_width", 3.5)))
+            if abs(lateral_m) > 0.75 * lane_width:
+                continue
+            if best_distance is None or forward_m < best_distance:
+                best_actor = candidate
+                best_distance = forward_m
+        return best_actor, best_distance
+
+    def distance_to_trigger(self, actor, ego_location) -> float | None:
+        trigger_location = self.trigger_world_location(actor)
+        if trigger_location is None:
+            return None
+        try:
+            distance = float(ego_location.distance(trigger_location))
+            extent = float(actor.trigger_volume.extent.x)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+        return max(0.25, distance - extent)
+
+    @staticmethod
+    def trigger_world_location(actor):
+        try:
+            transform = actor.get_transform()
+            local = actor.trigger_volume.location
+            # CARLA Transform.transform mutates a Location in some versions.
+            location = type(local)(x=local.x, y=local.y, z=local.z)
+            return transform.transform(location)
+        except (AttributeError, RuntimeError, TypeError):
+            return None
+
+    def route_relative_position(self, location, state: dict) -> tuple[float, float] | None:
+        path = state.get("reference_path", []) or []
+        ego = state.get("location")
+        if ego is None:
+            return None
+
+        if not path:
+            yaw = math.radians(float(state.get("yaw", 0.0)))
+            dx = float(location.x - ego.x)
+            dy = float(location.y - ego.y)
+            return (
+                math.cos(yaw) * dx + math.sin(yaw) * dy,
+                -math.sin(yaw) * dx + math.cos(yaw) * dy,
+            )
+
+        points = [ego] + list(path)
+        cumulative = 0.0
+        best = None
+        for index in range(len(points) - 1):
+            first = points[index]
+            second = points[index + 1]
+            vx = float(second.x - first.x)
+            vy = float(second.y - first.y)
+            length_squared = vx * vx + vy * vy
+            if length_squared < 1e-9:
+                continue
+            wx = float(location.x - first.x)
+            wy = float(location.y - first.y)
+            parameter = clamp((wx * vx + wy * vy) / length_squared, 0.0, 1.0)
+            projected_x = first.x + parameter * vx
+            projected_y = first.y + parameter * vy
+            dx = float(location.x - projected_x)
+            dy = float(location.y - projected_y)
+            distance_squared = dx * dx + dy * dy
+            segment_length = math.sqrt(length_squared)
+            cross = vx * (location.y - projected_y) - vy * (location.x - projected_x)
+            lateral = math.copysign(math.sqrt(distance_squared), cross) if distance_squared > 0.0 else 0.0
+            forward = cumulative + parameter * segment_length
+            candidate = (distance_squared, forward, lateral)
+            if best is None or candidate[0] < best[0]:
+                best = candidate
+            cumulative += segment_length
+
+        if best is None:
+            return None
+        return float(best[1]), float(best[2])
+
+    @staticmethod
+    def actor_state(actor) -> str:
+        if actor is None:
+            return "unknown"
+        try:
+            text = str(actor.get_state()).lower()
+        except (AttributeError, RuntimeError):
+            return "unknown"
+        if "red" in text:
+            return "red"
+        if "yellow" in text or "orange" in text:
+            return "yellow"
+        if "green" in text:
+            return "green"
+        return "unknown"
+
+    def requires_stop(
+        self,
+        light_state: str,
+        distance_m: float | None,
+        speed_mps: float,
+    ) -> bool:
+        if distance_m is None or distance_m > self.maximum_distance_m:
+            return False
+        if light_state == "red":
+            return True
+        if light_state != "yellow":
+            return False
+
+        speed = max(0.0, float(speed_mps))
+        comfortable_stopping_distance = (
+            speed * self.driver_reaction_equivalent_s
+            + speed * speed / (2.0 * self.comfortable_deceleration_mps2)
+            + self.stop_line_gap_m
+        )
+        # Stop for yellow only when it can be done without an abrupt manoeuvre.
+        return float(distance_m) >= comfortable_stopping_distance or speed < 1.0

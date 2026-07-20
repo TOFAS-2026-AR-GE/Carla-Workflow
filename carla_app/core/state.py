@@ -45,6 +45,46 @@ def build_reference_path(
     return reference_path
 
 
+
+def distance_to_next_junction(route_manager, vehicle_location, maximum_distance_m=40.0):
+    """Kalıcı rota üzerinde sıradaki kavşağa kalan mesafeyi bulur."""
+    waypoints = list(getattr(route_manager, "waypoints", []) or [])
+    if not waypoints:
+        return None
+
+    search_count = min(25, len(waypoints))
+    nearest_index = min(
+        range(search_count),
+        key=lambda index: math.hypot(
+            vehicle_location.x - waypoints[index].transform.location.x,
+            vehicle_location.y - waypoints[index].transform.location.y,
+        ),
+    )
+
+    distance_m = math.hypot(
+        vehicle_location.x - waypoints[nearest_index].transform.location.x,
+        vehicle_location.y - waypoints[nearest_index].transform.location.y,
+    )
+
+    for index in range(nearest_index, len(waypoints)):
+        waypoint = waypoints[index]
+        if waypoint.is_junction:
+            return float(distance_m)
+
+        if index + 1 >= len(waypoints):
+            break
+
+        current = waypoint.transform.location
+        following = waypoints[index + 1].transform.location
+        distance_m += math.hypot(
+            following.x - current.x,
+            following.y - current.y,
+        )
+        if distance_m > float(maximum_distance_m):
+            break
+
+    return None
+
 def read_vehicle_state(
     world,
     vehicle,
@@ -55,8 +95,13 @@ def read_vehicle_state(
 
     speed_mps = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
 
+    junction_distance_m = None
     if route_manager is not None:
         waypoint, reference_path = route_manager.update(transform.location)
+        junction_distance_m = distance_to_next_junction(
+            route_manager,
+            transform.location,
+        )
     else:
         waypoint = world.get_map().get_waypoint(
             transform.location,
@@ -88,6 +133,7 @@ def read_vehicle_state(
         # uzaklasabilecegimizi hesaplarken kullanilir.
         "vehicle_half_width_m": float(vehicle.bounding_box.extent.y),
         "is_junction": waypoint.is_junction,
+        "junction_distance_m": junction_distance_m,
     }
 
 
@@ -109,6 +155,7 @@ def serializable_vehicle_state(
         "lane_width": float(state["lane_width"]),
         "vehicle_half_width_m": float(state.get("vehicle_half_width_m", 0.95)),
         "is_junction": bool(state["is_junction"]),
+        "junction_distance_m": state.get("junction_distance_m"),
         "control": {
             "throttle": float(control.throttle),
             "steer": float(control.steer),

@@ -1,0 +1,145 @@
+import math
+import sys
+import types
+
+if "carla" not in sys.modules:
+    carla = types.ModuleType("carla")
+
+    class LightState(int):
+        LeftBlinker = 1
+        RightBlinker = 2
+        Brake = 4
+
+    carla.VehicleLightState = LightState
+    sys.modules["carla"] = carla
+
+from carla_app.controller.vehicle.turn_signal import TurnSignalController
+from carla_app.controller.vehicle.longitudinal_controller import LongitudinalController
+from carla_app.controller.vehicle.traffic_light import TrafficLightObserver
+from carla_app.core.vehicle import apply_vehicle_lights
+
+
+def test_left_turn_signal_uses_positive_route_turn():
+    controller = TurnSignalController(dt=0.05)
+    state = {
+        "is_junction": False,
+        "junction_distance_m": 18.0,
+    }
+    info = controller.update(
+        state,
+        {"path_turn_rad": math.radians(35.0)},
+    )
+    assert info["direction"] == "left"
+
+
+def test_right_turn_signal_uses_negative_route_turn():
+    controller = TurnSignalController(dt=0.05)
+    info = controller.update(
+        {"is_junction": True, "junction_distance_m": 0.0},
+        {"path_turn_rad": math.radians(-30.0)},
+    )
+    assert info["direction"] == "right"
+
+
+def test_normal_curve_without_junction_does_not_signal():
+    controller = TurnSignalController(dt=0.05)
+    info = controller.update(
+        {"is_junction": False, "junction_distance_m": None},
+        {"path_turn_rad": math.radians(35.0)},
+    )
+    assert info["direction"] == "off"
+
+
+def test_light_mask_preserves_other_lights_and_sets_brake():
+    class Vehicle:
+        def __init__(self):
+            self.mask = 8
+
+        def get_light_state(self):
+            return self.mask
+
+        def set_light_state(self, state):
+            self.mask = int(state)
+
+    vehicle = Vehicle()
+    control = types.SimpleNamespace(brake=0.4)
+    applied = apply_vehicle_lights(
+        vehicle,
+        control,
+        {"turn_signal": {"direction": "left"}},
+    )
+
+    assert applied is True
+    assert vehicle.mask & 1
+    assert vehicle.mask & 4
+    assert vehicle.mask & 8
+    assert not vehicle.mask & 2
+
+
+def test_red_light_activates_at_comfortable_stopping_distance():
+    observer = TrafficLightObserver(
+        dt=0.05,
+        image_width=800,
+        image_height=600,
+        maximum_distance_m=70.0,
+    )
+    assert observer.requires_stop("red", 25.0, 8.33) is True
+    assert observer.requires_stop("red", 40.0, 8.33) is False
+
+
+def test_red_light_braking_starts_with_jerk_limited_command():
+    controller = LongitudinalController(dt=0.05)
+    light = {
+        "track_id": -100,
+        "distance_m": 30.0,
+        "relative_speed_mps": -8.33,
+        "source": "traffic_light_red",
+    }
+
+    throttle, brake, info = controller.run_step(
+        {"speed_mps": 8.33},
+        light,
+        16.0,
+    )
+
+    assert throttle == 0.0
+    assert brake < 0.10
+    assert info["acceleration_mps2"] >= -0.11
+    assert controller.traffic_light_max_deceleration_mps2 == 4.0
+
+
+def test_red_light_stops_near_line_without_full_brake():
+    controller = LongitudinalController(dt=0.05)
+    speed_mps = 8.33
+    distance_m = 25.0
+    maximum_brake = 0.0
+
+    for _ in range(500):
+        light = {
+            "track_id": -100,
+            "distance_m": max(0.21, distance_m),
+            "relative_speed_mps": -speed_mps,
+            "source": "traffic_light_red",
+        }
+        throttle, brake, info = controller.run_step(
+            {"speed_mps": speed_mps},
+            light,
+            16.0,
+        )
+        maximum_brake = max(maximum_brake, brake)
+
+        acceleration = 2.8 * throttle - 7.5 * brake
+        if speed_mps > 0.02:
+            acceleration -= 0.12
+        speed_mps = max(
+            0.0,
+            speed_mps + acceleration * controller.dt,
+        )
+        distance_m -= speed_mps * controller.dt
+
+        if info["hold_active"] and speed_mps <= 0.02:
+            break
+
+    assert info["hold_active"] is True
+    assert 0.20 <= distance_m <= 0.65
+    assert maximum_brake <= 0.35

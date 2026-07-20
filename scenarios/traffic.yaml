@@ -1,5 +1,5 @@
 name: traffic_world
-map: Town03
+map: Town02
 
 simulation:
   synchronous_mode: true

@@ -37,6 +37,38 @@ def median(values):
     return 0.5 * (ordered[middle - 1] + ordered[middle])
 
 
+
+def sanitize_radar_points(points):
+    # Return only finite, numeric radar samples.
+    sanitized = []
+    for point in points or []:
+        try:
+            depth = float(point["depth_m"])
+            azimuth = float(point["azimuth_deg"])
+            altitude = float(point.get("altitude_deg", 0.0))
+            velocity = float(point["relative_velocity_mps"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        values = (depth, azimuth, altitude, velocity)
+        if not all(math.isfinite(value) for value in values):
+            continue
+        if depth <= 0.0:
+            continue
+
+        normalized = dict(point)
+        normalized.update(
+            {
+                "depth_m": depth,
+                "azimuth_deg": azimuth,
+                "altitude_deg": altitude,
+                "relative_velocity_mps": velocity,
+            }
+        )
+        sanitized.append(normalized)
+    return sanitized
+
+
 def cluster_by_depth(points, minimum_gap_m=2.5):
     """Ayni aciya dusen radar noktalarini mesafe katmanlarina ayirir."""
     if not points:
@@ -98,6 +130,8 @@ def fuse_detections_with_radar(
     kez ileri tasinmaz. Kare yasi yalnizca eski kamera kutusunun aci eslestirme
     payini bir miktar genisletmek icin kullanilir.
     """
+    radar_points = sanitize_radar_points(radar_points)
+
     frame_delta = 0
     if detection_frame_id is not None and radar_frame_id is not None:
         frame_delta = max(0, int(radar_frame_id) - int(detection_frame_id))

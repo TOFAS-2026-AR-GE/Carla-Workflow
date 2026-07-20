@@ -1,103 +1,184 @@
-"""Intelligent Driver Model (IDM) tabanli gaz ve fren kontrolu."""
+"""Smooth PI cruise control plus IDM-style vehicle/stop-line interaction."""
+
+from __future__ import annotations
 
 import math
 
 
-def clamp(value, minimum, maximum):
+def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(value, maximum))
 
 
 class LongitudinalController:
-    """Sabit hiz, arac takip ve durdugu yerde fren tutma kontrolunu yapar."""
+    """Control speed, following distance and stop-and-go without pedal chatter.
 
-    def __init__(self, dt=0.05):
-        self.dt = float(dt)
+    Free road:
+        PI speed tracking with anti-windup.
+    Vehicle ahead:
+        IDM-like interaction around a configurable 2 m urban comfort gap.
+    Red/yellow light:
+        The stop line is represented as a virtual stationary lead object.
+    Output:
+        Desired acceleration is jerk-limited before it is mapped to throttle/brake.
+    """
 
-        # IDM ayarlari. Her sayinin fiziksel bir anlami vardir.
-        self.standstill_gap_m = 2.0
-        self.time_headway_s = 1.2
-        self.maximum_acceleration_mps2 = 1.5
-        self.comfortable_deceleration_mps2 = 2.0
+    def __init__(
+        self,
+        dt: float = 0.05,
+        follow_gap_m: float = 2.0,
+        follow_gap_margin_m: float = 0.45,
+    ) -> None:
+        self.dt = max(1e-3, float(dt))
+
+        # Speed-loop tuning. Deliberately modest for passenger comfort.
+        self.speed_kp = 0.80
+        self.speed_ki = 0.08
+        self.speed_integral = 0.0
+        self.integral_limit = 5.0
+        self.speed_deadband_mps = 0.12
+
+        # Following parameters.
+        self.minimum_vehicle_gap_m = max(2.0, float(follow_gap_m))
+        # Legacy name retained; it now means the configured minimum vehicle gap.
+        self.standstill_gap_m = self.minimum_vehicle_gap_m
+        self.follow_gap_margin_m = max(0.2, float(follow_gap_margin_m))
+        self.time_headway_s = 0.0
         self.acceleration_exponent = 4.0
+        self.traffic_light_stop_gap_m = 0.40
+        self.maximum_acceleration_mps2 = 1.6
+        self.comfortable_deceleration_mps2 = 2.2
+        self.maximum_deceleration_mps2 = 4.5
+        # Normalde aktivasyon mesafesi yaklaşık 2.2 m/s² rahat
+        # yavaşlama üretir. Işık geç görülürse durabilmek için daha yüksek
+        # güvenlik tavanına izin verilir.
+        self.traffic_light_max_deceleration_mps2 = 4.0
+        self.traffic_light_emergency_deceleration_mps2 = 8.0
+        self.traffic_light_braking_jerk_mps3 = 2.0
+        self.traffic_light_late_braking_jerk_mps3 = 8.0
+        self.traffic_light_late_deceleration_mps2 = 4.0
+        self.traffic_light_plan_adjustment_mps3 = 0.60
+        self.traffic_light_planned_deceleration_mps2 = None
 
-        # CARLA pedal sinirlari ve konfor sinirlari.
-        self.maximum_deceleration_mps2 = 5.0
-        self.acceleration_jerk_mps3 = 3.0
-        self.braking_jerk_mps3 = 6.0
-        self.throttle_acceleration_mps2 = 3.0
-        self.rolling_resistance_throttle = 0.05
+        # Jerk and pedal mapping.
+        self.acceleration_jerk_mps3 = 1.5
+        self.braking_jerk_mps3 = 2.8
+        self.throttle_acceleration_mps2 = 3.2
+        self.rolling_resistance_throttle = 0.055
         self.coasting_deceleration_mps2 = (
             self.throttle_acceleration_mps2 * self.rolling_resistance_throttle
         )
-        self.brake_deadband_mps2 = 0.05
+        self.brake_deadband_mps2 = 0.06
         self.breakaway_speed_mps = 0.50
         self.low_speed_throttle_floor = 0.20
         self.maximum_throttle = 0.75
-        self.maximum_brake = 0.90
+        self.maximum_brake = 1.00
         self.previous_acceleration_mps2 = 0.0
 
-        # Dur-kalk icindeki tek kesikli durum mekanik fren tutmadir.
-        # Normal yaklasma ve yeniden kalkis ivmesini her zaman IDM hesaplar.
+        # Stop-and-go brake hold.
         self.hold_speed_mps = 0.15
-        self.hold_distance_m = 2.30
+        self.vehicle_hold_distance_m = self.minimum_vehicle_gap_m + 0.18
+        self.traffic_light_hold_distance_m = self.traffic_light_stop_gap_m + 0.15
+        # Backward-compatible names used by earlier tests/configuration.
+        self.hold_distance_m = self.vehicle_hold_distance_m
         self.hold_lead_speed_mps = 0.20
         self.hold_brake = 0.30
-        self.hold_release_lead_speed_mps = 0.30
-        self.hold_release_distance_m = 2.60
+        self.hold_release_speed_mps = 0.30
+        self.hold_release_lead_speed_mps = self.hold_release_speed_mps
+        self.hold_release_distance_margin_m = 0.60
+        self.hold_release_distance_m = (
+            self.vehicle_hold_distance_m + self.hold_release_distance_margin_m
+        )
         self.hold_release_ticks = 2
         self.hold_active = False
+        self.hold_source = None
         self.release_evidence_ticks = 0
         self.restart_ticks_remaining = 0
 
-        # Normal adaptif hiz kontrolu icin iki ardisik olcum yeterlidir.
-        # AEB bagimsizdir ve ilk kritik radar donusune tepki verebilir.
+        # Measurement confirmation/filtering.
         self.minimum_lead_ticks = 2
         self.lead_ticks = 0
         self.last_track_id = None
         self.last_raw_distance_m = None
-
-        # Yakinlasan olcum hemen, uzaklasan kaynak degisimi daha yavas kabul
-        # edilir. Bu sayede kamera-radar gecisleri gaz-fren sicrama uretmez.
         self.filtered_distance_m = None
         self.filtered_lead_speed_mps = None
+        self.filtered_source = None
 
-    def run_step(self, state, lead_vehicle, target_speed):
+    def run_step(
+        self,
+        state: dict,
+        lead_vehicle: dict | None,
+        target_speed: float,
+    ) -> tuple[float, float, dict]:
         ego_speed = max(0.0, float(state["speed_mps"]))
-        target_speed = max(0.1, float(target_speed))
+        target_speed = max(0.0, float(target_speed))
 
         raw_lead = self.validate_lead(lead_vehicle)
         lead_confirmed = self.confirm_lead(raw_lead)
         lead = self.filter_lead(raw_lead, ego_speed)
 
         free_acceleration = self.calculate_free_road_acceleration(
-            ego_speed, target_speed
+            ego_speed,
+            target_speed,
+            constrained=lead is not None,
         )
         desired_acceleration = free_acceleration
         desired_gap = None
-        interaction_ratio = None
+        gap_error = None
+        interaction_acceleration = None
         lead_is_far = False
 
         if lead is not None and lead_confirmed:
-            desired_gap = self.calculate_idm_gap(
+            desired_gap = self.calculate_desired_gap(
                 ego_speed=ego_speed,
                 relative_speed=lead["relative_speed_mps"],
+                source=lead.get("source", "unknown"),
             )
-            interaction_ratio = desired_gap / max(lead["distance_m"], 0.25)
+            gap_error = lead["distance_m"] - desired_gap
+            interaction_acceleration = self.calculate_interaction_acceleration(
+                distance_m=lead["distance_m"],
+                desired_gap_m=desired_gap,
+                relative_speed_mps=lead["relative_speed_mps"],
+                ego_speed_mps=ego_speed,
+                source=lead.get("source", "unknown"),
+            )
             lead_is_far = self.lead_is_far(
                 distance=lead["distance_m"],
                 desired_gap=desired_gap,
                 relative_speed=lead["relative_speed_mps"],
+                source=lead.get("source", "unknown"),
             )
             if not lead_is_far:
-                desired_acceleration = self.maximum_acceleration_mps2 * (
-                    1.0
-                    - (ego_speed / target_speed) ** self.acceleration_exponent
-                    - interaction_ratio**2
-                )
+                is_traffic_light = str(
+                    lead.get("source", "unknown")
+                ).startswith("traffic_light")
+                if is_traffic_light:
+                    # Kırmızı ışık için tek otorite durma planıdır. Rota hız
+                    # hedefinin farklı bir fren komutuyla sabit yavaşlamayı
+                    # bozmasına izin verme. Pozitif değer yalnız son metrelerde
+                    # kontrollü sürünme içindir.
+                    desired_acceleration = interaction_acceleration
+                else:
+                    desired_acceleration = min(
+                        free_acceleration,
+                        interaction_acceleration,
+                    )
 
+        active_source = (
+            str(lead.get("source", "unknown"))
+            if lead is not None and lead_confirmed
+            else "unknown"
+        )
+        if not active_source.startswith("traffic_light"):
+            self.traffic_light_planned_deceleration_mps2 = None
+
+        deceleration_limit = (
+            self.traffic_light_emergency_deceleration_mps2
+            if active_source == "traffic_light_red"
+            else self.maximum_deceleration_mps2
+        )
         desired_acceleration = clamp(
             desired_acceleration,
-            -self.maximum_deceleration_mps2,
+            -deceleration_limit,
             self.maximum_acceleration_mps2,
         )
 
@@ -114,31 +195,45 @@ class LongitudinalController:
             self.previous_acceleration_mps2 = 0.0
             acceleration = 0.0
             throttle, brake = 0.0, self.hold_brake
-            mode = "HOLD"
+            mode = self.hold_mode(self.hold_source)
         else:
-            acceleration = self.limit_jerk(desired_acceleration)
+            acceleration = self.limit_jerk(
+                desired_acceleration,
+                source=active_source,
+            )
             throttle, brake = self.convert_acceleration_to_pedals(
-                acceleration, ego_speed
+                acceleration,
+                ego_speed,
+            )
+            if (
+                active_source.startswith("traffic_light")
+                and desired_acceleration < 0.0
+            ):
+                # Kırmızı ışık görülür görülmez gazı bırak; jerk sınırlayıcı
+                # fren kuvvetini yumuşak biçimde artırırken araç önce süzülsün.
+                throttle = 0.0
+            mode = self.select_mode(
+                lead=lead,
+                lead_confirmed=lead_confirmed,
+                lead_is_far=lead_is_far,
             )
 
-            if self.restart_ticks_remaining > 0:
-                self.restart_ticks_remaining -= 1
-                mode = "RESTART"
-            elif lead is None:
-                mode = "CRUISE"
-            elif not lead_confirmed or lead_is_far:
-                mode = "LEAD_FAR"
-            else:
-                mode = "FOLLOW"
-
+        lower_gap, upper_gap = self.comfort_gap_band(
+            desired_gap if desired_gap is not None else self.minimum_vehicle_gap_m
+        )
         info = {
             "mode": mode,
             "target_speed_mps": target_speed,
+            "speed_error_mps": target_speed - ego_speed,
+            "speed_integral": self.speed_integral,
             "desired_acceleration_mps2": desired_acceleration,
             "acceleration_mps2": acceleration,
             "free_acceleration_mps2": free_acceleration,
+            "interaction_acceleration_mps2": interaction_acceleration,
             "desired_gap_m": desired_gap,
-            "interaction_ratio": interaction_ratio,
+            "gap_error_m": gap_error,
+            "comfort_gap_lower_m": lower_gap,
+            "comfort_gap_upper_m": upper_gap,
             "lead_confirmed_for_control": lead_confirmed,
             "raw_lead_distance_m": (
                 raw_lead["distance_m"] if raw_lead is not None else None
@@ -150,74 +245,300 @@ class LongitudinalController:
                 lead["lead_speed_mps"] if lead is not None else None
             ),
             "hold_active": self.hold_active,
+            "hold_source": self.hold_source,
             "restart_active": mode == "RESTART",
+            "traffic_light_planned_deceleration_mps2": (
+                self.traffic_light_planned_deceleration_mps2
+            ),
         }
         return throttle, brake, info
 
-    def notify_emergency_stop(self):
-        """AEB pedallari yonetirken eski ivme hafizasini temizler."""
-        self.previous_acceleration_mps2 = 0.0
-        self.restart_ticks_remaining = 0
+    def calculate_free_road_acceleration(
+        self,
+        ego_speed: float,
+        target_speed: float,
+        constrained: bool = False,
+    ) -> float:
+        error = target_speed - ego_speed
+        if abs(error) <= self.speed_deadband_mps:
+            error = 0.0
+            self.speed_integral *= 0.96
+        else:
+            candidate_integral = clamp(
+                self.speed_integral + error * self.dt,
+                -self.integral_limit,
+                self.integral_limit,
+            )
+            unsaturated = self.speed_kp * error + self.speed_ki * candidate_integral
+            saturated = clamp(
+                unsaturated,
+                -self.comfortable_deceleration_mps2,
+                self.maximum_acceleration_mps2,
+            )
+            # Integrate only when not driving further into saturation. A lead
+            # constraint also gently unwinds the speed integral.
+            if (
+                abs(unsaturated - saturated) < 1e-9
+                or (unsaturated > saturated and error < 0.0)
+                or (unsaturated < saturated and error > 0.0)
+            ):
+                self.speed_integral = candidate_integral
 
-    def calculate_free_road_acceleration(self, ego_speed, target_speed):
-        speed_ratio = ego_speed / target_speed
-        return self.maximum_acceleration_mps2 * (
-            1.0 - speed_ratio**self.acceleration_exponent
+        if constrained:
+            self.speed_integral *= 0.995
+
+        command = self.speed_kp * error + self.speed_ki * self.speed_integral
+        return clamp(
+            command,
+            -self.comfortable_deceleration_mps2,
+            self.maximum_acceleration_mps2,
         )
 
-    def calculate_idm_gap(self, ego_speed, relative_speed):
-        # Projedeki bagil hiz, on_arac_hizi - ego_hizi seklindedir.
-        # IDM ise pozitif yaklasma hizi kullanir; bu nedenle isaret terslenir.
-        closing_speed = -relative_speed
+    def calculate_idm_gap(self, ego_speed: float, relative_speed: float) -> float:
+        """Backward-compatible vehicle-gap helper."""
+        return self.calculate_desired_gap(
+            ego_speed=ego_speed,
+            relative_speed=relative_speed,
+            source="camera_radar_track",
+        )
+
+    def calculate_desired_gap(
+        self,
+        ego_speed: float,
+        relative_speed: float,
+        source: str,
+    ) -> float:
+        is_traffic_light = str(source).startswith("traffic_light")
+        standstill_gap = (
+            self.traffic_light_stop_gap_m
+            if is_traffic_light
+            else self.minimum_vehicle_gap_m
+        )
+        if is_traffic_light:
+            return standstill_gap
+
+        closing_speed = max(0.0, -relative_speed)
         braking_scale = 2.0 * math.sqrt(
             self.maximum_acceleration_mps2 * self.comfortable_deceleration_mps2
         )
-        dynamic_part = (
-            ego_speed * self.time_headway_s + ego_speed * closing_speed / braking_scale
-        )
-        return self.standstill_gap_m + max(0.0, dynamic_part)
+        closing_term = ego_speed * closing_speed / braking_scale
+        return standstill_gap + ego_speed * self.time_headway_s + closing_term
 
-    def lead_is_far(self, distance, desired_gap, relative_speed):
-        closing_speed = max(0.0, -relative_speed)
-        return distance > max(30.0, 3.0 * desired_gap) and closing_speed < 1.0
+    def calculate_interaction_acceleration(
+        self,
+        distance_m: float,
+        desired_gap_m: float,
+        relative_speed_mps: float,
+        ego_speed_mps: float,
+        source: str,
+    ) -> float:
+        if str(source).startswith("traffic_light"):
+            gap_error = float(distance_m) - self.traffic_light_stop_gap_m
 
-    def update_hold(self, ego_speed, lead, measured_lead_speed):
-        if lead is None:
-            self.release_evidence_ticks = 0
-            return
+            # If braking has already reduced speed too much, creep towards the
+            # stop line instead of remaining several metres behind it.
+            if gap_error > 0.35 and ego_speed_mps < 1.00:
+                crawl_target_speed = clamp(
+                    0.20 + 0.28 * gap_error,
+                    0.20,
+                    0.75,
+                )
+                return clamp(
+                    0.90 * (crawl_target_speed - ego_speed_mps),
+                    -1.20,
+                    0.45,
+                )
 
-        if self.hold_active:
-            release_requested = (
-                measured_lead_speed >= self.hold_release_lead_speed_mps
-                or lead["distance_m"] >= self.hold_release_distance_m
+            if gap_error <= 0.0:
+                return -clamp(
+                    1.0 + 1.5 * ego_speed_mps,
+                    0.0,
+                    self.traffic_light_max_deceleration_mps2,
+                )
+
+            usable_distance = max(0.20, gap_error)
+            required_deceleration = (
+                ego_speed_mps * ego_speed_mps / (2.0 * usable_distance)
             )
-            if release_requested:
+            required_deceleration = clamp(
+                required_deceleration,
+                0.0,
+                self.traffic_light_emergency_deceleration_mps2,
+            )
+
+            # İlk kırmızı kabul edildiğinde gereken yavaşlama planlanır.
+            # İdeal sabit ivmeli harekette v²/(2d) yol boyunca aynı kalır.
+            # Ölçüm gürültüsü nedeniyle hedefi yalnız yavaşça düzeltiriz.
+            if self.traffic_light_planned_deceleration_mps2 is None:
+                self.traffic_light_planned_deceleration_mps2 = (
+                    required_deceleration
+                )
+            elif (
+                required_deceleration
+                >= self.traffic_light_late_deceleration_mps2
+            ):
+                # Geç algılama veya yetersiz kalan mesafe: konforu değil,
+                # kırmızıda durmayı önceliklendir.
+                self.traffic_light_planned_deceleration_mps2 = max(
+                    self.traffic_light_planned_deceleration_mps2,
+                    required_deceleration,
+                )
+            else:
+                maximum_adjustment = (
+                    self.traffic_light_plan_adjustment_mps3 * self.dt
+                )
+                plan_error = (
+                    required_deceleration
+                    - self.traffic_light_planned_deceleration_mps2
+                )
+                self.traffic_light_planned_deceleration_mps2 += clamp(
+                    plan_error,
+                    -maximum_adjustment,
+                    maximum_adjustment,
+                )
+
+            return -clamp(
+                self.traffic_light_planned_deceleration_mps2,
+                0.0,
+                self.traffic_light_emergency_deceleration_mps2,
+            )
+
+        ratio = desired_gap_m / max(distance_m, 0.25)
+        closing_speed = max(0.0, -relative_speed_mps)
+        interaction = self.maximum_acceleration_mps2 * (1.0 - ratio * ratio)
+
+        # When the gap is comfortably open and not closing, avoid tiny braking
+        # corrections that cause throttle/brake flicker.
+        if (
+            distance_m >= desired_gap_m + self.follow_gap_margin_m
+            and closing_speed < 0.20
+        ):
+            interaction = self.maximum_acceleration_mps2
+        return clamp(
+            interaction,
+            -self.maximum_deceleration_mps2,
+            self.maximum_acceleration_mps2,
+        )
+
+    def comfort_gap_band(self, desired_gap_m: float) -> tuple[float, float]:
+        return (
+            max(0.0, desired_gap_m - self.follow_gap_margin_m),
+            desired_gap_m + self.follow_gap_margin_m,
+        )
+
+    def lead_is_far(
+        self,
+        distance: float,
+        desired_gap: float,
+        relative_speed: float,
+        source: str = "camera_radar_track",
+    ) -> bool:
+        if str(source).startswith("traffic_light"):
+            return False
+        closing_speed = max(0.0, -relative_speed)
+        return distance > max(35.0, 2.5 * desired_gap) and closing_speed < 0.8
+
+    def update_hold(
+        self,
+        ego_speed: float,
+        lead: dict | None,
+        measured_lead_speed: float | None,
+    ) -> None:
+        if lead is None:
+            if self.hold_active and str(self.hold_source).startswith("traffic_light"):
                 self.release_evidence_ticks += 1
+                if self.release_evidence_ticks >= self.hold_release_ticks:
+                    self.release_hold()
             else:
                 self.release_evidence_ticks = 0
+            return
 
+        source = lead.get("source", "unknown")
+        is_traffic_light = str(source).startswith("traffic_light")
+        hold_distance = (
+            self.traffic_light_hold_distance_m
+            if is_traffic_light
+            else self.vehicle_hold_distance_m
+        )
+        release_distance = hold_distance + self.hold_release_distance_margin_m
+
+        if self.hold_active:
+            source_changed = source != self.hold_source
+            lead_moving = (
+                measured_lead_speed is not None
+                and measured_lead_speed >= self.hold_release_speed_mps
+            )
+            release_requested = source_changed or lead_moving or lead["distance_m"] >= release_distance
+            self.release_evidence_ticks = (
+                self.release_evidence_ticks + 1 if release_requested else 0
+            )
             if self.release_evidence_ticks >= self.hold_release_ticks:
-                self.hold_active = False
-                self.release_evidence_ticks = 0
-                self.restart_ticks_remaining = max(1, int(round(0.5 / self.dt)))
+                self.release_hold()
             return
 
         should_hold = (
             ego_speed <= self.hold_speed_mps
-            and lead["distance_m"] <= self.hold_distance_m
-            and lead["lead_speed_mps"] <= self.hold_lead_speed_mps
+            and lead["distance_m"] <= hold_distance
+            and float(lead.get("lead_speed_mps", 0.0)) <= self.hold_lead_speed_mps
         )
         if should_hold:
             self.hold_active = True
+            self.hold_source = source
             self.release_evidence_ticks = 0
             self.restart_ticks_remaining = 0
 
-    def confirm_lead(self, lead):
+    def release_hold(self) -> None:
+        self.hold_active = False
+        self.hold_source = None
+        self.release_evidence_ticks = 0
+        self.restart_ticks_remaining = max(1, int(round(0.5 / self.dt)))
+
+    def select_mode(
+        self,
+        lead: dict | None,
+        lead_confirmed: bool,
+        lead_is_far: bool,
+    ) -> str:
+        if self.restart_ticks_remaining > 0:
+            self.restart_ticks_remaining -= 1
+            return "RESTART"
+        if lead is None:
+            return "CRUISE"
+        source = str(lead.get("source", "unknown"))
+        if source == "traffic_light_red":
+            return "STOP_RED"
+        if source == "traffic_light_yellow":
+            return "STOP_YELLOW"
+        if not lead_confirmed or lead_is_far:
+            return "LEAD_FAR"
+        return "FOLLOW"
+
+    @staticmethod
+    def hold_mode(source: str | None) -> str:
+        if source == "traffic_light_red":
+            return "HOLD_RED"
+        if source == "traffic_light_yellow":
+            return "HOLD_YELLOW"
+        return "HOLD"
+
+    def notify_emergency_stop(self) -> None:
+        self.previous_acceleration_mps2 = 0.0
+        self.speed_integral = 0.0
+        self.restart_ticks_remaining = 0
+
+    def confirm_lead(self, lead: dict | None) -> bool:
         if lead is None:
             self.lead_ticks = 0
             self.last_track_id = None
             self.last_raw_distance_m = None
             return False
+
+        source = str(lead.get("source", "unknown"))
+        if source.startswith("traffic_light"):
+            self.lead_ticks = self.minimum_lead_ticks
+            self.last_track_id = lead.get("track_id")
+            self.last_raw_distance_m = lead["distance_m"]
+            return True
 
         same_track = lead.get("track_id") == self.last_track_id
         same_range = (
@@ -229,19 +550,20 @@ class LongitudinalController:
         self.last_raw_distance_m = lead["distance_m"]
         return self.lead_ticks >= self.minimum_lead_ticks
 
-    def filter_lead(self, lead, ego_speed):
+    def filter_lead(self, lead: dict | None, ego_speed: float) -> dict | None:
         if lead is None:
             self.filtered_distance_m = None
             self.filtered_lead_speed_mps = None
+            self.filtered_source = None
             return None
 
-        measured_lead_speed = max(
-            0.0,
-            ego_speed + lead["relative_speed_mps"],
-        )
-        if self.filtered_distance_m is None:
+        source = str(lead.get("source", "unknown"))
+        measured_lead_speed = max(0.0, ego_speed + lead["relative_speed_mps"])
+        source_changed = source != self.filtered_source
+        if self.filtered_distance_m is None or source_changed:
             self.filtered_distance_m = lead["distance_m"]
             self.filtered_lead_speed_mps = measured_lead_speed
+            self.filtered_source = source
         else:
             predicted_distance = max(
                 0.25,
@@ -250,11 +572,11 @@ class LongitudinalController:
             )
             range_error = lead["distance_m"] - predicted_distance
             if range_error < 0.0:
-                correction = 0.55 * clamp(range_error, -1.5, 0.0)
+                correction = 0.60 * clamp(range_error, -1.5, 0.0)
             else:
-                correction = 0.20 * clamp(range_error, 0.0, 0.40)
+                correction = 0.22 * clamp(range_error, 0.0, 0.50)
             self.filtered_distance_m = predicted_distance + correction
-            self.filtered_lead_speed_mps += 0.25 * (
+            self.filtered_lead_speed_mps += 0.28 * (
                 measured_lead_speed - self.filtered_lead_speed_mps
             )
 
@@ -265,12 +587,29 @@ class LongitudinalController:
         filtered["measured_lead_speed_mps"] = measured_lead_speed
         return filtered
 
-    def limit_jerk(self, desired_acceleration):
-        jerk_limit = (
-            self.acceleration_jerk_mps3
-            if desired_acceleration >= self.previous_acceleration_mps2
-            else self.braking_jerk_mps3
-        )
+    def limit_jerk(
+        self,
+        desired_acceleration: float,
+        source: str = "unknown",
+    ) -> float:
+        if (
+            str(source) == "traffic_light_red"
+            and desired_acceleration < self.previous_acceleration_mps2
+        ):
+            if (
+                -float(desired_acceleration)
+                >= self.traffic_light_late_deceleration_mps2
+            ):
+                jerk_limit = self.traffic_light_late_braking_jerk_mps3
+            else:
+                jerk_limit = self.traffic_light_braking_jerk_mps3
+        else:
+            jerk_limit = (
+                self.acceleration_jerk_mps3
+                if desired_acceleration >= self.previous_acceleration_mps2
+                else self.braking_jerk_mps3
+            )
+
         maximum_change = jerk_limit * self.dt
         change = clamp(
             desired_acceleration - self.previous_acceleration_mps2,
@@ -280,7 +619,11 @@ class LongitudinalController:
         self.previous_acceleration_mps2 += change
         return self.previous_acceleration_mps2
 
-    def convert_acceleration_to_pedals(self, acceleration, ego_speed):
+    def convert_acceleration_to_pedals(
+        self,
+        acceleration: float,
+        ego_speed: float,
+    ) -> tuple[float, float]:
         throttle = (
             self.rolling_resistance_throttle
             + acceleration / self.throttle_acceleration_mps2
@@ -288,24 +631,19 @@ class LongitudinalController:
         if throttle > 0.0:
             if ego_speed <= self.hold_speed_mps and acceleration <= 0.0:
                 return 0.0, 0.0
-            throttle = (
-                max(throttle, self.low_speed_throttle_floor)
-                if ego_speed < self.breakaway_speed_mps and acceleration > 0.0
-                else throttle
-            )
+            if ego_speed < self.breakaway_speed_mps and acceleration > 0.0:
+                throttle = max(throttle, self.low_speed_throttle_floor)
             return clamp(throttle, 0.0, self.maximum_throttle), 0.0
 
         braking_acceleration = abs(acceleration) - self.coasting_deceleration_mps2
         if braking_acceleration > self.brake_deadband_mps2:
             brake = braking_acceleration / self.maximum_deceleration_mps2
             return 0.0, clamp(brake, 0.0, self.maximum_brake)
-
         return 0.0, 0.0
 
-    def validate_lead(self, lead_vehicle):
+    def validate_lead(self, lead_vehicle: dict | None) -> dict | None:
         if lead_vehicle is None:
             return None
-
         try:
             distance = float(lead_vehicle.get("distance_m", -1.0))
             relative_speed = float(lead_vehicle.get("relative_speed_mps", 0.0))
@@ -314,9 +652,9 @@ class LongitudinalController:
 
         if not math.isfinite(distance) or not math.isfinite(relative_speed):
             return None
-        if not 0.25 < distance <= 100.0:
+        if not 0.20 < distance <= 120.0:
             return None
-        if not -30.0 <= relative_speed <= 30.0:
+        if not -40.0 <= relative_speed <= 40.0:
             return None
 
         return {
@@ -324,3 +662,17 @@ class LongitudinalController:
             "distance_m": distance,
             "relative_speed_mps": relative_speed,
         }
+
+    def reset(self) -> None:
+        self.speed_integral = 0.0
+        self.previous_acceleration_mps2 = 0.0
+        self.hold_active = False
+        self.hold_source = None
+        self.release_evidence_ticks = 0
+        self.restart_ticks_remaining = 0
+        self.lead_ticks = 0
+        self.last_track_id = None
+        self.last_raw_distance_m = None
+        self.filtered_distance_m = None
+        self.filtered_lead_speed_mps = None
+        self.filtered_source = None

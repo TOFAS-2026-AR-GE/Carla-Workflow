@@ -2,6 +2,8 @@
 
 import math
 
+import carla
+
 from carla_app.controller.vehicle.tracking import Tracker, polar_to_world
 from carla_app.perception.fusion import fuse_detections_with_radar
 
@@ -43,10 +45,12 @@ class LeadVehicleTracker:
         camera_fov_deg,
         radar_height_m=1.0,
         radar_pitch_deg=2.0,
+        carla_map=None,
     ):
         self.dt = float(dt)
         self.image_width = int(image_width)
         self.camera_fov_deg = float(camera_fov_deg)
+        self.carla_map = carla_map
         self.max_perception_age_frames = max(1, int(round(0.5 / self.dt)))
 
         self.radar_height_m = max(0.1, float(radar_height_m))
@@ -109,12 +113,100 @@ class LeadVehicleTracker:
             state,
             radar_frame_id,
         )
-        self.emergency_obstacle = self.select_emergency_radar_obstacle(
+        route_curvature = self.current_route_curvature(state)
+        radar_lead, radar_suppressed = self.gate_curve_radar_lead(
+            tracked_lead=tracked_lead,
+            radar_lead=radar_lead,
+            route_curvature=route_curvature,
+        )
+
+        emergency_obstacle = self.select_emergency_radar_obstacle(
             radar_points,
             state,
             radar_frame_id,
         )
+        emergency_obstacle, emergency_suppressed = self.gate_curve_emergency(
+            emergency_obstacle=emergency_obstacle,
+            route_curvature=route_curvature,
+        )
+        self.emergency_obstacle = emergency_obstacle
+        self.radar_diagnostics["route_curvature_1pm"] = route_curvature
+        self.radar_diagnostics["curve_radar_suppressed"] = radar_suppressed
+        self.radar_diagnostics["curve_emergency_suppressed"] = emergency_suppressed
         return self.choose_safest_lead(tracked_lead, radar_lead)
+
+
+    def current_route_curvature(self, state):
+        """Estimate the strongest near-field route curvature."""
+        path = state.get("reference_path", [])
+        if len(path) < 5:
+            return 0.0
+
+        curvatures = []
+        stop = min(len(path) - 2, 20)
+        for middle_index in range(2, stop):
+            first = path[middle_index - 2]
+            middle = path[middle_index]
+            last = path[middle_index + 2]
+
+            side_a = math.hypot(middle.x - first.x, middle.y - first.y)
+            side_b = math.hypot(last.x - middle.x, last.y - middle.y)
+            chord = math.hypot(last.x - first.x, last.y - first.y)
+            denominator = side_a * side_b * chord
+            if denominator < 1e-6:
+                continue
+
+            twice_area = (middle.x - first.x) * (last.y - first.y) - (
+                middle.y - first.y
+            ) * (last.x - first.x)
+            curvature = abs(2.0 * twice_area / denominator)
+            if curvature < 0.50:
+                curvatures.append(curvature)
+
+        return max(curvatures, default=0.0)
+
+    def gate_curve_radar_lead(
+        self,
+        tracked_lead,
+        radar_lead,
+        route_curvature,
+    ):
+        """Do not treat inside-curb radar returns as normal lead vehicles."""
+        if tracked_lead is not None or radar_lead is None:
+            return radar_lead, False
+        if abs(route_curvature) < 0.035:
+            return radar_lead, False
+
+        distance = max(0.0, float(radar_lead.get("distance_m", math.inf)))
+        relative_speed = float(radar_lead.get("relative_speed_mps", 0.0))
+        closing_speed = max(0.0, -relative_speed)
+        ttc = distance / closing_speed if closing_speed > 0.1 else math.inf
+
+        # In a bend, radar-only tracking is accepted only when collision danger
+        # is already immediate. Normal following requires camera confirmation.
+        if distance <= 4.0 or ttc <= 0.70:
+            return radar_lead, False
+
+        self.last_radar_lead = None
+        self.radar_candidate = None
+        self.radar_candidate_ticks = 0
+        self.radar_missing_ticks = 0
+        return None, True
+
+    @staticmethod
+    def gate_curve_emergency(emergency_obstacle, route_curvature):
+        """Keep AEB active for imminent threats but reject distant curb returns."""
+        if emergency_obstacle is None or abs(route_curvature) < 0.035:
+            return emergency_obstacle, False
+
+        distance = max(
+            0.0,
+            float(emergency_obstacle.get("distance_m", math.inf)),
+        )
+        ttc = float(emergency_obstacle.get("ttc_s", math.inf))
+        if distance <= 3.5 or ttc <= 0.70:
+            return emergency_obstacle, False
+        return None, True
 
     def frame_age(self, current_frame_id, measurement_frame_id):
         if measurement_frame_id is None:
@@ -135,7 +227,7 @@ class LeadVehicleTracker:
         return dict(self.emergency_obstacle)
 
     def filter_ground_returns(self, radar_points):
-        """Fiziksel engel yuksekliginin altindaki zemin donuslerini eler."""
+        # Validate every radar field and reject malformed/ground returns.
         usable_points = []
         ground_rejected = 0
         invalid_rejected = 0
@@ -143,12 +235,20 @@ class LeadVehicleTracker:
         for point in radar_points or []:
             try:
                 depth = float(point["depth_m"])
-                altitude = float(point.get("altitude_deg", 0.0))
+                azimuth = float(point.get("azimuth_deg", math.nan))
+                altitude = float(point.get("altitude_deg", math.nan))
+                relative_velocity = float(
+                    point.get("relative_velocity_mps", math.nan)
+                )
             except (KeyError, TypeError, ValueError):
                 invalid_rejected += 1
                 continue
 
-            if not math.isfinite(depth) or not math.isfinite(altitude) or depth <= 0.0:
+            values = (depth, azimuth, altitude, relative_velocity)
+            if not all(math.isfinite(value) for value in values):
+                invalid_rejected += 1
+                continue
+            if depth <= 0.0:
                 invalid_rejected += 1
                 continue
 
@@ -158,8 +258,17 @@ class LeadVehicleTracker:
                 ground_rejected += 1
                 continue
 
+            # Never forward raw None/NaN values to clustering or median().
             usable_point = dict(point)
-            usable_point["estimated_hit_height_m"] = float(hit_height)
+            usable_point.update(
+                {
+                    "depth_m": depth,
+                    "azimuth_deg": azimuth,
+                    "altitude_deg": altitude,
+                    "relative_velocity_mps": relative_velocity,
+                    "estimated_hit_height_m": float(hit_height),
+                }
+            )
             usable_points.append(usable_point)
 
         self.radar_diagnostics = {
@@ -259,6 +368,8 @@ class LeadVehicleTracker:
                 continue
             if not self.inside_driving_corridor(lateral, state):
                 continue
+            if not self.is_same_route_lane(track.x, track.y, position, state):
+                continue
 
             relative_speed = self.tracked_relative_speed(track, state)
             candidates.append(
@@ -302,9 +413,13 @@ class LeadVehicleTracker:
         )
 
         if raw_candidate is None:
+            # Güncel karede aynı şerit hedefi yoksa eski radar hedefini taşıma.
+            # Böylece virajda komşu şeride geçen hedef iki kare daha fren üretmez.
             self.radar_candidate = None
             self.radar_candidate_ticks = 0
-            return self.hold_last_radar_lead()
+            self.last_radar_lead = None
+            self.radar_missing_ticks = 0
+            return None
 
         if self.same_radar_target(self.radar_candidate, raw_candidate):
             self.radar_candidate_ticks += 1
@@ -363,6 +478,8 @@ class LeadVehicleTracker:
             if not 0.5 < forward <= 80.0:
                 continue
             if not self.inside_driving_corridor(lateral, state):
+                continue
+            if not self.is_same_route_lane(world_x, world_y, position, state):
                 continue
 
             # CARLA radar hizinin isareti bu projedeki kuralla aynidir:
@@ -433,6 +550,13 @@ class LeadVehicleTracker:
             if route_position is None:
                 continue
             if not self.inside_driving_corridor(route_position["lateral_m"], state):
+                continue
+            if not self.is_same_route_lane(
+                world_x,
+                world_y,
+                route_position,
+                state,
+            ):
                 continue
 
             relative_speed = clamp(radar_velocity, -25.0, 20.0)
@@ -643,19 +767,77 @@ class LeadVehicleTracker:
         return selected
 
     def inside_driving_corridor(self, lateral_m, state):
+        """Yalnızca ego şeridinin merkez koridorunu kabul eder."""
         lane_width = max(2.5, float(state.get("lane_width", 3.5)))
         vehicle_half_width = max(
             0.70,
             float(state.get("vehicle_half_width_m", 0.95)),
         )
+        curvature = abs(self.current_route_curvature(state))
+        curve_ratio = clamp(curvature / 0.14, 0.0, 1.0)
 
-        # Sadece ego aracinin kapladigi koridoru ve kucuk bir guvenlik
-        # payini kabul et. Boylece komsu serit, kaldirim ve yol kenari
-        # donusleri normal takip araci olarak secilmez.
-        lane_boundary = 0.5 * lane_width - 0.15
-        vehicle_corridor = vehicle_half_width + 0.40
-        allowed_lateral = max(0.90, min(lane_boundary, vehicle_corridor))
-        return abs(lateral_m) <= allowed_lateral
+        # Komşu şeridin merkezine yaklaşan hiçbir hedef kontrolcüye gitmez.
+        # Virajda koridor biraz daha daraltılır; bariyer ve karşı şerit radar
+        # dönüşleri böylece araç takibi veya acil fren üretmez.
+        base_allowed = min(0.34 * lane_width, vehicle_half_width + 0.20)
+        allowed_lateral = clamp(
+            base_allowed - 0.18 * curve_ratio,
+            0.72,
+            1.15,
+        )
+        return abs(float(lateral_m)) <= allowed_lateral
+
+    def is_same_route_lane(self, world_x, world_y, route_position, state):
+        """Hedefin harita üzerinde referans rotanın tam şeridinde olduğunu doğrular."""
+        if route_position is None:
+            return False
+        if not self.inside_driving_corridor(route_position["lateral_m"], state):
+            return False
+        if self.carla_map is None:
+            return True
+
+        projection_x = route_position.get("projection_x")
+        projection_y = route_position.get("projection_y")
+        if projection_x is None or projection_y is None:
+            return False
+
+        z_value = float(getattr(state.get("location"), "z", 0.0))
+        route_location = carla.Location(
+            x=float(projection_x),
+            y=float(projection_y),
+            z=z_value,
+        )
+        target_location = carla.Location(
+            x=float(world_x),
+            y=float(world_y),
+            z=z_value,
+        )
+        route_waypoint = self.carla_map.get_waypoint(
+            route_location,
+            project_to_road=True,
+            lane_type=carla.LaneType.Driving,
+        )
+        target_waypoint = self.carla_map.get_waypoint(
+            target_location,
+            project_to_road=True,
+            lane_type=carla.LaneType.Driving,
+        )
+        if route_waypoint is None or target_waypoint is None:
+            return False
+        if route_waypoint.road_id != target_waypoint.road_id:
+            return False
+        if route_waypoint.lane_id != target_waypoint.lane_id:
+            return False
+
+        route_yaw = math.radians(route_waypoint.transform.rotation.yaw)
+        target_yaw = math.radians(target_waypoint.transform.rotation.yaw)
+        heading_difference = abs(
+            math.atan2(
+                math.sin(target_yaw - route_yaw),
+                math.cos(target_yaw - route_yaw),
+            )
+        )
+        return heading_difference <= math.radians(30.0)
 
     def route_relative_position(self, world_x, world_y, state):
         reference_path = state.get("reference_path", [])
@@ -671,6 +853,9 @@ class LeadVehicleTracker:
                     "forward_m": obstacle["s_m"] - ego["s_m"],
                     "lateral_m": obstacle["lateral_m"],
                     "path_distance_m": obstacle["distance_to_path_m"],
+                    "projection_x": obstacle["projection_x"],
+                    "projection_y": obstacle["projection_y"],
+                    "path_heading_rad": obstacle["path_heading_rad"],
                 }
 
         return self.world_to_ego(
@@ -691,7 +876,6 @@ class LeadVehicleTracker:
             segment_x = end.x - start.x
             segment_y = end.y - start.y
             length_squared = segment_x**2 + segment_y**2
-
             if length_squared < 1e-8:
                 continue
 
@@ -716,10 +900,11 @@ class LeadVehicleTracker:
                     "distance_to_path_m": math.sqrt(distance_squared),
                     "s_m": cumulative_s + fraction * segment_length,
                     "lateral_m": lateral,
+                    "projection_x": projection_x,
+                    "projection_y": projection_y,
+                    "path_heading_rad": math.atan2(segment_y, segment_x),
                 }
-
             cumulative_s += segment_length
-
         return best
 
     def world_to_ego(self, world_x, world_y, ego_x, ego_y, ego_yaw):
@@ -731,4 +916,7 @@ class LeadVehicleTracker:
             "forward_m": forward,
             "lateral_m": lateral,
             "path_distance_m": abs(lateral),
+            "projection_x": world_x,
+            "projection_y": world_y,
+            "path_heading_rad": ego_yaw,
         }

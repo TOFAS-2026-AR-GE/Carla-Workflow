@@ -1,4 +1,6 @@
-"""YOLO based vehicle detection."""
+"""Single-pass YOLO road-object detection for vehicles and traffic lights."""
+
+from __future__ import annotations
 
 import numpy as np
 from ultralytics import YOLO
@@ -7,32 +9,15 @@ from carla_app.perception.device import move_model_to_cpu, resolve_device
 
 
 class VehicleDetector:
-    """Detect road vehicles and return a small, backend-independent result."""
+    """Run one YOLO inference and split vehicles from traffic-light states."""
 
     VEHICLE_NAMES = {
-        "vehicle",
-        "car",
-        "automobile",
-        "sedan",
-        "suv",
-        "jeep",
-        "van",
-        "minivan",
-        "pickup",
-        "truck",
-        "lorry",
-        "bus",
-        "coach",
-        "motorcycle",
-        "motorbike",
-        "motobike",  # Name used by the bundled CARLA model.
-        "bicycle",
-        "bike",
-        "tram",
-        "ambulance",
-        "police",
-        "taxi",
+        "vehicle", "car", "automobile", "sedan", "suv", "jeep", "van",
+        "minivan", "pickup", "truck", "lorry", "bus", "coach",
+        "motorcycle", "motorbike", "motobike", "bicycle", "bike", "tram",
+        "ambulance", "police", "taxi",
     }
+    TRAFFIC_LIGHT_TOKENS = {"traffic light", "traffic signal", "signal light"}
 
     def __init__(self, model_path, confidence, image_size, device):
         self.model = YOLO(str(model_path), task="detect")
@@ -47,6 +32,12 @@ class VehicleDetector:
 
         self.model_names = self._normalize_names(self.model.names)
         self.vehicle_class_ids = self._find_vehicle_class_ids(self.model_names)
+        self.traffic_light_class_ids = self._find_traffic_light_class_ids(
+            self.model_names
+        )
+        self.selected_class_ids = sorted(
+            set(self.vehicle_class_ids) | set(self.traffic_light_class_ids)
+        )
 
         if not self.vehicle_class_ids:
             raise ValueError(
@@ -55,33 +46,40 @@ class VehicleDetector:
             )
 
         selected_names = {
-            class_id: self.model_names[class_id] for class_id in self.vehicle_class_ids
+            class_id: self.model_names[class_id]
+            for class_id in self.selected_class_ids
         }
         print(
-            f"[OK] Vehicle modeli: device={self.device}, "
+            f"[OK] Road-object modeli: device={self.device}, "
             f"classes={selected_names}, conf={self.confidence:.2f}"
         )
+        if not self.traffic_light_class_ids:
+            print(
+                "[WARN] YOLO modelinde traffic_light_red/yellow/green "
+                "sinifi bulunamadi; trafik isigi kontrolu vision olmadan calismaz."
+            )
 
     def detect(self, rgb_image):
-        """Return vehicle detections for one RGB camera frame."""
-        self._validate_image(rgb_image)
+        """Backward-compatible vehicle-only result."""
+        return self.detect_road_objects(rgb_image)["vehicles"]
 
-        # CARLA processor returns RGB; Ultralytics expects an OpenCV-style BGR
-        # ndarray and converts it to RGB internally.
+    def detect_road_objects(self, rgb_image):
+        """Return vehicles and traffic lights from the same inference."""
+        self._validate_image(rgb_image)
         bgr_image = np.ascontiguousarray(rgb_image[:, :, :3][:, :, ::-1])
         results = self._predict(bgr_image)
+        output = {"vehicles": [], "traffic_lights": []}
 
         if not results or results[0].boxes is None:
-            return []
+            return output
 
         result = results[0]
         result_names = self._normalize_names(result.names)
         image_height, image_width = bgr_image.shape[:2]
-        detections = []
 
         for box in result.boxes:
             class_id = int(box.cls[0].item())
-            if class_id not in self.vehicle_class_ids:
+            if class_id not in self.selected_class_ids:
                 continue
 
             coordinates = box.xyxy[0].detach().cpu().tolist()
@@ -90,23 +88,27 @@ class VehicleDetector:
             x2 = max(0, min(x2, image_width - 1))
             y1 = max(0, min(y1, image_height - 1))
             y2 = max(0, min(y2, image_height - 1))
-
             if x2 - x1 < 3 or y2 - y1 < 3:
                 continue
 
-            detections.append(
-                {
-                    "type": "vehicle",
-                    "class_id": class_id,
-                    "class_name": result_names.get(
-                        class_id, self.model_names[class_id]
-                    ),
-                    "confidence": float(box.conf[0].item()),
-                    "bbox": (x1, y1, x2, y2),
-                }
+            class_name = result_names.get(
+                class_id,
+                self.model_names.get(class_id, str(class_id)),
             )
+            detection = {
+                "class_id": class_id,
+                "class_name": class_name,
+                "confidence": float(box.conf[0].item()),
+                "bbox": (x1, y1, x2, y2),
+            }
+            if class_id in self.vehicle_class_ids:
+                detection["type"] = "vehicle"
+                output["vehicles"].append(detection)
+            elif class_id in self.traffic_light_class_ids:
+                detection["type"] = "traffic_light"
+                output["traffic_lights"].append(detection)
 
-        return detections
+        return output
 
     def _predict(self, bgr_image):
         arguments = {
@@ -115,19 +117,21 @@ class VehicleDetector:
             "iou": 0.45,
             "imgsz": self.image_size,
             "device": self.device,
-            "classes": self.vehicle_class_ids,
+            "classes": getattr(
+                self,
+                "selected_class_ids",
+                getattr(self, "vehicle_class_ids", None),
+            ),
             "verbose": False,
-            "max_det": 100,
+            "max_det": 120,
         }
-
         try:
             return self.model.predict(**arguments)
         except (RuntimeError, ValueError) as error:
             if self.device == "cpu":
                 raise
-
             print(
-                f"[WARN] Vehicle GPU inference basarisiz ({error}); "
+                f"[WARN] Road-object GPU inference basarisiz ({error}); "
                 "CPU ile yeniden deneniyor."
             )
             self.device = "cpu"
@@ -150,24 +154,41 @@ class VehicleDetector:
     @classmethod
     def _find_vehicle_class_ids(cls, names):
         selected = []
-
         for class_id, class_name in names.items():
-            normalized = (
-                str(class_name).strip().lower().replace("-", " ").replace("_", " ")
-            )
+            normalized = cls._normalized_words(class_name)
             words = set(normalized.split())
-
             if normalized in cls.VEHICLE_NAMES or words & cls.VEHICLE_NAMES:
                 selected.append(int(class_id))
-
         return sorted(set(selected))
+
+    @classmethod
+    def _find_traffic_light_class_ids(cls, names):
+        selected = []
+        for class_id, class_name in names.items():
+            normalized = cls._normalized_words(class_name)
+            contains_object = any(token in normalized for token in cls.TRAFFIC_LIGHT_TOKENS)
+            contains_state = any(
+                state in normalized
+                for state in ("red", "green", "yellow", "orange", "amber")
+            )
+            if contains_object and contains_state:
+                selected.append(int(class_id))
+        return sorted(set(selected))
+
+    @staticmethod
+    def _normalized_words(class_name):
+        return (
+            str(class_name)
+            .strip()
+            .lower()
+            .replace("-", " ")
+            .replace("_", " ")
+        )
 
     @staticmethod
     def _normalize_names(names):
         if isinstance(names, dict):
-            return {
-                int(class_id): str(class_name) for class_id, class_name in names.items()
-            }
+            return {int(class_id): str(name) for class_id, name in names.items()}
         if isinstance(names, (list, tuple)):
-            return {index: str(class_name) for index, class_name in enumerate(names)}
+            return {index: str(name) for index, name in enumerate(names)}
         return {}

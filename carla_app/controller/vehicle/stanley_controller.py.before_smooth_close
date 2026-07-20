@@ -1,0 +1,395 @@
+"""Adaptive Pure Pursuit with Stanley lane-centering correction."""
+
+from __future__ import annotations
+
+import math
+
+
+def clamp(value, minimum, maximum):
+    return max(minimum, min(value, maximum))
+
+
+def normalize_angle(angle):
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+class StanleyController:
+    """Hybrid geometric controller kept under the old class name for compatibility.
+
+    Pure Pursuit provides early curve anticipation. A smaller Stanley term keeps
+    the vehicle near the lane centre and corrects residual lateral error.
+    """
+
+    def __init__(self, dt=0.05):
+        self.dt = max(1e-3, float(dt))
+        self.wheelbase_m = 2.87
+        self.maximum_wheel_angle_rad = math.radians(35.0)
+
+        self.minimum_lookahead_m = 2.2
+        self.maximum_lookahead_m = 8.0
+        self.lookahead_base_m = 2.2
+        self.lookahead_speed_gain_s = 0.20
+        self.curvature_lookahead_gain = 3.5
+
+        self.cross_track_gain = 0.90
+        self.cross_track_weight = 0.50
+        self.softening_speed_mps = 2.0
+        self.maximum_cross_track_term_rad = math.radians(16.0)
+
+        self.error_filter_time_s = 0.08
+        self.filtered_cross_track_error_m = 0.0
+        self.filtered_heading_error_rad = 0.0
+        self.filter_initialized = False
+
+        self.previous_steer = 0.0
+        self.last_info = self.empty_info()
+
+    def run_step(self, state):
+        path = state.get("reference_path", [])
+        speed = max(0.0, float(state.get("speed_mps", 0.0)))
+        if len(path) < 2:
+            steer = self.limit_steering_change(
+                desired_steer=0.0,
+                speed_mps=speed,
+                curvature=0.0,
+                heading_error=0.0,
+                cross_track_error=0.0,
+            )
+            self.last_info = self.empty_info()
+            return steer
+
+        location = state["location"]
+        yaw = math.radians(float(state["yaw"]))
+
+        # Pure Pursuit is derived around the rear axle. CARLA's vehicle location
+        # is close to the body centre, so half a wheelbase is a useful estimate.
+        rear_x = location.x - 0.5 * self.wheelbase_m * math.cos(yaw)
+        rear_y = location.y - 0.5 * self.wheelbase_m * math.sin(yaw)
+
+        projection = self.find_nearest_path_projection(rear_x, rear_y, path)
+        raw_cross_track_error = projection["cross_track_error_m"]
+        raw_heading_error = normalize_angle(projection["path_heading_rad"] - yaw)
+        self.filter_errors(raw_cross_track_error, raw_heading_error)
+
+        curvature = self.calculate_preview_curvature(
+            path,
+            projection["segment_index"],
+        )
+        local_curvature = self.calculate_local_curvature(
+            path,
+            projection["segment_index"],
+        )
+        lookahead = self.calculate_lookahead(speed, local_curvature)
+        target = self.find_lookahead_target(path, projection, lookahead)
+
+        target_heading = math.atan2(
+            target["y"] - rear_y,
+            target["x"] - rear_x,
+        )
+        alpha = normalize_angle(target_heading - yaw)
+
+        pure_pursuit_angle = math.atan2(
+            2.0 * self.wheelbase_m * math.sin(alpha),
+            max(lookahead, 0.5),
+        )
+
+        correction_error = self.calculate_lane_edge_error(
+            self.filtered_cross_track_error_m,
+            state,
+        )
+        cross_track_term = -math.atan2(
+            self.cross_track_gain * correction_error,
+            speed + self.softening_speed_mps,
+        )
+        cross_track_term = clamp(
+            cross_track_term,
+            -self.maximum_cross_track_term_rad,
+            self.maximum_cross_track_term_rad,
+        )
+
+        curvature_feedforward = math.atan(
+            self.wheelbase_m * local_curvature
+        )
+        desired_wheel_angle = (
+            pure_pursuit_angle
+            + 0.35 * curvature_feedforward
+            + self.cross_track_weight * cross_track_term
+        )
+        steer_limit = self.calculate_steering_limit(speed)
+        desired_steer = clamp(
+            desired_wheel_angle / self.maximum_wheel_angle_rad,
+            -steer_limit,
+            steer_limit,
+        )
+        steer = self.limit_steering_change(
+            desired_steer=desired_steer,
+            speed_mps=speed,
+            curvature=curvature,
+            heading_error=self.filtered_heading_error_rad,
+            cross_track_error=self.filtered_cross_track_error_m,
+        )
+
+        self.last_info = {
+            "cross_track_error_m": float(self.filtered_cross_track_error_m),
+            "heading_error_rad": float(self.filtered_heading_error_rad),
+            "raw_cross_track_error_m": float(raw_cross_track_error),
+            "raw_heading_error_rad": float(raw_heading_error),
+            "cross_track_term_rad": float(cross_track_term),
+            "curve_feedforward_rad": float(curvature_feedforward),
+            "pure_pursuit_angle_rad": float(pure_pursuit_angle),
+            "alpha_rad": float(alpha),
+            "lookahead_m": float(lookahead),
+            "curvature_1pm": float(curvature),
+            "local_curvature_1pm": float(local_curvature),
+            "target_index": int(target["segment_index"]),
+            "target_x": float(target["x"]),
+            "target_y": float(target["y"]),
+            "raw_steer": float(desired_steer),
+            "steer_limit": float(steer_limit),
+        }
+        return steer
+
+    def calculate_lookahead(self, speed_mps, curvature):
+        lookahead = clamp(
+            self.lookahead_base_m + self.lookahead_speed_gain_s * speed_mps,
+            3.0,
+            self.maximum_lookahead_m,
+        )
+        curve_scale = clamp(
+            1.0 / (1.0 + self.curvature_lookahead_gain * abs(curvature)),
+            0.58,
+            1.0,
+        )
+        return clamp(
+            lookahead * curve_scale,
+            self.minimum_lookahead_m,
+            self.maximum_lookahead_m,
+        )
+
+    def calculate_lane_edge_error(self, cross_track_error, state):
+        lane_width = max(2.5, float(state.get("lane_width", 3.5)))
+        vehicle_half_width = max(
+            0.70,
+            float(state.get("vehicle_half_width_m", 0.95)),
+        )
+        usable_center_offset = max(
+            0.35,
+            0.5 * lane_width - vehicle_half_width - 0.20,
+        )
+
+        edge_start = 0.60 * usable_center_offset
+        extra_error = max(0.0, abs(cross_track_error) - edge_start)
+        if cross_track_error < 0.0:
+            extra_error = -extra_error
+        return cross_track_error + 1.25 * extra_error
+
+    def filter_errors(self, cross_track_error, heading_error):
+        if not self.filter_initialized:
+            self.filtered_cross_track_error_m = cross_track_error
+            self.filtered_heading_error_rad = heading_error
+            self.filter_initialized = True
+            return
+
+        alpha = clamp(
+            self.dt / (self.error_filter_time_s + self.dt),
+            0.20,
+            1.0,
+        )
+        self.filtered_cross_track_error_m += alpha * (
+            cross_track_error - self.filtered_cross_track_error_m
+        )
+        heading_change = normalize_angle(
+            heading_error - self.filtered_heading_error_rad
+        )
+        self.filtered_heading_error_rad = normalize_angle(
+            self.filtered_heading_error_rad + alpha * heading_change
+        )
+
+    def limit_steering_change(
+        self,
+        desired_steer,
+        speed_mps,
+        curvature=0.0,
+        heading_error=0.0,
+        cross_track_error=0.0,
+    ):
+        urgency = max(
+            abs(curvature) / 0.04,
+            abs(heading_error) / math.radians(15.0),
+            abs(cross_track_error) / 0.60,
+        )
+        steer_rate_per_second = clamp(
+            1.0 + 0.45 * urgency - 0.025 * speed_mps,
+            0.75,
+            2.40,
+        )
+        maximum_change = steer_rate_per_second * self.dt
+        change = clamp(
+            desired_steer - self.previous_steer,
+            -maximum_change,
+            maximum_change,
+        )
+        self.previous_steer = clamp(self.previous_steer + change, -1.0, 1.0)
+        return self.previous_steer
+
+    def calculate_steering_limit(self, speed_mps):
+        # Tight urban curves need substantially more authority below 20 km/h.
+        return clamp(0.95 - 0.022 * speed_mps, 0.58, 0.95)
+
+    def find_nearest_path_projection(self, point_x, point_y, path):
+        nearest = None
+        cumulative_s = 0.0
+
+        for index, (start, end) in enumerate(zip(path, path[1:])):
+            segment_x = end.x - start.x
+            segment_y = end.y - start.y
+            length_squared = segment_x**2 + segment_y**2
+            if length_squared < 1e-8:
+                continue
+
+            segment_length = math.sqrt(length_squared)
+            offset_x = point_x - start.x
+            offset_y = point_y - start.y
+            fraction = clamp(
+                (offset_x * segment_x + offset_y * segment_y) / length_squared,
+                0.0,
+                1.0,
+            )
+            projected_x = start.x + fraction * segment_x
+            projected_y = start.y + fraction * segment_y
+            error_x = point_x - projected_x
+            error_y = point_y - projected_y
+            distance_squared = error_x**2 + error_y**2
+
+            if nearest is None or distance_squared < nearest["distance_squared"]:
+                signed_error = (
+                    -segment_y * error_x + segment_x * error_y
+                ) / segment_length
+                nearest = {
+                    "distance_squared": distance_squared,
+                    "cross_track_error_m": signed_error,
+                    "path_heading_rad": math.atan2(segment_y, segment_x),
+                    "segment_index": index,
+                    "fraction": fraction,
+                    "projection_x": projected_x,
+                    "projection_y": projected_y,
+                    "s_m": cumulative_s + fraction * segment_length,
+                }
+
+            cumulative_s += segment_length
+
+        if nearest is not None:
+            return nearest
+
+        start, end = path[:2]
+        return {
+            "distance_squared": 0.0,
+            "cross_track_error_m": 0.0,
+            "path_heading_rad": math.atan2(end.y - start.y, end.x - start.x),
+            "segment_index": 0,
+            "fraction": 0.0,
+            "projection_x": start.x,
+            "projection_y": start.y,
+            "s_m": 0.0,
+        }
+
+    def find_lookahead_target(self, path, projection, lookahead_m):
+        segment_index = int(projection["segment_index"])
+        current_x = float(projection["projection_x"])
+        current_y = float(projection["projection_y"])
+        remaining = float(lookahead_m)
+
+        for index in range(segment_index, len(path) - 1):
+            end = path[index + 1]
+            segment_x = end.x - current_x
+            segment_y = end.y - current_y
+            segment_length = math.hypot(segment_x, segment_y)
+
+            if segment_length >= remaining and segment_length > 1e-8:
+                fraction = remaining / segment_length
+                return {
+                    "x": current_x + fraction * segment_x,
+                    "y": current_y + fraction * segment_y,
+                    "segment_index": index,
+                }
+
+            remaining -= segment_length
+            current_x = end.x
+            current_y = end.y
+
+        last = path[-1]
+        return {
+            "x": last.x,
+            "y": last.y,
+            "segment_index": max(0, len(path) - 2),
+        }
+
+    def calculate_local_curvature(self, path, segment_index):
+        if len(path) < 5:
+            return 0.0
+        middle_index = int(clamp(segment_index + 2, 2, len(path) - 3))
+        return self.three_point_curvature(
+            path[middle_index - 2],
+            path[middle_index],
+            path[middle_index + 2],
+        )
+
+    def calculate_preview_curvature(self, path, segment_index):
+        if len(path) < 5:
+            return 0.0
+
+        start = max(2, int(segment_index))
+        stop = min(len(path) - 2, start + 18)
+        curvatures = []
+        for middle_index in range(start, stop):
+            first = path[middle_index - 2]
+            middle = path[middle_index]
+            last = path[min(len(path) - 1, middle_index + 2)]
+            curvature = self.three_point_curvature(first, middle, last)
+            if abs(curvature) < 0.50:
+                curvatures.append(curvature)
+
+        if not curvatures:
+            return 0.0
+        return max(curvatures, key=abs)
+
+    @staticmethod
+    def three_point_curvature(first, middle, last):
+        side_a = math.hypot(middle.x - first.x, middle.y - first.y)
+        side_b = math.hypot(last.x - middle.x, last.y - middle.y)
+        chord = math.hypot(last.x - first.x, last.y - first.y)
+        denominator = side_a * side_b * chord
+        if denominator < 1e-6:
+            return 0.0
+
+        twice_area = (middle.x - first.x) * (last.y - first.y) - (
+            middle.y - first.y
+        ) * (last.x - first.x)
+        return 2.0 * twice_area / denominator
+
+    def reset(self):
+        self.previous_steer = 0.0
+        self.filtered_cross_track_error_m = 0.0
+        self.filtered_heading_error_rad = 0.0
+        self.filter_initialized = False
+        self.last_info = self.empty_info()
+
+    def empty_info(self):
+        return {
+            "cross_track_error_m": 0.0,
+            "heading_error_rad": 0.0,
+            "raw_cross_track_error_m": 0.0,
+            "raw_heading_error_rad": 0.0,
+            "cross_track_term_rad": 0.0,
+            "curve_feedforward_rad": 0.0,
+            "pure_pursuit_angle_rad": 0.0,
+            "alpha_rad": 0.0,
+            "lookahead_m": 0.0,
+            "curvature_1pm": 0.0,
+            "local_curvature_1pm": 0.0,
+            "target_index": 0,
+            "target_x": 0.0,
+            "target_y": 0.0,
+            "raw_steer": 0.0,
+            "steer_limit": 0.0,
+        }

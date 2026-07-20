@@ -13,9 +13,6 @@ class Scenario:
     npc_count: int
     safe_distance_m: float
     speed_difference_percent: float
-    traffic_light_red_time_s: float
-    traffic_light_yellow_time_s: float
-    traffic_light_green_time_s: float
 
 
 def load_scenario(path: Path, default_delta: float) -> Scenario:
@@ -36,7 +33,4 @@ def load_scenario(path: Path, default_delta: float) -> Scenario:
         npc_count=int(traffic.get("npc_count", 0)),
         safe_distance_m=float(traffic.get("safe_distance_m", 3.0)),
         speed_difference_percent=float(traffic.get("speed_difference_percent", 0.0)),
-        traffic_light_red_time_s=max(2.0, float(traffic.get("traffic_light_red_time_s", 4.0))),
-        traffic_light_yellow_time_s=max(1.0, float(traffic.get("traffic_light_yellow_time_s", 1.5))),
-        traffic_light_green_time_s=max(3.0, float(traffic.get("traffic_light_green_time_s", 8.0))),
     )

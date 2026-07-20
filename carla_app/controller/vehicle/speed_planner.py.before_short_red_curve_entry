@@ -24,11 +24,9 @@ class CurvatureSpeedPlanner:
 
         # Urban passenger-car comfort targets. This is below the tire-friction
         # limit and deliberately slows down tight Town02/Town03 corners.
-        # Viraja ralli pilotu gibi taşımamak için konfor sınırı düşük tutulur.
-        # Uzun önizleme sayesinde hedef hız virajın içinde değil, girişinde düşer.
-        self.maximum_lateral_acceleration_mps2 = 1.15
-        self.maximum_target_acceleration_mps2 = 1.10
-        self.maximum_target_deceleration_mps2 = 1.90
+        self.maximum_lateral_acceleration_mps2 = 1.60
+        self.maximum_target_acceleration_mps2 = 1.25
+        self.maximum_target_deceleration_mps2 = 2.20
 
         # Backward-compatible names used by the original test suite.
         self.maximum_speed_increase_mps2 = self.maximum_target_acceleration_mps2
@@ -38,7 +36,7 @@ class CurvatureSpeedPlanner:
         self.recovery_evidence_ticks = 0
         self.previous_target_speed_mps: float | None = None
         self.filtered_curvature_1pm = 0.0
-        self.curvature_filter_time_s = 0.22
+        self.curvature_filter_time_s = 0.30
 
     def run_step(
         self,
@@ -118,22 +116,13 @@ class CurvatureSpeedPlanner:
         }
 
     def filter_curvature(self, raw_curvature: float) -> float:
-        raw_curvature = abs(float(raw_curvature))
-
-        # İlk görülen belirgin virajı sıfırdan yavaşça doldurmak, fren kararını
-        # birkaç çevrim geciktiriyordu. İlk değer doğrudan alınır; sonraki
-        # karelerde filtre gürültüyü yumuşatır.
-        if self.filtered_curvature_1pm <= 1e-6 and raw_curvature > 1e-4:
-            self.filtered_curvature_1pm = raw_curvature
-            return self.filtered_curvature_1pm
-
         alpha = clamp(
             self.dt / (self.curvature_filter_time_s + self.dt),
             0.08,
             1.0,
         )
         self.filtered_curvature_1pm += alpha * (
-            raw_curvature - self.filtered_curvature_1pm
+            abs(float(raw_curvature)) - self.filtered_curvature_1pm
         )
         return self.filtered_curvature_1pm
 
@@ -216,13 +205,7 @@ class CurvatureSpeedPlanner:
             return 0.0
 
         start_index = self.nearest_path_index(path, location)
-        # 60 km/h civarında yaklaşık 72 metre ileri bakılır. Böylece
-        # fren hedefi virajın başlangıcından önce hazırlanır.
-        preview_distance_m = clamp(
-            float(speed_mps) * 3.6 + 12.0,
-            30.0,
-            78.0,
-        )
+        preview_distance_m = clamp(float(speed_mps) * 2.8 + 8.0, 24.0, 65.0)
 
         preview = [path[start_index]]
         travelled_m = 0.0
@@ -249,9 +232,7 @@ class CurvatureSpeedPlanner:
             return 0.0
 
         curvatures.sort()
-        # Önizlemedeki keskin bölümü median ile gizleme. Tek yol gürültüsünü
-        # de doğrudan maksimum kadar büyütmemek için yüzde 90 kullanılır.
-        index = int(round(0.90 * (len(curvatures) - 1)))
+        index = int(round(0.80 * (len(curvatures) - 1)))
         return curvatures[index]
 
     @staticmethod

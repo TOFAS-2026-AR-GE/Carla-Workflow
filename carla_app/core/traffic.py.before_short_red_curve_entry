@@ -10,8 +10,6 @@ class Traffic:
         self.manager = None
 
     def spawn(self):
-        self.configure_traffic_lights()
-
         if self.scenario.npc_count <= 0:
             print("[INFO] Trafik kapali.")
             return
@@ -41,34 +39,6 @@ class Traffic:
             self.actors.append(actor)
 
         print(f"[OK] {len(self.actors)} trafik araci olusturuldu.")
-
-    def configure_traffic_lights(self):
-        """Haritadaki trafik ışıklarını kısa fakat okunabilir çevrime alır."""
-        try:
-            traffic_lights = list(
-                self.world.get_actors().filter("traffic.traffic_light*")
-            )
-        except (AttributeError, RuntimeError):
-            traffic_lights = []
-
-        configured = 0
-        for light in traffic_lights:
-            try:
-                light.set_red_time(self.scenario.traffic_light_red_time_s)
-                light.set_yellow_time(self.scenario.traffic_light_yellow_time_s)
-                light.set_green_time(self.scenario.traffic_light_green_time_s)
-                configured += 1
-            except (AttributeError, RuntimeError):
-                continue
-
-        if configured:
-            print(
-                "[OK] Trafik isigi cevrimi: "
-                f"red={self.scenario.traffic_light_red_time_s:.1f}s "
-                f"yellow={self.scenario.traffic_light_yellow_time_s:.1f}s "
-                f"green={self.scenario.traffic_light_green_time_s:.1f}s "
-                f"lights={configured}"
-            )
 
     def stop(self):
         for actor in self.actors:

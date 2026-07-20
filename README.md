@@ -422,6 +422,10 @@ Uygulama belirlenen aralıkta bir `[STATUS]` satırı yazar:
 | `pedestrian` | `MONITOR`, `SLOW`, `PREPARE_STOP` veya `EMERGENCY` yaya riski |
 | `lidar_age` | Kontrolde kullanılan son LiDAR karesinin yaşı |
 
+Yaya algısının sürüş kararına girebilmesi için model güveni en az
+`0.90` olmalıdır. Daha düşük güvenli `person` sonuçları yaya yavaşlatma veya
+durma kararı oluşturmaz.
+
 ## Veri kaydı
 
 Tam sensör paketi gerektiğinde `.env` içinde:

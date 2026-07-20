@@ -37,7 +37,9 @@ class DrivingParameters:
         self.minimum_detection_confidence = 0.25
         self.traffic_light_confidence = 0.35
         self.speed_sign_confidence = 0.45
-        self.pedestrian_confidence = 0.35
+        # Yaya yanlış pozitifleri aracı gereksiz yere tamamen durdurabildiği
+        # için yaya kararına yalnızca çok yüksek güvenli sonuçlar girer.
+        self.pedestrian_confidence = 0.90
         self.traffic_light_confirmation_frames = 3
         self.green_light_confirmation_frames = 3
         # Araç durunca üstte kalan lamba kameradan çıkabilir. CARLA'nın

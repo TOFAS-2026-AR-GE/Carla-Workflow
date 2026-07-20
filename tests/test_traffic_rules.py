@@ -226,6 +226,31 @@ class RoadContextTests(unittest.TestCase):
         context = self.update(1, [person])
         self.assertEqual(context["pedestrian_risk"], "MONITOR")
 
+    def test_pedestrian_below_ninety_percent_is_ignored(self):
+        person = raw_object(
+            "person",
+            (370, 250, 430, 580),
+            confidence=0.89,
+            distance_m=4.0,
+        )
+
+        context = self.update(1, [person])
+
+        self.assertEqual(context["pedestrian_risk"], "NONE")
+        self.assertIsNone(context["pedestrian"])
+
+    def test_pedestrian_at_ninety_percent_is_accepted(self):
+        person = raw_object(
+            "person",
+            (370, 250, 430, 580),
+            confidence=0.90,
+            distance_m=4.0,
+        )
+
+        context = self.update(1, [person])
+
+        self.assertEqual(context["pedestrian_risk"], "EMERGENCY")
+
     def test_lane_pedestrian_requests_stop(self):
         person = raw_object("person", (370, 250, 430, 580), distance_m=9.0)
         context = self.update(1, [person])

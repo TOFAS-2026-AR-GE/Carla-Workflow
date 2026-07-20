@@ -18,12 +18,16 @@ if "cv2" not in sys.modules:
         cv2.BORDER_CONSTANT = 0
         cv2.WINDOW_NORMAL = 0
         cv2.WND_PROP_VISIBLE = 0
+        cv2.EVENT_LBUTTONUP = 4
         cv2.line = lambda *arguments, **keywords: None
         cv2.arrowedLine = lambda *arguments, **keywords: None
         cv2.circle = lambda *arguments, **keywords: None
         cv2.rectangle = lambda *arguments, **keywords: None
+        cv2.fillPoly = lambda *arguments, **keywords: None
+        cv2.polylines = lambda *arguments, **keywords: None
         cv2.putText = lambda *arguments, **keywords: None
         cv2.namedWindow = lambda *arguments, **keywords: None
+        cv2.setMouseCallback = lambda *arguments, **keywords: None
         cv2.imshow = lambda *arguments, **keywords: None
         cv2.waitKey = lambda *arguments, **keywords: -1
         cv2.getWindowProperty = lambda *arguments, **keywords: 1
@@ -551,12 +555,71 @@ class BevRendererTests(unittest.TestCase):
 
     def test_viewer_combines_equal_camera_and_bev_panels(self):
         viewer = PerceptionViewer.__new__(PerceptionViewer)
+        viewer.bev_mode = "driving"
         camera = np.zeros((100, 160, 3), dtype=np.uint8)
         bev = np.zeros((50, 80, 3), dtype=np.uint8)
 
         combined = viewer.combine_panels(camera, bev)
 
         self.assertEqual(combined.shape, (100, 323, 3))
+
+    def test_bev_switch_selects_debug_and_driving_modes(self):
+        viewer = PerceptionViewer.__new__(PerceptionViewer)
+        viewer.bev_mode = "driving"
+        camera = np.zeros((100, 200, 3), dtype=np.uint8)
+        bev = np.zeros((100, 200, 3), dtype=np.uint8)
+        viewer.combine_panels(camera, bev)
+        x1, y1, x2, y2 = viewer.bev_button_rect
+
+        viewer._mouse_callback(
+            cv2.EVENT_LBUTTONUP,
+            x2 - 3,
+            (y1 + y2) // 2,
+            0,
+            None,
+        )
+        self.assertEqual(viewer.bev_mode, "debug")
+
+        viewer._mouse_callback(
+            cv2.EVENT_LBUTTONUP,
+            x1 + 3,
+            (y1 + y2) // 2,
+            0,
+            None,
+        )
+        self.assertEqual(viewer.bev_mode, "driving")
+
+    def test_renderer_keeps_debug_and_driving_views(self):
+        renderer = BevRenderer(width=320, height=240)
+        occupancy_shape = (80, 60)
+        scene = {
+            "ipm_image": np.full((240, 320, 3), 40, dtype=np.uint8),
+            "occupancy": {
+                "occupied": np.zeros(occupancy_shape, dtype=bool),
+                "free": np.zeros(occupancy_shape, dtype=bool),
+            },
+            "route_points": [(0.0, 0.0), (15.0, 0.0), (30.0, 3.0)],
+            "lidar_points": np.empty((0, 3), dtype=np.float32),
+            "radar_points": [],
+            "tracks": [],
+            "vehicle_geometry": make_layout().vehicle_geometry,
+            "active_sensor_count": 15,
+            "total_sensor_count": 15,
+            "ipm_cameras": ["camera"] * 7,
+            "lane_width_m": 3.5,
+            "ego_speed_mps": 10.0,
+            "driving_state": {
+                "target_speed_mps": 12.0,
+                "mode": "CRUISE",
+            },
+        }
+
+        driving = renderer.render(scene, current_frame_id=20, display_mode="driving")
+        debug = renderer.render(scene, current_frame_id=20, display_mode="debug")
+
+        self.assertEqual(driving.shape, (240, 320, 3))
+        self.assertEqual(debug.shape, (240, 320, 3))
+        self.assertFalse(np.array_equal(driving, debug))
 
     def test_metric_origin_is_near_lower_center(self):
         renderer = BevRenderer(width=800, height=600)

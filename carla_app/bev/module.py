@@ -69,6 +69,8 @@ class BevModule:
         perception_result,
         vehicle_state,
         current_frame_id=None,
+        driving_state=None,
+        display_mode="driving",
     ):
         """Tek BEV karesini senkron üretir; test ve bağımsız kullanım içindir."""
         current_frame_id = 0 if current_frame_id is None else int(current_frame_id)
@@ -80,6 +82,7 @@ class BevModule:
             vehicle_state,
             current_frame_id,
         )
+        scene["driving_state"] = dict(driving_state or {})
         camera_results = self.camera_results_for_ipm(
             sensor_snapshot,
             perception_result,
@@ -121,7 +124,11 @@ class BevModule:
         scene["fused_objects"] = fused_objects
         scene["tracks"] = tracks
         scene["occupancy"] = occupancy
-        image = self.renderer.render(scene, current_frame_id)
+        image = self.renderer.render(
+            scene,
+            current_frame_id,
+            display_mode=display_mode,
+        )
         with self.lock:
             self.latest_scene = scene
         return image
@@ -132,6 +139,8 @@ class BevModule:
         perception_result,
         vehicle_state,
         current_frame_id,
+        driving_state=None,
+        display_mode="driving",
     ):
         """En yeni BEV işini ana kontrol döngüsünü bekletmeden kuyruğa koyar."""
         self.motion.remember(current_frame_id, vehicle_state)
@@ -143,6 +152,8 @@ class BevModule:
                 perception_result,
                 vehicle_state,
                 current_frame_id,
+                driving_state,
+                display_mode,
             )
             with self.lock:
                 self.latest_image = image
@@ -153,6 +164,8 @@ class BevModule:
             "perception_result": perception_result,
             "vehicle_state": vehicle_state,
             "current_frame_id": int(current_frame_id),
+            "driving_state": driving_state,
+            "display_mode": str(display_mode),
         }
         try:
             self.work_queue.put_nowait(item)
@@ -192,6 +205,8 @@ class BevModule:
                     item["perception_result"],
                     item["vehicle_state"],
                     item["current_frame_id"],
+                    item.get("driving_state"),
+                    item.get("display_mode", "driving"),
                 )
                 with self.lock:
                     self.latest_image = image

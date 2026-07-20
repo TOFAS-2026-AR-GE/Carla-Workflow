@@ -50,6 +50,12 @@ class BevProjector:
                 current_frame_id,
             ),
             "route_points": self.project_route(vehicle_state),
+            "ego_speed_mps": float(
+                (vehicle_state or {}).get("speed_mps", 0.0) or 0.0
+            ),
+            "lane_width_m": float(
+                (vehicle_state or {}).get("lane_width", 3.5) or 3.5
+            ),
             "active_sensor_count": len(sensor_snapshot),
             "total_sensor_count": len(self.layout.all_specs),
             "vehicle_geometry": dict(self.layout.vehicle_geometry),

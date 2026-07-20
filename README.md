@@ -195,7 +195,19 @@ SENSOR_MODE=bev
 ```
 
 BEV açıkken OpenCV penceresinin sol yarısında ön kamera ve bbox'lar, sağ
-yarısında ise ego merkezli gerçek IPM kuş bakışı görünüm bulunur. Sağ panelde:
+yarısında ise ego merkezli kuş bakışı görünüm bulunur. Sağ üstteki
+`SURUS / DEBUG` switch'ine tıklanarak iki ekran arasında geçilir. Aynı geçiş
+klavyedeki `B` tuşuyla da yapılabilir.
+
+`SURUS` modu sürücüye yönelik sade görselleştirmedir:
+
+- koyu ve dikkat dağıtmayan yol sahnesi,
+- şerit koridoru ve parlak mavi planlanan rota,
+- hız, hedef hız, kontrol modu ve sensör sağlığı,
+- stilize ego araç ile izlenen araçların hız ve hareket yönü,
+- boş alan ve dolu occupancy bölgeleri.
+
+`DEBUG` modu mühendislik incelemesi için ham ayrıntıları korur:
 
 - yedi kameranın zemin görüntüleri tek kuş bakışı dokuda birleşir,
 - LiDAR nesne noktaları gri, beş radarın noktaları pembe çizilir,
@@ -250,6 +262,14 @@ kararı yerine kullanılmaz. Kontrolcü ön geniş kamera, ön uzun radar ve yal
 kutuyla zaman uyumlu olduğunda tavan LiDAR mesafesini kullanır.
 GNSS ve IMU 15 sensörün içinde çalışır fakat ego merkezli çizimde nokta
 üretmez; ileride harita konumlandırması için canlı pakette tutulur.
+
+Bu ayrım literatür açısından önemlidir. Projedeki mevcut BEV; kalibrasyon,
+IPM, geometrik sensör füzyonu ve occupancy kullanan klasik bir ortak uzamsal
+temsildir. Profesyonel ekiplerin kullandığı öğrenilmiş BEV yaklaşımları ise
+kamera veya farklı sensörlerden öğrenilen özellikleri ortak BEV uzayına taşıyıp
+3B nesne, semantik yol ve occupancy tahminleri üretir. Yeni `SURUS` ekranı bu
+veriyi profesyonel bir arayüzle sunar; mevcut geometrik BEV'yi öğrenilmiş bir
+occupancy ağıymış gibi göstermez.
 
 Sensörlerden biri birkaç kare gecikirse araç döngüsü bekletilmez. BEV her
 sensörün en yeni geçerli verisini kullanır ve eski veriyi kendiliğinden atar.
@@ -527,6 +547,7 @@ Kontrol denklemlerinin temel kaynakları:
 - [Intelligent Driver Model (IDM)](https://mtreiber.de/MicroApplet/IDM.html)
 - [SciPy SLSQP optimizasyonu](https://docs.scipy.org/doc/scipy/reference/optimize.minimize-slsqp.html)
 - [MPC'de sıcak başlangıç](https://web.stanford.edu/~boyd/fast_mpc/)
+- [BEVFusion ortak BEV sensör füzyonu](https://arxiv.org/abs/2205.13542)
 - [PID kontrol](https://doi.org/10.1109/TSMC.2000.843250)
 - [Otonom sürüş hareket planlama ve kontrol yöntemleri incelemesi](https://doi.org/10.1109/TIV.2016.2578706)
 - [Trafik ışığı algılama ve zamansal takip incelemesi](https://doi.org/10.1109/TITS.2015.2509509)

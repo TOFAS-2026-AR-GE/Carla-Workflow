@@ -250,6 +250,8 @@ class CarlaApplication:
                 perception_result=perception_result,
                 vehicle_state=state,
                 current_frame_id=frame_id,
+                driving_state=control_info,
+                display_mode=self.viewer.bev_mode,
             )
             bev_image = self.bev_module.get_latest()
 

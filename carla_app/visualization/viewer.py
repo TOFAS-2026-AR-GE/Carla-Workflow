@@ -9,7 +9,10 @@ class PerceptionViewer:
     def __init__(self, window_name="CARLA Perception"):
         self.window_name = window_name
         self.closed = False
+        self.bev_mode = "driving"
+        self.bev_button_rect = None
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback(window_name, self._mouse_callback)
 
     def show(
         self,
@@ -111,8 +114,9 @@ class PerceptionViewer:
         return not self.closed
 
     def combine_panels(self, perception_frame, bev_image):
-        """BEV verildiyse algılama ve BEV görüntüsünü eşit iki panele böler."""
+        """Kamera ve BEV panelini switch düğmesiyle yan yana birleştirir."""
         if bev_image is None:
+            self.bev_button_rect = None
             return perception_frame
 
         target_width = perception_frame.shape[1]
@@ -123,7 +127,65 @@ class PerceptionViewer:
             interpolation=cv2.INTER_AREA,
         )
         divider = np.full((target_height, 3, 3), 210, dtype=np.uint8)
-        return np.hstack((perception_frame, divider, bev_panel))
+        combined = np.hstack((perception_frame, divider, bev_panel))
+        self.draw_bev_switch(combined)
+        return combined
+
+    def draw_bev_switch(self, frame):
+        """BEV panelinin sağ üstüne iki konumlu tıklanabilir switch çizer."""
+        width = 174
+        height = 30
+        margin = 10
+        x1 = frame.shape[1] - width - margin
+        y1 = 10
+        x2 = x1 + width
+        y2 = y1 + height
+        middle = x1 + width // 2
+        self.bev_button_rect = (x1, y1, x2, y2)
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (31, 34, 38), -1)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (92, 96, 102), 1)
+        mode = getattr(self, "bev_mode", "driving")
+        if mode == "driving":
+            cv2.rectangle(frame, (x1 + 2, y1 + 2), (middle, y2 - 2), (208, 132, 42), -1)
+        else:
+            cv2.rectangle(frame, (middle, y1 + 2), (x2 - 2, y2 - 2), (82, 88, 96), -1)
+
+        cv2.putText(
+            frame,
+            "SURUS",
+            (x1 + 17, y1 + 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.39,
+            (248, 249, 250),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            "DEBUG",
+            (middle + 17, y1 + 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.39,
+            (248, 249, 250),
+            1,
+            cv2.LINE_AA,
+        )
+
+    def _mouse_callback(self, event, x, y, _flags, _parameter):
+        """Switch'in tıklanan yarısını aktif BEV modu yapar."""
+        if event != cv2.EVENT_LBUTTONUP or self.bev_button_rect is None:
+            return
+        x1, y1, x2, y2 = self.bev_button_rect
+        if not x1 <= x <= x2 or not y1 <= y <= y2:
+            return
+        middle = (x1 + x2) // 2
+        self.bev_mode = "driving" if x < middle else "debug"
+
+    def toggle_bev_mode(self):
+        """Klavye için sürüş ve debug ekranı arasında geçiş yapar."""
+        current = getattr(self, "bev_mode", "driving")
+        self.bev_mode = "debug" if current == "driving" else "driving"
 
     def close(self):
         if self.closed:
@@ -142,6 +204,9 @@ class PerceptionViewer:
 
     def _read_key(self):
         key = cv2.waitKey(1) & 0xFF
+        if key in (ord("b"), ord("B")):
+            self.toggle_bev_mode()
+            return True
         return key not in (27, ord("q"), ord("Q"))
 
     def _draw(self, frame, detection, color, prefix):

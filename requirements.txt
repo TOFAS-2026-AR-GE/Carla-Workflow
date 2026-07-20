@@ -1,6 +1,7 @@
 python-dotenv>=1.0,<2
 carla
 numpy>=1.24,<3
+scipy>=1.11,<2
 PyYAML>=6,<7
 ultralytics>=8.2,<9
 opencv-python>=4.8,<6

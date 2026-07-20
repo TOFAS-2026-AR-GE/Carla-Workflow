@@ -8,18 +8,19 @@ import carla
 
 from carla_app.config import DrivingParameters
 from carla_app.controller.vehicle.behavior_planner import BehaviorPlanner
+from carla_app.controller.vehicle.idm_speed_planner import IDMSpeedPlanner
 from carla_app.controller.vehicle.longitudinal_pid_controller import (
     LongitudinalPIDController,
 )
-from carla_app.controller.vehicle.pure_pursuit_controller import (
-    PurePursuitController,
+from carla_app.controller.vehicle.pure_pursuit_mpc_controller import (
+    PurePursuitMPCController,
 )
 from carla_app.controller.vehicle.safety_supervisor import EmergencyBrakeSupervisor
 from carla_app.controller.vehicle.speed_planner import CurvatureSpeedPlanner
 
 
 class VehicleController:
-    """Pure Pursuit ve PID kontrolcülerini planlama katmanlarıyla birleştirir."""
+    """Pure Pursuit+MPC ve IDM+PID zincirlerini birleştirir."""
 
     def __init__(
         self,
@@ -28,9 +29,10 @@ class VehicleController:
         parameters=None,
     ):
         self.parameters = parameters or DrivingParameters(dt)
-        self.lateral = PurePursuitController(dt)
+        self.lateral = PurePursuitMPCController(dt, self.parameters)
         self.speed_planner = CurvatureSpeedPlanner(dt, cruise_speed_kmh)
         self.behavior = BehaviorPlanner(dt, self.parameters)
+        self.idm = IDMSpeedPlanner(dt)
         self.longitudinal = LongitudinalPIDController(dt)
         self.safety = EmergencyBrakeSupervisor(self.parameters)
 
@@ -64,11 +66,27 @@ class VehicleController:
             lead_vehicle,
             behavior.get("control_obstacle"),
         )
-        throttle, brake, longitudinal_info = self.longitudinal.run_step(
+        idm_target_speed, idm_info = self.idm.run_step(
             state,
             control_lead,
             target_speed,
         )
+        throttle, brake, longitudinal_info = self.longitudinal.run_step(
+            state,
+            control_lead,
+            idm_target_speed,
+            idm_info["idm_acceleration_mps2"],
+        )
+
+        # Log ve eski entegrasyonların kullandığı takip alanlarını IDM'den
+        # PID tanı sözlüğüne de koyarız. Kontrol hesabı yine iki ayrı katmandır.
+        for key in (
+            "desired_gap_m",
+            "raw_lead_distance_m",
+            "filtered_lead_distance_m",
+            "filtered_lead_speed_mps",
+        ):
+            longitudinal_info[key] = idm_info.get(key)
 
         emergency, safety_info = self.safety.evaluate_candidates(
             lead_vehicle,
@@ -85,7 +103,7 @@ class VehicleController:
             throttle=throttle,
             brake=brake,
             steer=steer,
-            target_speed_mps=target_speed,
+            target_speed_mps=idm_target_speed,
         )
         safety_info["command_validation"] = command_info
 
@@ -108,9 +126,11 @@ class VehicleController:
             "steer": steer,
             "throttle": throttle,
             "brake": brake,
-            "target_speed_mps": target_speed,
+            "target_speed_mps": idm_target_speed,
+            "behavior_target_speed_mps": target_speed,
             "lateral": lateral_info,
             "speed_plan": speed_plan,
+            "idm": idm_info,
             "longitudinal": longitudinal_info,
             "safety": safety_info,
             "emergency_obstacle": emergency_obstacle,

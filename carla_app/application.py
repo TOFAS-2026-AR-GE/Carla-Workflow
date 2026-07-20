@@ -133,8 +133,8 @@ class CarlaApplication:
 
         print("[INFO] Q, ESC veya pencerenin X düğmesi ile çıkış.")
         print(
-            "[INFO] Kontrol: Kalıcı rota + Pure Pursuit direksiyon + "
-            "PID gaz-fren + bağımsız acil fren"
+            "[INFO] Kontrol: Pure Pursuit warm-start + MPC direksiyon + "
+            "IDM hız referansı + PID gaz-fren + bağımsız acil fren"
         )
         print(f"[INFO] Sensör modu: {self.settings.sensor_mode}")
 
@@ -350,6 +350,13 @@ class CarlaApplication:
         )
         lateral_controller = lateral.get("controller", "pure_pursuit")
         message += f" lateral={lateral_controller}"
+        if lateral.get("mpc_active"):
+            message += (
+                f" mpc={float(lateral.get('mpc_solve_ms', 0.0)):.1f}ms"
+                f" mpc_iter={int(lateral.get('mpc_iterations', 0))}"
+            )
+        elif lateral.get("fallback_reason"):
+            message += f" mpc_fallback={lateral.get('fallback_reason')}"
         lookahead = lateral.get("lookahead_m")
         if lookahead is not None:
             message += f" lookahead={float(lookahead):.1f}m"
@@ -357,6 +364,15 @@ class CarlaApplication:
         speed_plan = control_info.get("speed_plan", {})
         speed_reason = speed_plan.get("speed_reason", "unknown")
         message += f" speed_reason={speed_reason}"
+        idm = control_info.get("idm", {})
+        if idm:
+            message += (
+                f" idm_ref={float(idm.get('reference_speed_mps', 0.0)) * 3.6:.1f}km/h"
+                f" idm_a={float(idm.get('idm_acceleration_mps2', 0.0)):+.2f}m/s2"
+            )
+            desired_gap = idm.get("desired_gap_m")
+            if desired_gap is not None:
+                message += f" idm_gap={float(desired_gap):.1f}m"
         if speed_reason in {"curve", "lane_recovery"}:
             curvature = float(speed_plan.get("curvature_1pm", 0.0))
             yaw_rate = float(speed_plan.get("predicted_yaw_rate_radps", 0.0))

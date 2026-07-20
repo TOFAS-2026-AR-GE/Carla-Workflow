@@ -11,6 +11,7 @@ if "dotenv" not in sys.modules:
 
 from carla_app.config import DrivingParameters
 from carla_app.controller.vehicle.behavior_planner import BehaviorPlanner
+from carla_app.controller.vehicle.idm_speed_planner import IDMSpeedPlanner
 from carla_app.controller.vehicle.longitudinal_pid_controller import (
     LongitudinalPIDController,
 )
@@ -417,6 +418,7 @@ class BehaviorPlannerTests(unittest.TestCase):
         self.assertEqual(decision["control_obstacle"]["source"], "traffic_light_red")
 
     def test_vehicle_stops_before_red_line_when_camera_loses_close_light(self):
+        idm = IDMSpeedPlanner(0.05)
         longitudinal = LongitudinalPIDController(0.05)
         speed_mps = 60.0 / 3.6
         signal_distance_m = 55.0
@@ -437,10 +439,16 @@ class BehaviorPlannerTests(unittest.TestCase):
                 self.speed_plan,
                 context,
             )
-            throttle, brake, _ = longitudinal.run_step(
+            idm_target, idm_info = idm.run_step(
                 state,
                 decision["control_obstacle"],
                 decision["target_speed_mps"],
+            )
+            throttle, brake, _ = longitudinal.run_step(
+                state,
+                decision["control_obstacle"],
+                idm_target,
+                idm_info["idm_acceleration_mps2"],
             )
             acceleration = 2.8 * throttle - 5.0 * brake
             if speed_mps > 0.02:

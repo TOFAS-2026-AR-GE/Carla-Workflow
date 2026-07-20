@@ -82,6 +82,19 @@ class DrivingParameters:
         self.maximum_brake = 1.0
         self.maximum_steer = 1.0
 
+        # Pure Pursuit warm-start kullanan yanal MPC ayarları.
+        self.mpc_horizon_steps = 12
+        self.mpc_step_s = 0.12
+        self.mpc_minimum_speed_mps = 1.0
+        self.mpc_lateral_error_weight = 8.0
+        self.mpc_heading_error_weight = 5.0
+        self.mpc_steering_weight = 0.25
+        self.mpc_steering_rate_weight = 1.80
+        self.mpc_solver_tolerance = 1e-5
+        self.mpc_maximum_iterations = 60
+        self.mpc_time_budget_ms = 30.0
+        self.mpc_maximum_predicted_error_m = 2.50
+
 
 class Settings:
     """`.env` içindeki bütün uygulama ayarlarını normal alanlarda tutar."""

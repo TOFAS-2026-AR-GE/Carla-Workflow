@@ -269,9 +269,11 @@ kamera ve radar yerleşimi korunmuştur.
 | `lead_vehicle.py` | Kamera kutuları, radar noktaları, rota | Takip edilecek ön araç ve acil fren adayı |
 | `tracking.py` | Birleştirilmiş araç ölçümleri | Kareler arasında sabit araç kimliği ve yumuşatılmış hareket |
 | `pure_pursuit_controller.py` | Araç konumu, hız ve referans rota | `-1` ile `+1` arasında yumuşatılmış direksiyon |
+| `pure_pursuit_mpc_controller.py` | Pure Pursuit başlangıcı, rota hatası ve araç modeli | Optimize edilmiş direksiyon; çözüm yoksa Pure Pursuit |
 | `speed_planner.py` | Rota eğriliği, hız ve şerit hatası | Metre/saniye cinsinden güvenli hedef hız |
 | `behavior_planner.py` | Trafik ışığı, hız tabelası, yaya, viraj ve sensör sağlığı | Davranış modu, güvenli hedef hız ve gerekirse sanal durma noktası |
-| `longitudinal_pid_controller.py` | Ego hızı, hedef hız ve ön araç | Birbirini dışlayan PID gaz veya fren |
+| `idm_speed_planner.py` | Ego hızı, üst hız ve ön engel | PID hız referansı ve IDM ileri besleme ivmesi |
+| `longitudinal_pid_controller.py` | Ego hızı, IDM referansı ve ivmesi | Birbirini dışlayan PID gaz veya fren |
 | `safety_supervisor.py` | Ön araç ve ham radar tehlikesi | Acil fren gerekli mi bilgisi |
 | `vehicle_controller.py` | Bütün kontrol girdileri | CARLA `VehicleControl` komutu |
 
@@ -289,11 +291,13 @@ uygulamasını birlikte gösterir.
 | Sabit hızlı Kalman filtresi | Gürültülü konum ölçümünü hareket tahminiyle birleştirip konum ve hız üretir. | `tracking.py` X ve Y eksenlerini ayrı ayrı izler. Her çevrim önce son hıza göre tahmin yapar, sonra yeni kamera-radar ölçümüyle tahmini düzeltir. |
 | En yakın komşu eşleştirme | Yeni ölçümü kendisine en yakın mevcut araç takibiyle eşleştirir. | `tracking.py` ölçüm ile takip arasındaki bütün uygun uzaklıkları hesaplar. En yakın çiftten başlar; 5 metreden uzak çiftleri kabul etmez ve uzun süre görülmeyen takibi siler. |
 | Zamansal doğrulama ve histerezis | Tek bir gürültülü ölçümle hedef değiştirmeyi önler. | `lead_vehicle.py` doğrudan radar hedefini normal takibe vermeden önce iki yeni karede görür. Benzer mesafedeki iki araç arasında geçiş yapmak için yeni aracın en az 2 metre daha avantajlı olmasını ister. |
-| Pure Pursuit direksiyon kontrolü | Araçtan rota üzerinde ileride seçilen hedef noktaya geometrik olarak yönelir. | `pure_pursuit_controller.py` önce aracın rotadaki en yakın izdüşümünü bulur. Hız arttıkça 4,5 metreden 22 metreye büyüyen bakış mesafesi seçer, bisiklet modeliyle direksiyon açısını hesaplar ve komutu değişim sınırıyla yumuşatır. Başka yanal kontrolcü veya fallback yoktur. |
+| Pure Pursuit sıcak başlangıcı | Araçtan rota üzerinde ileride seçilen hedef noktaya geometrik olarak yönelir. | `pure_pursuit_controller.py` aracı rotaya izdüşürür ve hıza bağlı bakış noktasından ilk direksiyon komutunu bulur. Bu komut, MPC'nin geçerli direksiyon ve değişim sınırlarına uyan başlangıç dizisine dönüşürülür. |
+| MPC direksiyon iyileştirmesi | Yakın gelecekteki yanal hata, yön hatası ve direksiyon hareketini birlikte küçültür. | `pure_pursuit_mpc_controller.py` doğrusal hata modelini ve SciPy SLSQP çözücüsünü kullanır. MPC zamanında geçerli bir çözüm veremezse yalnızca Pure Pursuit sonucu uygulanır; üçüncü bir yanal kontrolcü yoktur. |
 | Eğrilik tabanlı hız planlama | Viraj keskinleştikçe izin verilen hızı rahat yanal ivmeye göre düşürür. | `speed_planner.py` hız yükseldikçe 35-75 metre ileriyi tarar. Yol eğriliğinden `hız = karekök(yanal ivme / eğrilik)` hesabını yapar. Şerit hatası büyürse ayrıca toparlanma hızı ister. |
-| PID hız kontrolü | Hedef hız ile mevcut hız arasındaki hatayı oransal, integral ve türev terimleriyle ivmeye dönüştürür. | `longitudinal_pid_controller.py` türev terimini ölçüm üzerinden filtreler, integral wind-up'ını engeller ve istenen ivmeyi gaz veya frene çevirir. Ön araç varsa aynı PID'nin hedef hızı güvenli zaman aralığına göre azaltılır. |
+| IDM hız referansı | Hız sınırı, takip mesafesi ve kapanma hızından rahat bir ivme isteği hesaplar. | `idm_speed_planner.py` 2 metre duruş boşluğu ve 1,5 saniye zaman aralığı kullanır. IDM ivmesini iki saniyelik hız referansına çevirir; kırmızı ışık ve yaya sanal duran engel gibi aynı hesaba girer. |
+| PID hız kontrolü | Referans hız ile mevcut hız arasındaki hatayı aktüatör komutuna dönüştürür. | `longitudinal_pid_controller.py` IDM ivmesini ileri besleme olarak alır; P, I ve filtrelenmiş D terimleri kalan hatayı düzeltir. Takip mesafesini ikinci kez hesaplamaz ve sonuçta yalnızca gaz veya fren üretir. |
 | İvme değişim sınırı | Gaz veya fren isteğinin bir çevrimde aniden sıçramasını önler. | `longitudinal_pid_controller.py` istenen ivme değişimini hızlanmada 1,4, frenlemede 3,6 m/s³ ile sınırlar. Gaz ve fren aynı çevrimde birlikte verilmez. |
-| Üstel ölçüm yumuşatma | Yeni ölçüm ile önceki değeri belirli oranlarda birleştirir. | `lead_vehicle.py` radar mesafesi ve bağıl hızını, `longitudinal_pid_controller.py` ise PID'nin kullandığı ön araç mesafesini yumuşatır. Yakınlaşan ölçüm güvenlik için uzaklaşan ölçümden daha hızlı kabul edilir. |
+| Üstel ölçüm yumuşatma | Yeni ölçüm ile önceki değeri belirli oranlarda birleştirir. | `lead_vehicle.py` radar mesafesi ve bağıl hızını, `idm_speed_planner.py` ise IDM'nin kullandığı ön araç durumunu yumuşatır. Yakınlaşan ölçüm güvenlik için uzaklaşan ölçümden daha hızlı kabul edilir. |
 | TTC ve gerekli yavaşlama ile acil fren | Mesafe kapanma süresini ve çarpışmayı önlemek için gereken yavaşlamayı hesaplar. | `safety_supervisor.py` takip hedefi ile ham radar tehlikesinden daha riskli olanı seçer. Kritik olmayan tek radar noktasını yeterli saymaz; aynı tehlikeyi ikinci yeni karede de görünce tam fren uygular. |
 | Basit IoU/merkez takibi | Aynı kutuyu ardışık karelerde ağır bir takip ağı olmadan eşleştirir. | `road_context.py` sınıf ailesi, IoU ve merkez yakınlığı kullanır; altı karelik kısa kaybı tolere eder ve güveni yumuşatır. |
 | Trafik ışığı debounce | Tek yanlış renk veya kaçırılmış kamera karesinin sürüş kararını değiştirmesini önler. | Aynı ışığın rengi üç yeni algılama karesinde doğrulanır; aynı sonuç karesinin tekrar okunması kanıt sayılmaz. Doğrulanmış kırmızı/sarı, bir saniyeye kadar kutu kaçırmalarında korunur ve yalnızca üç yeni yeşil kanıtıyla açılır. |
@@ -302,18 +306,18 @@ uygulamasını birlikte gösterir.
 | Kamera-LiDAR mesafe doğrulaması | Kamera kutusundaki çoklu LiDAR noktasından dayanıklı mesafe çıkarır. | Kalibrasyonla piksele taşınan en az üç noktanın yüzde 25 mesafesi alınır. Kare yaşı ikiyi aşarsa kamera tahminine dönülür; büyük çelişkide yakın değer seçilip güven düşürülür. |
 
 Bu algoritmaların çağrılma sırası `vehicle_controller.py` içinde açıktır:
-önce direksiyon, sonra viraj hedef hızı, ardından davranış planı ve normal
-gaz-fren, en son bağımsız acil fren denetimi çalışır. Acil fren kararı çıkarsa normal gaz
-silinir ve fren doğrudan `1.0` yapılır.
+Pure Pursuit MPC'yi başlatır; hız ve davranış planları üst hızı
+belirler; IDM bu sınır ve ön engelden PID referansını üretir; PID gaz
+veya fren uygular. En son bağımsız acil fren denetimi çalışır. Acil fren
+kararı çıkarsa normal gaz silinir ve fren doğrudan `1.0` yapılır.
 
 ### Direksiyon
 
-Projede tek yanal kontrolcü Pure Pursuit'tir. Araç rotaya izdüşürülür ve rota
-boyunca hızla büyüyen bir bakış mesafesi kadar ileride hedef seçilir. Hedefin
-araç koordinatındaki yanal konumundan yol eğriliği, 2,85 metrelik dingil
-mesafesinden direksiyon açısı bulunur. Komut alçak geçiren filtre ve hız bağlı
-değişim sınırından geçer. Böylece düşük hızda viraja girebilir, 70 km/s düz
-yolda ise küçük waypoint gürültüsünü direksiyona taşımaz.
+Yanal zincirde Pure Pursuit her çevrim ilk uygulanabilir direksiyon dizisini
+verir. MPC bu sıcak başlangıcı kullanarak rota hatasını, yön hatasını ve
+direksiyon hareketlerini birlikte iyileştirir. Direksiyon açısı ve açı değişim
+sınırları optimizasyonun içindedir. Düşük hız, kısa rota, zaman aşımı veya
+geçersiz çözüm durumunda araç Pure Pursuit ile güvenli biçimde devam eder.
 
 ### Hedef hız
 
@@ -325,18 +329,23 @@ hatası veya acil fren güvenlik gereği 23 km/s sınırının önüne geçebili
 
 ### Gaz, fren ve ön araç takibi
 
-Boylamsal kontrol yalnızca PID kullanır. Temel ayarlar:
+Boylamsal zincirde IDM istenen hareketi planlar, PID ise bunu gaz ve frenle
+izler. Böylece takip mesafesi tek yerde hesaplanır; PID ayrı bir takip modeliyle
+IDM'ye karşı çalışmaz. Temel ayarlar:
 
 - Duruş boşluğu: `2.0 m`
 - Zaman aralığı: `1.5 s`
-- En yüksek rahat hızlanma: `1.8 m/s²`
+- IDM rahat hızlanması: `1.5 m/s²`
+- PID en yüksek hızlanması: `1.8 m/s²`
 - En yüksek normal yavaşlama: `3.5 m/s²`
 - PID katsayıları: `Kp=0.55`, `Ki=0.10`, `Kd=0.08`
 
-Araç yaklaşık iki metre boşlukta tamamen durursa `HOLD` durumuna geçer ve
-eğimde kaymamak için freni tutar. Ön araç hareket ettiğinde güvenli hedef hız
-yeniden yükselir. Gaz ile fren aynı çevrimde birlikte verilmez; integral
-doygunluğu ve türev gürültüsü ayrıca sınırlandırılır.
+IDM'nin ivmesi hem iki saniyelik PID hız referansına çevrilir hem de ileri
+besleme olarak PID'ye verilir. Bu, durma noktasına yaklaşırken referans hız
+hatası küçülse bile gerekli fren isteğinin kaybolmamasını sağlar. Araç yaklaşık
+iki metre boşlukta tamamen durursa `HOLD` durumuna geçer ve eğimde kaymamak
+için freni tutar. Ön araç hareket ettiğinde yeniden kalkar. Gaz ile fren aynı
+çevrimde birlikte verilmez; integral doygunluğu ve türev gürültüsü sınırlıdır.
 
 ### Acil fren
 
@@ -392,7 +401,8 @@ Uygulama belirlenen aralıkta bir `[STATUS]` satırı yazar:
 | `speed` | Ego aracının mevcut hızı |
 | `target` | Viraj ve şerit durumundan sonra seçilen hedef hız |
 | `mode` | `CRUISE`, `LEAD_FAR`, `FOLLOW`, `HOLD`, `RESTART` veya `EMERGENCY` |
-| `lateral` / `lookahead` | Pure Pursuit ve o çevrimdeki bakış mesafesi |
+| `lateral` / `lookahead` | Aktif Pure Pursuit-MPC modu ve bakış mesafesi |
+| `mpc` | MPC çözüm süresi, iterasyon ve varsa fallback nedeni |
 | `steer` | Uygulanan direksiyon değeri |
 | `throttle`, `brake` | Uygulanan gaz ve fren |
 | `bbox` | Son algılama sonucundaki araç kutusu sayısı |
@@ -404,6 +414,7 @@ Uygulama belirlenen aralıkta bir `[STATUS]` satırı yazar:
 | `speed_reason` | Hedef hızın düz yol, viraj veya şerit toparlama nedeni |
 | `lead` | Ön araç seçicinin ölçtüğü mesafe |
 | `ctrl_gap` | Gaz-fren kontrolünde kullanılan filtrelenmiş mesafe |
+| `idm_ref`, `idm_a`, `idm_gap` | IDM hız referansı, ivmesi ve dinamik takip boşluğu |
 | `aeb` | Acil fren nedeni ve tehlike bilgisi |
 | `light` | Seçilen lead trafik ışığının rengi ve mesafesi |
 | `limit` | Zamansal olarak doğrulanmış hız sınırı |
@@ -508,6 +519,9 @@ durma noktası hatası ölçümü için CARLA sunucusunun ayrıca çalıştırı
 Kontrol denklemlerinin temel kaynakları:
 
 - [Pure Pursuit geometrik yol takibi](https://www.ri.cmu.edu/pub_files/pub4/coulter_r_craig_1992_1/coulter_r_craig_1992_1.pdf)
+- [Intelligent Driver Model (IDM)](https://mtreiber.de/MicroApplet/IDM.html)
+- [SciPy SLSQP optimizasyonu](https://docs.scipy.org/doc/scipy/reference/optimize.minimize-slsqp.html)
+- [MPC'de sıcak başlangıç](https://web.stanford.edu/~boyd/fast_mpc/)
 - [PID kontrol](https://doi.org/10.1109/TSMC.2000.843250)
 - [Otonom sürüş hareket planlama ve kontrol yöntemleri incelemesi](https://doi.org/10.1109/TIV.2016.2578706)
 - [Trafik ışığı algılama ve zamansal takip incelemesi](https://doi.org/10.1109/TITS.2015.2509509)

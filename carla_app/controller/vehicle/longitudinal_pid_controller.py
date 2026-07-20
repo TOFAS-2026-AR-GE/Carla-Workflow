@@ -9,7 +9,7 @@ def clamp(value, minimum, maximum):
 
 
 class LongitudinalPIDController:
-    """Hız hatasını PID ile kontrol eder ve güvenli takip hızını uygular."""
+    """IDM'nin verdiği hız referansını gaz ve frenle takip eder."""
 
     def __init__(self, dt=0.05):
         self.dt = max(0.01, float(dt))
@@ -35,15 +35,10 @@ class LongitudinalPIDController:
         self.maximum_brake = 0.75
         self.breakaway_throttle = 0.18
 
-        # Ön araç veya sanal durma noktası için güvenli mesafe.
-        self.standstill_gap_m = 2.0
-        self.time_headway_s = 1.5
-        self.gap_gain = 0.35
-        self.relative_speed_gain = 0.60
-
         # Tam duruşta aracın eğimde kaymasını engeller.
         self.hold_speed_mps = 0.20
         self.hold_release_target_mps = 0.10
+        self.hold_distance_m = 2.40
         self.hold_brake = 0.35
         self.hold_active = False
 
@@ -51,12 +46,28 @@ class LongitudinalPIDController:
         self.previous_speed_mps = None
         self.filtered_derivative = 0.0
         self.previous_acceleration_mps2 = 0.0
-        self.filtered_lead_distance_m = None
 
-    def run_step(self, state, lead_vehicle, target_speed):
+    def run_step(
+        self,
+        state,
+        lead_vehicle,
+        target_speed,
+        feedforward_acceleration_mps2=0.0,
+    ):
         """Tek çevrim için birbirini dışlayan gaz ve fren değerleri üretir."""
         ego_speed = max(0.0, float(state.get("speed_mps", 0.0)))
         requested_speed = max(0.0, float(target_speed))
+        try:
+            feedforward_acceleration = float(feedforward_acceleration_mps2)
+        except (TypeError, ValueError):
+            feedforward_acceleration = 0.0
+        if not math.isfinite(feedforward_acceleration):
+            feedforward_acceleration = 0.0
+        feedforward_acceleration = clamp(
+            feedforward_acceleration,
+            -self.maximum_deceleration_mps2,
+            self.maximum_acceleration_mps2,
+        )
         raw_lead_distance = None
         if isinstance(lead_vehicle, dict):
             try:
@@ -64,15 +75,9 @@ class LongitudinalPIDController:
             except (TypeError, ValueError):
                 raw_lead_distance = None
         lead = self.validate_lead(lead_vehicle)
-        lead = self.filter_lead_distance(lead)
-
-        effective_speed, follow_info = self.calculate_effective_target(
-            ego_speed,
-            requested_speed,
-            lead,
-        )
+        effective_speed = requested_speed
         was_holding = self.hold_active
-        self.update_hold(ego_speed, effective_speed, lead, follow_info)
+        self.update_hold(ego_speed, effective_speed, lead)
         hold_released = was_holding and not self.hold_active
 
         if self.hold_active:
@@ -86,6 +91,7 @@ class LongitudinalPIDController:
             desired_acceleration = self.calculate_pid_acceleration(
                 effective_speed,
                 ego_speed,
+                feedforward_acceleration,
             )
             acceleration = self.limit_jerk(desired_acceleration)
             throttle, brake = self.acceleration_to_pedals(
@@ -96,7 +102,7 @@ class LongitudinalPIDController:
             if hold_released:
                 mode = "RESTART"
             else:
-                mode = "FOLLOW" if follow_info["following"] else "CRUISE"
+                mode = "TRACKING"
 
         info = {
             "controller": "pid",
@@ -104,12 +110,13 @@ class LongitudinalPIDController:
             "target_speed_mps": requested_speed,
             "effective_target_speed_mps": effective_speed,
             "speed_error_mps": effective_speed - ego_speed,
+            "feedforward_acceleration_mps2": feedforward_acceleration,
             "desired_acceleration_mps2": desired_acceleration,
             "acceleration_mps2": acceleration,
             "integral": self.integral,
             "filtered_derivative_mps2": self.filtered_derivative,
-            "desired_gap_m": follow_info["desired_gap_m"],
-            "lead_speed_mps": follow_info["lead_speed_mps"],
+            "desired_gap_m": None,
+            "lead_speed_mps": self.lead_speed(ego_speed, lead),
             "raw_lead_distance_m": raw_lead_distance,
             "filtered_lead_distance_m": (
                 lead["distance_m"] if lead is not None else None
@@ -119,8 +126,13 @@ class LongitudinalPIDController:
         }
         return throttle, brake, info
 
-    def calculate_pid_acceleration(self, target_speed, current_speed):
-        """P, I ve filtrelenmiş D terimlerinden istenen ivmeyi hesaplar."""
+    def calculate_pid_acceleration(
+        self,
+        target_speed,
+        current_speed,
+        feedforward_acceleration=0.0,
+    ):
+        """IDM feed-forward ile P, I ve filtrelenmiş D toplamını hesaplar."""
         error = target_speed - current_speed
 
         if self.previous_speed_mps is None:
@@ -140,7 +152,8 @@ class LongitudinalPIDController:
             self.integral_limit,
         )
         candidate_output = (
-            self.kp * error
+            feedforward_acceleration
+            + self.kp * error
             + self.ki * candidate_integral
             + self.kd * self.filtered_derivative
         )
@@ -152,7 +165,8 @@ class LongitudinalPIDController:
             self.integral = candidate_integral
 
         output = (
-            self.kp * error
+            feedforward_acceleration
+            + self.kp * error
             + self.ki * self.integral
             + self.kd * self.filtered_derivative
         )
@@ -162,89 +176,43 @@ class LongitudinalPIDController:
             self.maximum_acceleration_mps2,
         )
 
-    def calculate_effective_target(self, ego_speed, requested_speed, lead):
-        """Ön araç varsa PID'nin izleyeceği daha güvenli hız hedefini seçer."""
-        info = {
-            "following": False,
-            "desired_gap_m": None,
-            "lead_speed_mps": None,
-            "stop_point": False,
-        }
-        if lead is None:
-            return requested_speed, info
-
-        lead_speed = max(0.0, ego_speed + lead["relative_speed_mps"])
-        desired_gap = self.standstill_gap_m + self.time_headway_s * ego_speed
-        gap_error = lead["distance_m"] - desired_gap
-
-        # Mesafe büyüdükçe ön aracın hızının üstüne çıkılabilir; mesafe
-        # daralınca bağıl hız terimi hedefi erkenden aşağı çeker.
-        follow_speed = (
-            lead_speed
-            + self.gap_gain * gap_error
-            + self.relative_speed_gain * lead["relative_speed_mps"]
-        )
-        follow_speed = max(0.0, follow_speed)
-
-        source = str(lead.get("source", ""))
-        is_stop_point = source in {
-            "traffic_light_red",
-            "traffic_light_orange",
-            "traffic_light_yellow",
-            "pedestrian",
-            "sensor_fault",
-        }
-        if is_stop_point or lead_speed < 0.30:
-            remaining = max(0.0, lead["distance_m"] - self.standstill_gap_m)
-            stopping_speed = math.sqrt(
-                2.0 * 2.0 * remaining
-            )
-            follow_speed = min(follow_speed, stopping_speed)
-
-        info = {
-            "following": follow_speed < requested_speed - 0.05,
-            "desired_gap_m": desired_gap,
-            "lead_speed_mps": lead_speed,
-            "stop_point": is_stop_point,
-        }
-        return min(requested_speed, follow_speed), info
-
-    def filter_lead_distance(self, lead):
-        """Mesafe ölçümündeki küçük kare-kare sıçramaları yumuşatır."""
-        if lead is None:
-            self.filtered_lead_distance_m = None
-            return None
-
-        measured = lead["distance_m"]
-        if self.filtered_lead_distance_m is None:
-            self.filtered_lead_distance_m = measured
-        else:
-            ratio = 0.55 if measured < self.filtered_lead_distance_m else 0.25
-            self.filtered_lead_distance_m += ratio * (
-                measured - self.filtered_lead_distance_m
-            )
-
-        filtered = dict(lead)
-        filtered["distance_m"] = self.filtered_lead_distance_m
-        return filtered
-
-    def update_hold(self, ego_speed, effective_speed, lead, follow_info):
+    def update_hold(self, ego_speed, effective_speed, lead):
         """Tam duruş frenine girme ve tekrar hareket etme kararını verir."""
         stopped_request = effective_speed <= 0.10
+        lead_speed = self.lead_speed(ego_speed, lead)
         close_stopped_lead = (
             lead is not None
-            and lead["distance_m"] <= self.standstill_gap_m + 0.40
-            and (follow_info["lead_speed_mps"] or 0.0) <= 0.30
+            and lead["distance_m"] <= self.hold_distance_m
+            and (lead_speed or 0.0) <= 0.30
         )
+        stop_point = self.is_rule_obstacle(lead)
 
         if ego_speed <= self.hold_speed_mps and (stopped_request or close_stopped_lead):
             self.hold_active = True
         elif (
             effective_speed > self.hold_release_target_mps
             and not close_stopped_lead
-            and not follow_info["stop_point"]
+            and not stop_point
         ):
             self.hold_active = False
+
+    def lead_speed(self, ego_speed, lead):
+        """Bağıl hızdan ön aracın yaklaşık mutlak hızını hesaplar."""
+        if lead is None:
+            return None
+        return max(0.0, ego_speed + lead["relative_speed_mps"])
+
+    def is_rule_obstacle(self, lead):
+        """Kırmızı ışık ve yaya gibi sanal durma noktalarını ayırır."""
+        if lead is None:
+            return False
+        return str(lead.get("source", "")) in {
+            "traffic_light_red",
+            "traffic_light_orange",
+            "traffic_light_yellow",
+            "pedestrian",
+            "sensor_fault",
+        }
 
     def limit_jerk(self, desired_acceleration):
         """İvmenin çevrimler arasında sert değişmesini önler."""

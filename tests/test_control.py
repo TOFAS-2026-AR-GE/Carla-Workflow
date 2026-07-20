@@ -10,11 +10,15 @@ if "dotenv" not in sys.modules:
     sys.modules["dotenv"] = dotenv
 
 from carla_app.controller.vehicle.lead_vehicle import LeadVehicleTracker
+from carla_app.controller.vehicle.idm_speed_planner import IDMSpeedPlanner
 from carla_app.controller.vehicle.longitudinal_pid_controller import (
     LongitudinalPIDController,
 )
 from carla_app.controller.vehicle.pure_pursuit_controller import (
     PurePursuitController,
+)
+from carla_app.controller.vehicle.pure_pursuit_mpc_controller import (
+    PurePursuitMPCController,
 )
 from carla_app.controller.vehicle.safety_supervisor import EmergencyBrakeSupervisor
 from carla_app.controller.vehicle.speed_planner import CurvatureSpeedPlanner
@@ -98,6 +102,52 @@ class PurePursuitControllerTests(unittest.TestCase):
         self.assertEqual(controller.last_info["reason"], "short_path")
 
 
+class PurePursuitMPCControllerTests(unittest.TestCase):
+    def test_pure_pursuit_builds_mpc_warm_start(self):
+        controller = PurePursuitMPCController(dt=0.05)
+
+        steer = controller.run_step(curved_state(radius_m=25.0))
+
+        self.assertTrue(math.isfinite(steer))
+        self.assertTrue(controller.last_info["mpc_active"])
+        self.assertEqual(
+            controller.last_info["controller"],
+            "pure_pursuit_mpc",
+        )
+        self.assertTrue(
+            math.isfinite(controller.last_info["pure_pursuit_seed_steer"])
+        )
+        self.assertLess(
+            controller.last_info["mpc_solve_ms"],
+            controller.parameters.mpc_time_budget_ms,
+        )
+
+    def test_low_speed_uses_only_pure_pursuit(self):
+        controller = PurePursuitMPCController(dt=0.05)
+
+        steer = controller.run_step(
+            curved_state(radius_m=25.0, speed_mps=0.2)
+        )
+
+        self.assertTrue(math.isfinite(steer))
+        self.assertFalse(controller.last_info["mpc_active"])
+        self.assertEqual(controller.last_info["fallback_reason"], "low_speed")
+
+    def test_warm_start_respects_first_steering_rate_limit(self):
+        controller = PurePursuitMPCController(dt=0.05)
+        speed_mps = 10.0
+        sequence = controller.build_pure_pursuit_warm_start(
+            pure_pursuit_steer=0.8,
+            speed_mps=speed_mps,
+            horizon=controller.parameters.mpc_horizon_steps,
+            model_dt=controller.parameters.mpc_step_s,
+        )
+        first_normalized = sequence[0] / controller.maximum_wheel_angle_rad
+        maximum_change = controller.steering_rate_limit(speed_mps) * controller.dt
+
+        self.assertLessEqual(abs(first_normalized), maximum_change + 1e-9)
+
+
 class SpeedPlannerTests(unittest.TestCase):
     def test_no_sign_uses_seventy_kmh(self):
         planner = CurvatureSpeedPlanner(dt=0.05)
@@ -155,6 +205,93 @@ class SpeedPlannerTests(unittest.TestCase):
         self.assertAlmostEqual(info["recovery_speed_mps"], 23.0 / 3.6)
 
 
+class IDMSpeedPlannerTests(unittest.TestCase):
+    def test_fast_closing_vehicle_increases_desired_gap(self):
+        planner = IDMSpeedPlanner(dt=0.05)
+        speed_mps = 50.0 / 3.6
+
+        steady_gap = planner.calculate_desired_gap(speed_mps, 0.0)
+        closing_gap = planner.calculate_desired_gap(speed_mps, -5.0)
+
+        self.assertGreater(closing_gap, steady_gap)
+
+    def test_confirmed_close_vehicle_reduces_pid_reference(self):
+        planner = IDMSpeedPlanner(dt=0.05)
+        lead = {
+            "track_id": 8,
+            "distance_m": 8.0,
+            "relative_speed_mps": -10.0,
+            "source": "camera_radar_track",
+        }
+        state = straight_state(speed_mps=10.0)
+
+        planner.run_step(state, lead, 70.0 / 3.6)
+        reference, info = planner.run_step(state, lead, 70.0 / 3.6)
+
+        self.assertTrue(info["lead_confirmed"])
+        self.assertTrue(info["following"])
+        self.assertLess(reference, state["speed_mps"])
+        self.assertLess(info["idm_acceleration_mps2"], 0.0)
+
+    def test_far_non_closing_vehicle_keeps_free_road_behavior(self):
+        planner = IDMSpeedPlanner(dt=0.05)
+        lead = {
+            "track_id": 9,
+            "distance_m": 100.0,
+            "relative_speed_mps": 0.0,
+            "source": "camera_radar_track",
+        }
+        state = straight_state(speed_mps=10.0)
+
+        planner.run_step(state, lead, 70.0 / 3.6)
+        reference, info = planner.run_step(state, lead, 70.0 / 3.6)
+
+        self.assertTrue(info["lead_is_far"])
+        self.assertGreater(reference, state["speed_mps"])
+
+    def test_red_light_is_used_as_immediate_virtual_vehicle(self):
+        planner = IDMSpeedPlanner(dt=0.05)
+        red_light = {
+            "track_id": -3,
+            "distance_m": 5.0,
+            "relative_speed_mps": -8.0,
+            "source": "traffic_light_red",
+        }
+
+        reference, info = planner.run_step(
+            straight_state(speed_mps=8.0),
+            red_light,
+            60.0 / 3.6,
+        )
+
+        self.assertTrue(info["rule_obstacle"])
+        self.assertTrue(info["lead_confirmed"])
+        self.assertLess(reference, 8.0)
+
+    def test_red_light_clears_old_normal_lead_confirmation(self):
+        planner = IDMSpeedPlanner(dt=0.05)
+        normal_lead = {
+            "track_id": 12,
+            "distance_m": 12.0,
+            "relative_speed_mps": -2.0,
+            "source": "radar_direct",
+        }
+        red_light = {
+            "track_id": -3,
+            "distance_m": 6.0,
+            "relative_speed_mps": -5.0,
+            "source": "traffic_light_red",
+        }
+        state = straight_state(speed_mps=5.0)
+
+        planner.run_step(state, normal_lead, 60.0 / 3.6)
+        planner.run_step(state, normal_lead, 60.0 / 3.6)
+        planner.run_step(state, red_light, 60.0 / 3.6)
+        _, info = planner.run_step(state, normal_lead, 60.0 / 3.6)
+
+        self.assertFalse(info["lead_confirmed"])
+
+
 class LongitudinalPIDControllerTests(unittest.TestCase):
     def test_accelerates_toward_target_without_brake(self):
         controller = LongitudinalPIDController(dt=0.05)
@@ -168,6 +305,20 @@ class LongitudinalPIDControllerTests(unittest.TestCase):
         self.assertEqual(info["controller"], "pid")
         self.assertGreater(throttle, 0.0)
         self.assertEqual(brake, 0.0)
+
+    def test_non_finite_feedforward_is_ignored(self):
+        controller = LongitudinalPIDController(dt=0.05)
+
+        throttle, brake, info = controller.run_step(
+            straight_state(speed_mps=2.0),
+            lead_vehicle=None,
+            target_speed=5.0,
+            feedforward_acceleration_mps2=float("nan"),
+        )
+
+        self.assertTrue(math.isfinite(throttle))
+        self.assertTrue(math.isfinite(brake))
+        self.assertEqual(info["feedforward_acceleration_mps2"], 0.0)
 
     def test_overspeed_produces_brake_without_throttle(self):
         controller = LongitudinalPIDController(dt=0.05)
@@ -199,7 +350,7 @@ class LongitudinalPIDControllerTests(unittest.TestCase):
         difference = second["acceleration_mps2"] - first["acceleration_mps2"]
         self.assertLessEqual(difference, maximum_change + 1e-9)
 
-    def test_close_stopped_lead_reduces_pid_target(self):
+    def test_pid_tracks_idm_reference_without_second_gap_calculation(self):
         controller = LongitudinalPIDController(dt=0.05)
         lead = {
             "distance_m": 8.0,
@@ -210,13 +361,11 @@ class LongitudinalPIDControllerTests(unittest.TestCase):
         throttle, brake, info = controller.run_step(
             straight_state(speed_mps=10.0),
             lead,
-            70.0 / 3.6,
+            7.0,
         )
 
-        self.assertLess(
-            info["effective_target_speed_mps"],
-            info["target_speed_mps"],
-        )
+        self.assertEqual(info["effective_target_speed_mps"], 7.0)
+        self.assertIsNone(info["desired_gap_m"])
         self.assertEqual(throttle, 0.0)
         self.assertGreater(brake, 0.0)
 

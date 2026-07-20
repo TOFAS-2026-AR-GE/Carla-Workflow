@@ -375,8 +375,12 @@ class CarlaApplication:
 
         road_context = road_context or {}
         light = road_context.get("lead_traffic_light")
-        if light is None:
-            primary = control_info.get("behavior", {}).get("primary_detection")
+        primary = control_info.get("behavior", {}).get("primary_detection")
+        if isinstance(primary, dict) and primary.get("state_source") == (
+            "carla_vehicle_state"
+        ):
+            light = primary
+        elif light is None:
             if isinstance(primary, dict) and primary.get("color") in {
                 "red",
                 "orange",
@@ -387,7 +391,18 @@ class CarlaApplication:
             message += (
                 f" light={light.get('color', 'unknown')}"
                 f"@{light.get('estimated_distance_m')}m"
+                f" light_source={light.get('state_source', 'unknown')}"
             )
+            observed_color = light.get("observed_color")
+            candidate_color = light.get("candidate_color")
+            candidate_hits = light.get("candidate_hits")
+            if observed_color and observed_color != light.get("color"):
+                message += f" light_seen={observed_color}"
+            if candidate_color and candidate_color != light.get("color"):
+                message += f" light_candidate={candidate_color}/{candidate_hits}"
+        simulator_light = state.get("simulator_traffic_light", {})
+        if simulator_light.get("affected"):
+            message += f" sim_light={simulator_light.get('color', 'unknown')}"
         speed_limit = road_context.get("speed_limit_kmh")
         if speed_limit is not None:
             message += f" limit={speed_limit}km/h"

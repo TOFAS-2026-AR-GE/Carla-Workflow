@@ -5,6 +5,41 @@ import math
 import carla
 
 
+def read_simulator_traffic_light(vehicle):
+    """CARLA'nın bu aracı etkileyen trafik ışığı durumunu sadeleştirir.
+
+    Bu bilgi kırmızı ışığı uzaktan bulmak için kullanılmaz. Araç çizgide
+    durduğunda lamba kameranın üstünden çıkarsa yeşili doğrulayan yedek
+    bilgidir. ``is_at_traffic_light`` kontrolü önemlidir; CARLA, aracı
+    etkileyen ışık yokken de durum değerini Green olarak döndürebilir.
+    """
+    try:
+        affected = bool(vehicle.is_at_traffic_light())
+    except (AttributeError, RuntimeError):
+        return {"available": False, "affected": False, "color": None}
+
+    if not affected:
+        return {"available": True, "affected": False, "color": None}
+
+    try:
+        raw_state = vehicle.get_traffic_light_state()
+    except (AttributeError, RuntimeError):
+        return {"available": False, "affected": True, "color": None}
+
+    state_name = getattr(raw_state, "name", str(raw_state).rsplit(".", 1)[-1])
+    color = str(state_name).strip().lower()
+    if color == "yellow":
+        color = "orange"
+    if color not in {"red", "orange", "green", "off", "unknown"}:
+        color = "unknown"
+
+    return {
+        "available": True,
+        "affected": True,
+        "color": color,
+    }
+
+
 def build_reference_path(
     start_waypoint,
     point_count=80,
@@ -87,6 +122,7 @@ def read_vehicle_state(
         # hesaplarken kullanılır.
         "vehicle_half_width_m": float(vehicle.bounding_box.extent.y),
         "is_junction": waypoint.is_junction,
+        "simulator_traffic_light": read_simulator_traffic_light(vehicle),
     }
 
 

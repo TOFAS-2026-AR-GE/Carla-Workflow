@@ -40,6 +40,9 @@ class DrivingParameters:
         self.pedestrian_confidence = 0.35
         self.traffic_light_confirmation_frames = 3
         self.green_light_confirmation_frames = 3
+        # Araç durunca üstte kalan lamba kameradan çıkabilir. CARLA'nın
+        # araç durumundaki yeşili iki kare görmeden kırmızı kilidini açmayız.
+        self.simulator_green_confirmation_frames = 2
         self.speed_sign_confirmation_frames = 3
         self.tracker_lost_tolerance_frames = 6
         self.sensor_timeout_frames = max(6, int(round(1.0 / self.dt)))
@@ -55,6 +58,7 @@ class DrivingParameters:
         self.reaction_time_s = 0.50
         self.stopping_safety_margin_m = 2.0
         self.traffic_light_stop_offset_m = 3.0
+        self.traffic_light_stopped_speed_mps = 0.25
         self.following_time_s = 1.5
         self.minimum_following_distance_m = 2.0
         self.green_start_acceleration_mps2 = 1.2

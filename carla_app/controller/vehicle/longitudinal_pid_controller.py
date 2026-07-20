@@ -43,6 +43,7 @@ class LongitudinalPIDController:
 
         # Tam duruşta aracın eğimde kaymasını engeller.
         self.hold_speed_mps = 0.20
+        self.hold_release_target_mps = 0.10
         self.hold_brake = 0.35
         self.hold_active = False
 
@@ -70,7 +71,9 @@ class LongitudinalPIDController:
             requested_speed,
             lead,
         )
+        was_holding = self.hold_active
         self.update_hold(ego_speed, effective_speed, lead, follow_info)
+        hold_released = was_holding and not self.hold_active
 
         if self.hold_active:
             self.reset_pid(keep_speed=ego_speed)
@@ -90,7 +93,10 @@ class LongitudinalPIDController:
                 ego_speed,
                 effective_speed,
             )
-            mode = "FOLLOW" if follow_info["following"] else "CRUISE"
+            if hold_released:
+                mode = "RESTART"
+            else:
+                mode = "FOLLOW" if follow_info["following"] else "CRUISE"
 
         info = {
             "controller": "pid",
@@ -109,6 +115,7 @@ class LongitudinalPIDController:
                 lead["distance_m"] if lead is not None else None
             ),
             "hold_active": self.hold_active,
+            "hold_released": hold_released,
         }
         return throttle, brake, info
 
@@ -161,6 +168,7 @@ class LongitudinalPIDController:
             "following": False,
             "desired_gap_m": None,
             "lead_speed_mps": None,
+            "stop_point": False,
         }
         if lead is None:
             return requested_speed, info
@@ -197,6 +205,7 @@ class LongitudinalPIDController:
             "following": follow_speed < requested_speed - 0.05,
             "desired_gap_m": desired_gap,
             "lead_speed_mps": lead_speed,
+            "stop_point": is_stop_point,
         }
         return min(requested_speed, follow_speed), info
 
@@ -230,7 +239,11 @@ class LongitudinalPIDController:
 
         if ego_speed <= self.hold_speed_mps and (stopped_request or close_stopped_lead):
             self.hold_active = True
-        elif effective_speed >= 0.50 and not close_stopped_lead:
+        elif (
+            effective_speed > self.hold_release_target_mps
+            and not close_stopped_lead
+            and not follow_info["stop_point"]
+        ):
             self.hold_active = False
 
     def limit_jerk(self, desired_acceleration):
@@ -258,7 +271,9 @@ class LongitudinalPIDController:
             throttle = (
                 acceleration + self.rolling_resistance_acceleration_mps2
             ) / self.throttle_acceleration_mps2
-            if target_speed > ego_speed + 0.20 and ego_speed < 0.50:
+            # Yeşilde hız hedefi konfor için küçük adımlarla yükselir. İlk
+            # adım 0.20 m/s'den küçük olsa da araç statik sürtünmeyi yenmeli.
+            if target_speed > ego_speed + 0.05 and ego_speed < 0.50:
                 throttle = max(throttle, self.breakaway_throttle)
             return clamp(throttle, 0.0, self.maximum_throttle), 0.0
 

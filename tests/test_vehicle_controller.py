@@ -30,6 +30,66 @@ def location(x, y=0.0):
 
 
 class VehicleControllerIntegrationTests(unittest.TestCase):
+    def stopped_state(self, light_color):
+        return {
+            "location": location(0.0),
+            "yaw": 0.0,
+            "speed_mps": 0.0,
+            "speed_kmh": 0.0,
+            "reference_path": [location(x) for x in range(81)],
+            "lane_width": 3.5,
+            "road_id": 1,
+            "lane_id": -1,
+            "is_junction": False,
+            "simulator_traffic_light": {
+                "available": True,
+                "affected": True,
+                "color": light_color,
+            },
+        }
+
+    def test_stopped_vehicle_restarts_when_simulator_confirms_green(self):
+        controller = VehicleController(dt=0.05)
+        stale_camera_red = {
+            "color": "red",
+            "track_id": 12,
+            "estimated_distance_m": 5.8,
+            "confidence": 0.90,
+            "smoothed_confidence": 0.90,
+            "state_source": "camera_tracker",
+        }
+        road_context = {"lead_traffic_light": stale_camera_red}
+
+        stopped_control, stopped_info = controller.run_step(
+            self.stopped_state("red"),
+            lead_vehicle=None,
+            road_context=road_context,
+        )
+        controller.run_step(
+            self.stopped_state("green"),
+            lead_vehicle=None,
+            road_context=road_context,
+        )
+        green_control, green_info = controller.run_step(
+            self.stopped_state("green"),
+            lead_vehicle=None,
+            road_context=road_context,
+        )
+        restart_control, restart_info = controller.run_step(
+            self.stopped_state("green"),
+            lead_vehicle=None,
+            road_context=road_context,
+        )
+
+        self.assertEqual(stopped_info["mode"], "STOPPED_AT_RED")
+        self.assertEqual(stopped_control.throttle, 0.0)
+        self.assertGreater(stopped_control.brake, 0.0)
+        self.assertEqual(green_info["mode"], "START_ON_GREEN")
+        self.assertEqual(green_control.throttle, 0.0)
+        self.assertGreater(restart_control.throttle, 0.0)
+        self.assertEqual(restart_control.brake, 0.0)
+        self.assertEqual(restart_info["longitudinal"]["mode"], "RESTART")
+
     def test_immediate_collision_risk_overrides_throttle_with_full_brake(self):
         controller = VehicleController(dt=0.05)
         state = {

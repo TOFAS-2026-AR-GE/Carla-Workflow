@@ -109,6 +109,11 @@ class RoadContextTracker:
             "sensor_fault_age_frames": max(age_frames, fault_age_frames),
             "errors": dict(errors),
             "detections": list(self.latest_detections),
+            "traffic_light_candidates": self.traffic_light_candidates(
+                self.latest_detections,
+                route_center_x,
+                image_width,
+            ),
             "lead_traffic_light": lead_light,
             "speed_limit_kmh": self.current_speed_limit_kmh,
             "pedestrian": pedestrian,
@@ -442,6 +447,8 @@ class RoadContextTracker:
             item["track_id"] = track["track_id"]
             item["smoothed_confidence"] = track["smoothed_confidence"]
             item["stable_class_name"] = track["stable_class"]
+            item["candidate_class_name"] = track["candidate_class"]
+            item["candidate_hits"] = track["candidate_hits"]
             item["confirmed"] = track["stable_class"] is not None
             item["missed_frames"] = missed
             item["velocity_x_px_per_frame"] = track["velocity_x_px_per_frame"]
@@ -451,6 +458,34 @@ class RoadContextTracker:
             )
             outputs.append(item)
         return outputs
+
+    def traffic_light_candidates(self, detections, route_center_x, image_width):
+        """Sürüş koridorundaki ışıkların ham ve kararlı renklerini raporlar."""
+        candidates = []
+        for detection in detections:
+            if detection["category"] != "traffic_light":
+                continue
+            alignment = (
+                abs(detection["bbox_center"][0] - route_center_x)
+                / image_width
+            )
+            if alignment > 0.28:
+                continue
+            item = dict(detection)
+            observed_class = str(item.get("class_name", ""))
+            candidate_class = str(item.get("candidate_class_name", ""))
+            stable_class = str(item.get("stable_class_name", ""))
+            item["observed_color"] = self.traffic_light_color(observed_class)
+            item["candidate_color"] = self.traffic_light_color(candidate_class)
+            item["stable_color"] = self.traffic_light_color(stable_class)
+            candidates.append(item)
+        return candidates
+
+    def traffic_light_color(self, class_name):
+        """Model sınıf adından renk bölümünü güvenli biçimde çıkarır."""
+        if not class_name.startswith("traffic_light_"):
+            return None
+        return class_name.rsplit("_", 1)[-1]
 
     def required_confirmation_frames(self, category):
         if category == "traffic_light":
@@ -521,6 +556,13 @@ class RoadContextTracker:
             if selected_score is None or score < selected_score:
                 selected = dict(detection)
                 selected["color"] = stable_class.rsplit("_", 1)[-1]
+                selected["observed_color"] = self.traffic_light_color(
+                    str(detection.get("class_name", ""))
+                )
+                selected["candidate_color"] = self.traffic_light_color(
+                    str(detection.get("candidate_class_name", ""))
+                )
+                selected["state_source"] = "camera_tracker"
                 selected["lane_alignment"] = 1.0 - min(1.0, alignment / 0.28)
                 selected_score = score
         return selected

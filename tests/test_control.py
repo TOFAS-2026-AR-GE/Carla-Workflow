@@ -233,6 +233,25 @@ class LongitudinalPIDControllerTests(unittest.TestCase):
         self.assertEqual(throttle, 0.0)
         self.assertEqual(brake, controller.hold_brake)
 
+    def test_confirmed_green_target_releases_hold_and_uses_breakaway_throttle(self):
+        controller = LongitudinalPIDController(dt=0.05)
+        controller.run_step(
+            straight_state(speed_mps=0.0),
+            lead_vehicle=None,
+            target_speed=0.0,
+        )
+
+        throttle, brake, info = controller.run_step(
+            straight_state(speed_mps=0.0),
+            lead_vehicle=None,
+            target_speed=0.12,
+        )
+
+        self.assertEqual(info["mode"], "RESTART")
+        self.assertTrue(info["hold_released"])
+        self.assertGreaterEqual(throttle, controller.breakaway_throttle)
+        self.assertEqual(brake, 0.0)
+
     def test_pid_converges_near_seventy_kmh(self):
         controller = LongitudinalPIDController(dt=0.05)
         speed = 0.0

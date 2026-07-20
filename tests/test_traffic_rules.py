@@ -129,6 +129,25 @@ class RoadContextTests(unittest.TestCase):
         )
         self.assertEqual(context["lead_traffic_light"]["color"], "red")
 
+    def test_light_output_reports_green_candidate_before_confirmation(self):
+        box = (360, 90, 410, 180)
+        for frame_id in (1, 2, 3):
+            self.update(
+                frame_id,
+                [raw_object("traffic_light_red", box, distance_m=25.0)],
+            )
+
+        context = self.update(
+            4,
+            [raw_object("traffic_light_green", box, distance_m=25.0)],
+        )
+        selected = context["lead_traffic_light"]
+
+        self.assertEqual(selected["color"], "red")
+        self.assertEqual(selected["observed_color"], "green")
+        self.assertEqual(selected["candidate_color"], "green")
+        self.assertEqual(selected["candidate_hits"], 1)
+
     def test_near_light_wins_over_far_light(self):
         objects = [
             raw_object("traffic_light_red", (350, 100, 400, 190), distance_m=22.0),
@@ -291,6 +310,87 @@ class BehaviorPlannerTests(unittest.TestCase):
             decision["target_speed_mps"],
             self.parameters.green_start_acceleration_mps2 * 0.05,
         )
+
+    def test_simulator_green_releases_red_when_light_leaves_camera_view(self):
+        red_state = road_state(0.0)
+        red_state["simulator_traffic_light"] = {
+            "available": True,
+            "affected": True,
+            "color": "red",
+        }
+        first = self.planner.plan(
+            red_state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {"lead_traffic_light": light("red", 5.8)},
+        )
+        self.assertEqual(first["mode"], "STOPPED_AT_RED")
+
+        green_state = road_state(0.0)
+        green_state["simulator_traffic_light"] = {
+            "available": True,
+            "affected": True,
+            "color": "green",
+        }
+        still_waiting = self.planner.plan(
+            green_state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {},
+        )
+        released = self.planner.plan(
+            green_state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {},
+        )
+
+        self.assertEqual(still_waiting["mode"], "STOPPED_AT_RED")
+        self.assertEqual(released["mode"], "START_ON_GREEN")
+        self.assertIsNone(released["control_obstacle"])
+        self.assertEqual(
+            released["primary_detection"]["state_source"],
+            "carla_vehicle_state",
+        )
+
+    def test_old_camera_red_cannot_relatch_after_simulator_green(self):
+        state = road_state(0.0)
+        state["simulator_traffic_light"] = {
+            "available": True,
+            "affected": True,
+            "color": "red",
+        }
+        old_red = light("red", 5.8, track_id=7)
+        self.planner.plan(
+            state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {"lead_traffic_light": old_red},
+        )
+
+        state["simulator_traffic_light"]["color"] = "green"
+        self.planner.plan(
+            state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {"lead_traffic_light": old_red},
+        )
+        released = self.planner.plan(
+            state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {"lead_traffic_light": old_red},
+        )
+        next_tick = self.planner.plan(
+            state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {"lead_traffic_light": old_red},
+        )
+
+        self.assertEqual(released["mode"], "START_ON_GREEN")
+        self.assertNotEqual(next_tick["mode"], "STOPPED_AT_RED")
+        self.assertIsNone(next_tick["control_obstacle"])
 
     def test_confirmed_red_remains_active_after_camera_loses_the_light(self):
         state = road_state(3.0)

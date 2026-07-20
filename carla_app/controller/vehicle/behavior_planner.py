@@ -19,6 +19,9 @@ class BehaviorPlanner:
         self.last_light_color = None
         self.yellow_decisions = {}
         self.latched_stop_light = None
+        self.simulator_green_hits = 0
+        self.green_override_active = False
+        self.released_light = None
 
     def plan(
         self,
@@ -81,9 +84,7 @@ class BehaviorPlanner:
             confidence = self.detection_confidence(pedestrian)
             brake_urgency = "EMERGENCY" if pedestrian_risk == "EMERGENCY" else "NORMAL"
 
-        light = context.get("lead_traffic_light")
-        if light is None:
-            light = self.recall_stop_light(state)
+        light = self.resolve_traffic_light(context, state, ego_speed)
         if light is not None and pedestrian_risk not in {"PREPARE_STOP", "EMERGENCY"}:
             light_decision = self.evaluate_traffic_light(light, state, ego_speed)
             if light_decision["applies"]:
@@ -161,7 +162,12 @@ class BehaviorPlanner:
             if not light.get("latched_without_detection", False):
                 self.latch_stop_light(light, state)
             target_speed = self.approach_speed_mps(stop_distance)
-            stopped_at_line = ego_speed <= 0.15 and stop_distance <= 3.0
+            stopped_at_line = (
+                ego_speed <= self.parameters.traffic_light_stopped_speed_mps
+                and stop_distance <= 3.0
+            )
+            if stopped_at_line:
+                target_speed = 0.0
             mode = "STOPPED_AT_RED" if stopped_at_line else "APPROACH_RED_LIGHT"
             urgency = self.stopping_urgency(ego_speed, stop_distance)
             return {
@@ -230,6 +236,73 @@ class BehaviorPlanner:
                 }
         return self.no_light_decision()
 
+    def resolve_traffic_light(self, context, state, ego_speed):
+        """Kamera ışığını seçer, çizgideyken CARLA yeşiliyle kilidi açar.
+
+        Kamera kırmızıyı uzaktan bulup aracı durdurur. Çok yakında trafik
+        lambası görüntünün üstünden çıkabildiği için, yalnızca zaten durmuş
+        ve kırmızıya kilitlenmiş araçta CARLA'nın etkileyen ışık durumu
+        ikinci doğrulama olarak kullanılır.
+        """
+        camera_light = context.get("lead_traffic_light")
+        if camera_light is not None:
+            light = camera_light
+        else:
+            light = self.recall_stop_light(state)
+
+        simulator_light = state.get("simulator_traffic_light", {}) or {}
+        simulator_says_green = (
+            bool(simulator_light.get("available"))
+            and bool(simulator_light.get("affected"))
+            and simulator_light.get("color") == "green"
+        )
+
+        # Yeşil doğrulandıktan sonra kamera takipçisi birkaç kare daha eski
+        # kararlı kırmızıyı taşıyabilir. Aynı ışığın bu gecikmiş kırmızısını
+        # tekrar kilitlemeyiz; aksi durumda araç kalkıp hemen yeniden durur.
+        if self.green_override_active:
+            released_track_id = (self.released_light or {}).get("track_id")
+            camera_track_id = (camera_light or {}).get("track_id")
+            same_released_light = (
+                camera_light is not None
+                and camera_track_id == released_track_id
+            )
+            if simulator_says_green:
+                return self.make_confirmed_green(light or self.released_light)
+            if same_released_light and str(camera_light.get("color")) != "green":
+                return None
+            self.green_override_active = False
+            self.released_light = None
+
+        waiting_at_latched_red = (
+            self.latched_stop_light is not None
+            and light is not None
+            and str(light.get("color")) in {"red", "orange"}
+            and ego_speed <= 0.50
+        )
+
+        if simulator_says_green and waiting_at_latched_red:
+            self.simulator_green_hits += 1
+        else:
+            self.simulator_green_hits = 0
+
+        required_hits = self.parameters.simulator_green_confirmation_frames
+        if self.simulator_green_hits >= required_hits:
+            self.green_override_active = True
+            self.released_light = dict(light)
+            return self.make_confirmed_green(light)
+
+        return light
+
+    def make_confirmed_green(self, light):
+        """Kırmızı kaydından yeşil serbest bırakma algılaması üretir."""
+        green_light = dict(light or {})
+        green_light["color"] = "green"
+        green_light["observed_color"] = "green"
+        green_light["state_source"] = "carla_vehicle_state"
+        green_light["latched_without_detection"] = False
+        return green_light
+
     def latch_stop_light(self, light, state):
         """Dur ışığının dünya üzerindeki yaklaşık yerini saklar."""
         distance = self.detection_distance(light)
@@ -264,6 +337,7 @@ class BehaviorPlanner:
         light = dict(self.latched_stop_light["light"])
         light["estimated_distance_m"] = max(0.25, forward_distance)
         light["latched_without_detection"] = True
+        light["state_source"] = "latched_camera_red"
         return light
 
     def no_light_decision(self):

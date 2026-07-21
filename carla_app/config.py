@@ -148,6 +148,9 @@ class Settings:
         self.sign_class_names = _path(
             os.getenv("SIGN_CLASS_NAMES", "models/signs/class_names.json")
         )
+        self.lane_model = _path(
+            os.getenv("LANE_MODEL", "models/lane/ufld_carla_best.pth")
+        )
 
         self.vehicle_device = os.getenv("VEHICLE_DEVICE", "auto").strip()
         if not self.vehicle_device:
@@ -155,6 +158,9 @@ class Settings:
         self.sign_device = os.getenv("SIGN_DEVICE", "cpu").strip()
         if not self.sign_device:
             self.sign_device = "cpu"
+        self.lane_device = os.getenv("LANE_DEVICE", "auto").strip()
+        if not self.lane_device:
+            self.lane_device = "auto"
 
         self.vehicle_confidence = float(
             os.getenv("VEHICLE_CONFIDENCE", "0.05")
@@ -175,11 +181,20 @@ class Settings:
         self.sign_classifier_image_size = int(
             os.getenv("SIGN_CLASSIFIER_IMAGE_SIZE", "96")
         )
+        self.lane_confidence = min(
+            1.0,
+            max(0.0, float(os.getenv("LANE_CONFIDENCE", "0.30"))),
+        )
+        self.lane_minimum_points = max(
+            3,
+            int(os.getenv("LANE_MINIMUM_POINTS", "3")),
+        )
 
         # Birleşik araç modeli trafik ışığı ve 30/60/90 tabelalarını da tek
         # GPU geçişinde üretir. Eski iki-aşamalı ONNX tabela hattı yalnız
         # özellikle istenirse açılır; aksi halde aynı işi tekrarlayıp gecikme ekler.
         self.enable_sign_detection = _boolean("ENABLE_SIGN_DETECTION", False)
+        self.enable_lane_detection = _boolean("ENABLE_LANE_DETECTION", False)
         self.enable_lidar_fusion = _boolean("ENABLE_LIDAR_FUSION", True)
         old_recording_setting = _boolean("ENABLE_DATA_RECORDING", False)
         requested_sensor_mode = os.getenv("SENSOR_MODE", "").strip().lower()
@@ -226,6 +241,8 @@ class Settings:
                     self.sign_class_names,
                 )
             )
+        if self.enable_lane_detection:
+            required_models.append(self.lane_model)
 
         missing = []
         for path in required_models:

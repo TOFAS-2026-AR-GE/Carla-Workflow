@@ -33,6 +33,7 @@ class PerceptionViewer:
             signs = []
             errors = {}
             elapsed_ms = 0.0
+            lane_detection = {}
         else:
             image = result.get("image", fallback_image)
             result_frame_id = result.get("frame_id", fallback_frame_id)
@@ -40,6 +41,7 @@ class PerceptionViewer:
             signs = result.get("signs", [])
             errors = result.get("errors", {})
             elapsed_ms = float(result.get("elapsed_ms", 0.0))
+            lane_detection = result.get("lane_detection", {})
 
         if image is None and bev_image is None:
             return self._window_is_open() and self._read_key()
@@ -54,6 +56,7 @@ class PerceptionViewer:
             self._draw(frame, detection, (0, 220, 0), "VEH")
         for detection in signs:
             self._draw(frame, detection, (0, 165, 255), "SIGN")
+        self._draw_lanes(frame, lane_detection)
         road_context = road_context or {}
         for detection in road_context.get("detections", []):
             category = detection.get("category")
@@ -70,6 +73,8 @@ class PerceptionViewer:
             f"Frame {result_frame_id} | Vehicles {len(vehicles)} | "
             f"Signs {len(signs)} | Lag {lag} | {elapsed_ms:.1f} ms"
         )
+        if lane_detection.get("available"):
+            header += f" | Lanes {lane_detection.get('detected_count', 0)}"
         lead_light = road_context.get("lead_traffic_light")
         if lead_light is not None:
             header += f" | Lead {lead_light.get('color', '?')}"
@@ -230,3 +235,20 @@ class PerceptionViewer:
             2,
             cv2.LINE_AA,
         )
+
+    @staticmethod
+    def _draw_lanes(frame, lane_detection):
+        colors = ((0, 80, 255), (0, 220, 0), (255, 80, 0), (0, 220, 220))
+        for lane in lane_detection.get("lanes", []):
+            if not lane.get("detected") or len(lane.get("points", [])) < 2:
+                continue
+            points = np.asarray(lane["points"], dtype=np.int32).reshape(-1, 1, 2)
+            lane_index = int(lane.get("lane_index", 0))
+            cv2.polylines(
+                frame,
+                [points],
+                False,
+                colors[lane_index % len(colors)],
+                3,
+                cv2.LINE_AA,
+            )

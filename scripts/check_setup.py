@@ -32,6 +32,9 @@ if settings.enable_sign_detection:
             settings.sign_class_names,
         )
     )
+if settings.enable_lane_detection:
+    PACKAGES.append("torchvision")
+    model_paths.append(settings.lane_model)
 
 for package in PACKAGES:
     status = "OK" if find_spec(package) else "EKSIK"

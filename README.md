@@ -7,10 +7,9 @@ yaya ve viraj risklerini tek bir güvenli hedef hız kararında birleştirir.
 Kodun ana ilkesi şudur: her dosya tek bir iş yapar ve ana araç döngüsü bu
 parçaları açık bir sırayla çağırır.
 
-Canlı uygulama kodunda `dataclass`, `property`, `staticmethod`, `classmethod`,
-`lambda` ve iç içe liste üreteçleri kullanılmaz. Sınıflar yalnızca ilişkili
-durumu tutmak için, fonksiyonlar ise tek bir açık işi yapmak için kullanılır.
-Tekrarlanan işlemler görünür `for` döngüleriyle yazılmıştır.
+Projeye ilk kez bakıyorsanız önce kısa [mimari haritayı](ARCHITECTURE.md) okuyun.
+Bu README kurulum, parametreler ve algoritmalar için ayrıntılı başvuru belgesidir.
+Kodda sınıflar ilişkili durumu, fonksiyonlar ise sınırlı ve açık işleri tutar.
 
 ## Sistem akışı
 
@@ -19,8 +18,8 @@ Her CARLA karesinde aşağıdaki sıra izlenir:
 1. `application.py` dünya karesini ilerletir ve araç durumunu okur.
 2. `sensors/manager.py` seçilen moda göre gerekli sensörlerin en güncel
    verisini verir.
-3. `perception/system.py` kontrol modunda ön kamerayı, BEV modunda yedi
-   kamerayı aynı araç modeliyle işler.
+3. `perception/system.py` YOLO nesnelerini işler; UFLD açıksa yalnız ön
+   kamerada şeritleri görselleştirme/doğrulama amacıyla çıkarır.
 4. `perception/road_context.py` ham kutuları standart biçime çevirir, ardışık
    karelerde izler ve kamera mesafesini LiDAR ile doğrular.
 5. `controller/vehicle/lead_vehicle.py` kamera ile radarı birleştirip takip
@@ -50,10 +49,10 @@ Her CARLA karesinde aşağıdaki sıra izlenir:
 | `carla_app/sensors/sync.py` | Veri kaydında bütün sensörlerin aynı karesini bekler. |
 | `carla_app/sensors/processors.py` | CARLA sensör verisini NumPy ve sözlük biçimine çevirir. |
 | `carla_app/sensors/writer.py` | Tam sensör paketini `data/runs/` altına kaydeder. |
-| `carla_app/perception/` | YOLO trafik nesneleri, zamansal takip ve kamera-LiDAR mesafe doğrulamasıdır. |
+| `carla_app/perception/` | YOLO nesneleri, UFLD şeritleri, zamansal takip ve kamera-LiDAR doğrulamasıdır. |
 | `carla_app/bev/` | Kalibrasyonlu IPM, sensör füzyonu, takip ve occupancy grid üretir. |
 | `carla_app/controller/vehicle/` | Ön araç seçimi, direksiyon, hız, gaz-fren ve acil frendir. |
-| `carla_app/visualization/viewer.py` | Kamera kutularını, BEV açıksa iki panelli OpenCV penceresini gösterir. |
+| `carla_app/visualization/viewer.py` | Kamera kutularını, UFLD şeritlerini ve BEV panelini gösterir. |
 | `carla_app/visualization/sensor_layout.py` | Sensör yerleşimini tarayıcı verisine dönüştürür. |
 | `carla_app/visualization/sensor_layout.html` | Araba şeklindeki sensör ekranıdır. |
 | `scripts/` | Kurulum kontrolü, model kopyalama ve sensör ekranı komutlarıdır. |
@@ -92,6 +91,15 @@ Araç modeli şu konumdadır:
 ```text
 models/vehicle/carla_yolov8n_best.pt
 ```
+
+İsteğe bağlı CARLA UFLD şerit modelini indirmek için:
+
+```powershell
+conda run -n carla python scripts/download_lane_model.py
+```
+
+Linux'ta aktif Conda ortamında aynı komut `python scripts/download_lane_model.py`
+olarak çalıştırılır. Ağırlık yaklaşık 735 MB'dir ve Git deposuna eklenmez.
 
 Kontrol çıktısında `OK CUDA` ve ekran kartı adı görünmelidir. CPU-only PyTorch
 500–800 ms algılama gecikmesine yol açabilir. RTX 5070 üzerinde birleşik model
@@ -402,6 +410,11 @@ PERCEPTION_EVERY_N_FRAMES=1
 CAMERA_WAIT_TIMEOUT_MS=10
 
 ENABLE_SIGN_DETECTION=false
+ENABLE_LANE_DETECTION=false
+LANE_MODEL=models/lane/ufld_carla_best.pth
+LANE_DEVICE=auto
+LANE_CONFIDENCE=0.30
+LANE_MINIMUM_POINTS=3
 ENABLE_LIDAR_FUSION=true
 ENABLE_DATA_RECORDING=false
 SENSOR_MODE=control
@@ -421,6 +434,10 @@ MAXIMUM_SPEED_KMH=70
   ve 30/60/90 tabelalarını tek geçişte algılar. `true`, yalnız eski ayrı ONNX
   tabela dedektörü+sınıflandırıcısını ek doğrulama için ayrıca çalıştırır ve
   gecikmeyi artırır.
+- `ENABLE_LANE_DETECTION=true`: ResNet-18 tabanlı klasik UFLD'yi yalnız ön
+  kamerada çalıştırır. 800×288 RGB/ImageNet girdisinden dört şerit adayını,
+  piksel noktalarını ve güven değerlerini üretir. İlk aşamada sonuç yalnız
+  OpenCV katmanı ve doğrulama içindir; Pure Pursuit/MPC rotasını değiştirmez.
 - `ENABLE_LIDAR_FUSION=true`: zaman uyumlu LiDAR noktalarıyla kamera mesafesini doğrular.
 - `SENSOR_MODE=control`: kontrol için kamera, radar ve LiDAR sensörlerini açar.
 - `BEV_UPDATE_EVERY_N_FRAMES=2`: BEV açıkken 20 Hz simülasyonda en fazla

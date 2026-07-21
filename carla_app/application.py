@@ -380,6 +380,12 @@ class CarlaApplication:
             f" perception={float(perception_result.get('elapsed_ms', 0.0)):.1f}ms"
             f" queue={float(perception_result.get('queue_delay_ms', 0.0)):.1f}ms"
         )
+        lane_detection = perception_result.get("lane_detection", {})
+        if lane_detection.get("available"):
+            message += (
+                f" lanes={int(lane_detection.get('detected_count', 0))}"
+                f" lane_ms={float(lane_detection.get('elapsed_ms', 0.0)):.1f}"
+            )
 
         radar_age = radar_diagnostics.get("frame_age")
         message += f" radar_age={radar_age if radar_age is not None else '-'}"

@@ -14,6 +14,13 @@ if "ultralytics" not in sys.modules:
     sys.modules["ultralytics"] = ultralytics
 
 from carla_app.perception.fusion import fuse_detections_with_radar
+from carla_app.perception.lane_detector import (
+    LANE_COUNT,
+    ROW_COUNT,
+    LaneDetector,
+    decode_ufld_logits,
+    prepare_ufld_input,
+)
 from carla_app.perception.sign_detector import TrafficSignDetector
 from carla_app.perception.system import PerceptionSystem
 from carla_app.perception.vehicle_detector import VehicleDetector
@@ -175,6 +182,58 @@ class TrafficSignDetectorTests(unittest.TestCase):
         self.assertEqual(captured["device"], "cpu")
 
 
+class LaneDetectorTests(unittest.TestCase):
+    def test_rgb_preprocessing_uses_expected_shape_and_imagenet_order(self):
+        image = np.zeros((20, 30, 3), dtype=np.uint8)
+        image[:, :, 0] = 255
+
+        tensor = prepare_ufld_input(image)
+
+        self.assertEqual(tensor.shape, (1, 3, 288, 800))
+        self.assertEqual(tensor.dtype, np.float32)
+        self.assertAlmostEqual(float(tensor[0, 0, 10, 10]), (1.0 - 0.485) / 0.229)
+        self.assertAlmostEqual(float(tensor[0, 2, 10, 10]), -0.406 / 0.225)
+
+    def test_softmax_expectation_decodes_lane_in_source_coordinates(self):
+        logits = np.full((101, ROW_COUNT, LANE_COUNT), -12.0, dtype=np.float32)
+        logits[100, :, :] = 12.0
+        logits[49, :, 1] = 14.0
+
+        lanes = decode_ufld_logits(logits, image_width=1600, image_height=576)
+
+        lane = lanes[1]
+        self.assertTrue(lane["detected"])
+        self.assertEqual(len(lane["points"]), ROW_COUNT)
+        self.assertAlmostEqual(lane["points"][0][0], 806, delta=2)
+        self.assertEqual(lane["points"][0][1], 229)
+        self.assertGreater(lane["confidence"], 0.8)
+
+    def test_no_lane_class_produces_no_points(self):
+        logits = np.zeros((1, 101, ROW_COUNT, LANE_COUNT), dtype=np.float32)
+        logits[:, 100, :, :] = 10.0
+
+        lanes = decode_ufld_logits(logits, image_width=800, image_height=600)
+
+        self.assertTrue(all(not lane["detected"] for lane in lanes))
+        self.assertTrue(all(lane["points"] == [] for lane in lanes))
+
+    def test_ambiguous_grid_scores_are_not_reported_as_detected(self):
+        logits = np.zeros((101, ROW_COUNT, LANE_COUNT), dtype=np.float32)
+        logits[100, :, :] = -0.1
+
+        lanes = decode_ufld_logits(logits, image_width=800, image_height=600)
+
+        self.assertTrue(all(not lane["detected"] for lane in lanes))
+        self.assertTrue(all(lane["confidence"] < 0.30 for lane in lanes))
+
+    def test_checkpoint_wrapper_and_dataparallel_prefix_are_supported(self):
+        state = {"module.pool.weight": object()}
+        result = LaneDetector._state_dict_from_checkpoint(
+            {"epoch": 12, "model_state_dict": state}
+        )
+        self.assertEqual(list(result), ["pool.weight"])
+
+
 class PerceptionSystemTests(unittest.TestCase):
     def test_unified_model_keeps_traffic_signs_without_legacy_detector(self):
         system = PerceptionSystem.__new__(PerceptionSystem)
@@ -195,6 +254,7 @@ class PerceptionSystemTests(unittest.TestCase):
 
         self.assertEqual(len(result["signs"]), 1)
         self.assertEqual(result["signs"][0]["class_name"], "traffic_sign_60")
+        self.assertEqual(result["lane_detection"]["reason"], "disabled")
 
     def test_sign_failure_does_not_discard_vehicle_boxes(self):
         system = PerceptionSystem.__new__(PerceptionSystem)
@@ -219,6 +279,31 @@ class PerceptionSystemTests(unittest.TestCase):
         self.assertEqual(len(result["vehicles"]), 1)
         self.assertEqual(result["signs"], [])
         self.assertIn("sign", result["errors"])
+
+    def test_lane_failure_does_not_discard_other_perception_results(self):
+        system = PerceptionSystem.__new__(PerceptionSystem)
+        system.vehicle_detector = types.SimpleNamespace(
+            detect_objects=lambda image: [
+                {
+                    "type": "vehicle",
+                    "bbox": (1, 2, 30, 40),
+                    "confidence": 0.9,
+                    "class_name": "vehicle",
+                }
+            ]
+        )
+        system.sign_detector = None
+        system.lane_detector = types.SimpleNamespace(
+            detect=lambda image: (_ for _ in ()).throw(RuntimeError("lane failed"))
+        )
+        system._last_errors = {}
+
+        with redirect_stdout(StringIO()):
+            result = system.detect(8, np.zeros((20, 30, 3), dtype=np.uint8))
+
+        self.assertEqual(len(result["vehicles"]), 1)
+        self.assertEqual(result["lane_detection"]["reason"], "error")
+        self.assertIn("lane", result["errors"])
 
     def test_multi_camera_result_keeps_primary_control_shape(self):
         system = PerceptionSystem.__new__(PerceptionSystem)
@@ -262,6 +347,40 @@ class PerceptionSystemTests(unittest.TestCase):
             result["camera_results"]["camera_rear_center"]["frame_id"],
             9,
         )
+
+    def test_multi_camera_lane_model_runs_only_on_primary_camera(self):
+        calls = []
+        system = PerceptionSystem.__new__(PerceptionSystem)
+        system.vehicle_detector = types.SimpleNamespace(
+            detect_many=lambda images: {name: [] for name in images}
+        )
+        system.sign_detector = None
+        system.lane_detector = types.SimpleNamespace(
+            detect=lambda image: calls.append(image)
+            or {
+                "available": True,
+                "lanes": [],
+                "detected_count": 0,
+                "elapsed_ms": 1.0,
+            }
+        )
+        system._last_errors = {}
+        front = np.zeros((40, 60, 3), dtype=np.uint8)
+        rear = np.ones((40, 60, 3), dtype=np.uint8)
+        packet = {
+            "camera_front_wide": {"frame_id": 10, "data": front},
+            "camera_rear_center": {"frame_id": 10, "data": rear},
+        }
+
+        result = system.detect_cameras(packet, "camera_front_wide")
+
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0], front)
+        self.assertTrue(result["lane_detection"]["available"])
+        rear_lane = result["camera_results"]["camera_rear_center"][
+            "lane_detection"
+        ]
+        self.assertEqual(rear_lane["reason"], "not_primary_camera")
 
 
 class FusionTests(unittest.TestCase):

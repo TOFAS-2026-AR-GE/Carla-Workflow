@@ -1,7 +1,8 @@
-"""Araç ve isteğe bağlı trafik levhası algılamasını birlikte yönetir."""
+"""Nesne, trafik levhası ve şerit algılamasını hata yalıtımıyla yönetir."""
 
 import time
 
+from carla_app.perception.lane_detector import LaneDetector
 from carla_app.perception.sign_detector import TrafficSignDetector
 from carla_app.perception.vehicle_detector import VehicleDetector
 
@@ -33,6 +34,17 @@ class PerceptionSystem:
         else:
             print("[INFO] Trafik levhasi algilama kapali.")
 
+        self.lane_detector = None
+        if settings.enable_lane_detection:
+            self.lane_detector = LaneDetector(
+                settings.lane_model,
+                settings.lane_device,
+                settings.lane_minimum_points,
+                settings.lane_confidence,
+            )
+        else:
+            print("[INFO] UFLD serit algilama kapali.")
+
         self._last_errors = {}
 
     def detect(self, frame_id, rgb_image):
@@ -53,6 +65,7 @@ class PerceptionSystem:
             errors=errors,
         )
         signs.extend(model_signs)
+        lane_detection = self._detect_lane_safely(rgb_image, errors)
 
         return {
             "frame_id": int(frame_id),
@@ -60,6 +73,7 @@ class PerceptionSystem:
             "vehicles": vehicles,
             "signs": signs,
             "objects": objects,
+            "lane_detection": lane_detection,
             "errors": errors,
             "elapsed_ms": (time.perf_counter() - start) * 1000.0,
         }
@@ -90,6 +104,9 @@ class PerceptionSystem:
                     image=image,
                     errors=camera_errors,
                 )
+                lane_detection = self._detect_lane_safely(image, camera_errors)
+            else:
+                lane_detection = self._lane_unavailable("not_primary_camera")
             signs.extend(model_signs)
 
             camera_results[camera_name] = {
@@ -99,6 +116,7 @@ class PerceptionSystem:
                 "vehicles": vehicles,
                 "signs": signs,
                 "objects": objects,
+                "lane_detection": lane_detection,
                 "errors": camera_errors,
             }
 
@@ -110,6 +128,7 @@ class PerceptionSystem:
                 "vehicles": [],
                 "signs": [],
                 "objects": [],
+                "lane_detection": self._lane_unavailable("missing_primary_camera"),
                 "errors": {"camera": "Birincil kamera pakette yok."},
                 "camera_results": camera_results,
                 "elapsed_ms": (time.perf_counter() - start) * 1000.0,
@@ -121,27 +140,11 @@ class PerceptionSystem:
             "vehicles": primary_result["vehicles"],
             "signs": primary_result["signs"],
             "objects": primary_result["objects"],
+            "lane_detection": primary_result["lane_detection"],
             "errors": primary_result["errors"],
             "camera_results": camera_results,
             "elapsed_ms": (time.perf_counter() - start) * 1000.0,
         }
-
-    def detect_vehicles_safely(self, images_by_name, errors):
-        """Çoklu kamera model hatasını ana uygulamaya yaymadan yakalar."""
-        try:
-            detections = self.vehicle_detector.detect_many(images_by_name)
-        except Exception as error:
-            message = f"{type(error).__name__}: {error}"
-            errors["vehicle"] = message
-            if self._last_errors.get("vehicle") != message:
-                print(f"[ERROR] vehicle detector: {message}")
-            self._last_errors["vehicle"] = message
-            return {}
-
-        if "vehicle" in self._last_errors:
-            print("[OK] vehicle detector yeniden calisiyor.")
-            self._last_errors.pop("vehicle", None)
-        return detections
 
     def detect_objects_safely(self, images_by_name, errors):
         """Model destekliyorsa bütün trafik sınıflarını tek toplu çağrıda alır."""
@@ -202,15 +205,29 @@ class PerceptionSystem:
         try:
             detections = detector.detect(image)
         except Exception as error:
-            message = f"{type(error).__name__}: {error}"
-            errors[name] = message
-            if self._last_errors.get(name) != message:
-                print(f"[ERROR] {name} detector: {message}")
-            self._last_errors[name] = message
-            return []
-
-        if name in self._last_errors:
-            print(f"[OK] {name} detector yeniden calisiyor.")
-            self._last_errors.pop(name, None)
-
+            return self._handle_detection_error(name, error, errors, [])
+        self._clear_detection_error(name)
         return detections
+
+    def _detect_lane_safely(self, image, errors):
+        detector = getattr(self, "lane_detector", None)
+        if detector is None:
+            return self._lane_unavailable("disabled")
+        try:
+            result = detector.detect(image)
+        except Exception as error:
+            self._handle_detection_error("lane", error, errors, None)
+            return self._lane_unavailable("error")
+        self._clear_detection_error("lane")
+        return result
+
+    @staticmethod
+    def _lane_unavailable(reason):
+        return {
+            "available": False,
+            "model": "ufld_resnet18_carla",
+            "lanes": [],
+            "detected_count": 0,
+            "elapsed_ms": 0.0,
+            "reason": reason,
+        }

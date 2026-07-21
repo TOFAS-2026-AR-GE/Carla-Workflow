@@ -10,3 +10,5 @@ artifacts/
 data/runs/
 graphify-out/
 witness-output/
+models/lane/*.pth
+models/lane/.cache/

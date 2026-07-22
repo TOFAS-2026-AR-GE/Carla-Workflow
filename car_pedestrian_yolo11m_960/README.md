@@ -18,10 +18,9 @@ kullanılacaksa `onnxruntime-gpu` yerine `onnxruntime` kurulabilir.
 ## İçerik
 
 - `model/yolo11m_960_best.onnx`: ONNX/CARLA kullanımı
-- `model/yolo11m_960_best.pt`: eğitim, doğrulama ve yeniden export
+- `model/yolo11m_960_best.pt`: eğitim ve yeniden export
 - `scripts/detect.py`: görüntü, klasör, video, webcam veya akış üzerinde detector
 - `scripts/train_yolo11m_960.py`: parametreli eğitim
-- `scripts/validate_yolo11m_960.py`: sınıf bazlı doğrulama ve grafik üretimi
 - `scripts/bdd100k_to_yolo.py`: BDD100K JSON etiketlerini YOLO'ya dönüştürür
 - `scripts/prepare_combined_6cls.py`: BDD100K ve nuImages'i altı sınıfta birleştirir
 - `graphs/` ve `samples/`: eğitim raporu ve örnek tahminler
@@ -80,21 +79,15 @@ python3 scripts/prepare_combined_6cls.py --seed 42
 Bu işlem `datasets/combined_6cls` klasörünü yeniden oluşturur ve içine taşınabilir `dataset.yaml`
 yazar. Aynı görüntü sayısını üretmek için aynı BDD100K ve nuImages sürümleri kullanılmalıdır.
 
-## Eğitim ve doğrulama
+## Eğitim
 
 ```bash
 python3 scripts/train_yolo11m_960.py \
   --batch 48 --device 0 --imgsz 960 --epochs 50
 ```
 
-6 GB VRAM'de batch düşürülmelidir. Doğrulama:
-
-```bash
-python3 scripts/validate_yolo11m_960.py \
-  --batch 1 --device 0
-```
-
-Farklı konumdaki dataset için her iki komutta da `--data /yol/dataset.yaml` kullanılabilir.
+6 GB VRAM'de batch düşürülmelidir. Farklı konumdaki dataset için
+`--data /yol/dataset.yaml` kullanılabilir.
 
 ## Deployment için minimum dosyalar
 

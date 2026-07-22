@@ -84,7 +84,7 @@ def test_red_light_activates_at_comfortable_stopping_distance():
         maximum_distance_m=70.0,
     )
     assert observer.requires_stop("red", 25.0, 8.33) is True
-    assert observer.requires_stop("red", 55.0, 8.33) is False
+    assert observer.requires_stop("red", 40.0, 8.33) is False
 
 
 def test_red_light_braking_starts_with_jerk_limited_command():
@@ -105,13 +105,13 @@ def test_red_light_braking_starts_with_jerk_limited_command():
     assert throttle == 0.0
     assert brake < 0.10
     assert info["acceleration_mps2"] >= -0.11
-    assert controller.traffic_light_max_deceleration_mps2 == 1.8
+    assert controller.traffic_light_max_deceleration_mps2 == 4.0
 
 
 def test_red_light_stops_near_line_without_full_brake():
     controller = LongitudinalController(dt=0.05)
     speed_mps = 8.33
-    distance_m = 45.0
+    distance_m = 25.0
     maximum_brake = 0.0
 
     for _ in range(500):
@@ -141,5 +141,5 @@ def test_red_light_stops_near_line_without_full_brake():
             break
 
     assert info["hold_active"] is True
-    assert 1.10 <= distance_m <= 2.10
+    assert 0.20 <= distance_m <= 0.65
     assert maximum_brake <= 0.35

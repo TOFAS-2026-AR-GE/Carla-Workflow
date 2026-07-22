@@ -58,5 +58,4 @@ def test_red_light_uses_short_stop_line_gap_not_vehicle_gap():
     _, _, info = controller.run_step(state(5.0), light, 12.0)
     assert info["mode"] == "STOP_RED"
     assert info["desired_gap_m"] < 10.0
-    assert info["desired_acceleration_mps2"] <= 0.0
-    assert info["red_stop_plan"]["phase"] in {"PROFILE", "EMERGENCY"}
+    assert info["desired_acceleration_mps2"] < 0.0

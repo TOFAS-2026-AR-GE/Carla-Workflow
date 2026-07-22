@@ -70,7 +70,7 @@ class Settings:
     follow_gap_m: float = 10.0
     follow_gap_margin_m: float = 1.5
     traffic_light_ground_truth_fallback: bool = False
-    traffic_light_max_distance_m: float = 160.0
+    traffic_light_max_distance_m: float = 70.0
     dashboard_history_seconds: float = 20.0
 
     @classmethod
@@ -186,7 +186,7 @@ class Settings:
             ),
             traffic_light_max_distance_m=max(
                 20.0,
-                float(get("TRAFFIC_LIGHT_MAX_DISTANCE_M", "160.0")),
+                float(get("TRAFFIC_LIGHT_MAX_DISTANCE_M", "70.0")),
             ),
             dashboard_history_seconds=max(
                 5.0,

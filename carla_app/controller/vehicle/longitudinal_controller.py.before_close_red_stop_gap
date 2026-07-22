@@ -46,9 +46,7 @@ class LongitudinalController:
         self.follow_gap_margin_m = max(0.2, float(follow_gap_margin_m))
         self.time_headway_s = 0.0
         self.acceleration_exponent = 4.0
-        # 20 cm profil hedefi + 10 cm HOLD yakalama payı,
-        # gerçek duruşu yaklaşık 30 cm civarına getirir.
-        self.traffic_light_stop_gap_m = 0.20
+        self.traffic_light_stop_gap_m = 1.20
         self.maximum_acceleration_mps2 = 1.6
         self.comfortable_deceleration_mps2 = 2.2
         self.maximum_deceleration_mps2 = 4.5
@@ -92,7 +90,7 @@ class LongitudinalController:
         # Stop-and-go brake hold.
         self.hold_speed_mps = 0.15
         self.vehicle_hold_distance_m = self.minimum_vehicle_gap_m + 0.25
-        self.traffic_light_hold_distance_m = self.traffic_light_stop_gap_m + 0.10
+        self.traffic_light_hold_distance_m = self.traffic_light_stop_gap_m + 0.65
         # Backward-compatible names used by earlier tests/configuration.
         self.hold_distance_m = self.vehicle_hold_distance_m
         self.hold_lead_speed_mps = 0.20

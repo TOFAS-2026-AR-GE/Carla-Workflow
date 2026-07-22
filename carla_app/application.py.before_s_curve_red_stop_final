@@ -55,7 +55,7 @@ class CarlaApplication:
             route_manager = PersistentRouteManager(
                 world.get_map(),
                 spacing_m=1.0,
-                horizon_m=170.0,
+                horizon_m=80.0,
                 recovery_distance_m=8.0,
                 recovery_ticks=max(10, int(round(1.0 / dt))),
             )
@@ -366,13 +366,6 @@ class CarlaApplication:
             message += f"/{float(light_distance):.1f}m"
         if traffic_light.get("requires_stop"):
             message += " tl_stop"
-            red_plan = longitudinal.get("red_stop_plan", {}) or {}
-            message += f" red_phase={red_plan.get('phase', 'IDLE')}"
-            red_target = red_plan.get("target_speed_mps")
-            if red_target is not None:
-                message += f" red_vref={float(red_target) * 3.6:.1f}km/h"
-            if red_plan.get("emergency"):
-                message += " red_emergency"
 
         speed_sign = control_info.get("speed_sign", {})
         if speed_sign.get("speed_limit_kmh") is not None:
@@ -403,18 +396,10 @@ class CarlaApplication:
             )
         elif "RED" in mode or "YELLOW" in mode:
             light = control_info.get("traffic_light", {})
-            red_plan = (
-                control_info.get("longitudinal", {}).get(
-                    "red_stop_plan",
-                    {},
-                )
-                or {}
-            )
             message += (
                 f" light={light.get('state')}"
                 f" distance={light.get('distance_m')}m"
                 f" source={light.get('source')}"
-                f" phase={red_plan.get('phase', 'IDLE')}"
             )
         elif mode in ("FOLLOW", "HOLD", "LEAD_FAR", "RESTART"):
             lead = control_info.get("longitudinal_lead") or {}
@@ -449,12 +434,6 @@ class CarlaApplication:
             ),
             "traffic_light_state": traffic_light.get("state"),
             "traffic_light_distance_m": traffic_light.get("distance_m"),
-            "red_stop_phase": (
-                longitudinal.get("red_stop_plan", {}) or {}
-            ).get("phase"),
-            "red_stop_target_speed_mps": (
-                longitudinal.get("red_stop_plan", {}) or {}
-            ).get("target_speed_mps"),
             "speed_sign_limit_kmh": speed_sign.get("speed_limit_kmh"),
             "speed_sign_class_name": speed_sign.get("class_name"),
             "turn_signal": control_info.get("turn_signal", {}).get("direction"),

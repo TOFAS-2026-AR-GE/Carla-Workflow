@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import math
 
-from carla_app.controller.vehicle.smooth_stop_planner import SmoothStopPlanner
-
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(value, maximum))
@@ -46,33 +44,20 @@ class LongitudinalController:
         self.follow_gap_margin_m = max(0.2, float(follow_gap_margin_m))
         self.time_headway_s = 0.0
         self.acceleration_exponent = 4.0
-        # 20 cm profil hedefi + 10 cm HOLD yakalama payı,
-        # gerçek duruşu yaklaşık 30 cm civarına getirir.
-        self.traffic_light_stop_gap_m = 0.20
+        self.traffic_light_stop_gap_m = 0.40
         self.maximum_acceleration_mps2 = 1.6
         self.comfortable_deceleration_mps2 = 2.2
         self.maximum_deceleration_mps2 = 4.5
-
-        # Kırmızı ışık, araç takip IDM'inden bağımsız bir S-eğrisi duruş
-        # planlayıcısıyla yönetilir. Fren ivmesi hem başlangıçta hem duruş
-        # anında sıfıra yaklaşır.
-        self.red_stop_planner = SmoothStopPlanner(
-            dt=self.dt,
-            stop_gap_m=self.traffic_light_stop_gap_m,
-        )
-        self.last_red_stop_info = self.red_stop_planner.info(
-            distance_m=0.0,
-            effective_distance_m=0.0,
-        )
-        self.traffic_light_max_deceleration_mps2 = (
-            self.red_stop_planner.comfort_peak_deceleration_mps2
-        )
-        self.traffic_light_emergency_deceleration_mps2 = (
-            self.red_stop_planner.maximum_deceleration_mps2
-        )
-        self.traffic_light_braking_jerk_mps3 = 1.10
-        self.traffic_light_late_braking_jerk_mps3 = 7.00
-        self.traffic_light_late_deceleration_mps2 = 3.00
+        # Normalde aktivasyon mesafesi yaklaşık 2.2 m/s² rahat
+        # yavaşlama üretir. Işık geç görülürse durabilmek için daha yüksek
+        # güvenlik tavanına izin verilir.
+        self.traffic_light_max_deceleration_mps2 = 4.0
+        self.traffic_light_emergency_deceleration_mps2 = 8.0
+        self.traffic_light_braking_jerk_mps3 = 2.0
+        self.traffic_light_late_braking_jerk_mps3 = 8.0
+        self.traffic_light_late_deceleration_mps2 = 4.0
+        self.traffic_light_plan_adjustment_mps3 = 0.60
+        self.traffic_light_planned_deceleration_mps2 = None
 
         # Jerk and pedal mapping.
         self.acceleration_jerk_mps3 = 1.5
@@ -91,15 +76,12 @@ class LongitudinalController:
 
         # Stop-and-go brake hold.
         self.hold_speed_mps = 0.15
-        self.vehicle_hold_distance_m = self.minimum_vehicle_gap_m + 0.25
-        self.traffic_light_hold_distance_m = self.traffic_light_stop_gap_m + 0.10
+        self.vehicle_hold_distance_m = self.minimum_vehicle_gap_m + 0.18
+        self.traffic_light_hold_distance_m = self.traffic_light_stop_gap_m + 0.15
         # Backward-compatible names used by earlier tests/configuration.
         self.hold_distance_m = self.vehicle_hold_distance_m
         self.hold_lead_speed_mps = 0.20
-        self.hold_brake = 0.22
-        self.previous_brake = 0.0
-        self.traffic_light_brake_apply_rate_per_s = 0.65
-        self.traffic_light_brake_release_rate_per_s = 0.90
+        self.hold_brake = 0.30
         self.hold_release_speed_mps = 0.30
         self.hold_release_lead_speed_mps = self.hold_release_speed_mps
         self.hold_release_distance_margin_m = 0.60
@@ -120,7 +102,6 @@ class LongitudinalController:
         self.filtered_distance_m = None
         self.filtered_lead_speed_mps = None
         self.filtered_source = None
-        self.active_stop_line_id = None
 
     def run_step(
         self,
@@ -147,21 +128,6 @@ class LongitudinalController:
         lead_is_far = False
 
         if lead is not None and lead_confirmed:
-            source = str(lead.get("source", "unknown"))
-            if source.startswith("traffic_light"):
-                stop_line_id = lead.get("stop_line_id")
-                if (
-                    self.active_stop_line_id is not None
-                    and stop_line_id is not None
-                    and stop_line_id != self.active_stop_line_id
-                ):
-                    # Yeni kavşağa geçildi: önceki ışığın mesafe profilini
-                    # taşımadan yeni duruş planını başlat. İvme hafızası
-                    # korunur; dolayısıyla pedal komutunda sıçrama oluşmaz.
-                    self.red_stop_planner.reset()
-                if stop_line_id is not None:
-                    self.active_stop_line_id = stop_line_id
-
             desired_gap = self.calculate_desired_gap(
                 ego_speed=ego_speed,
                 relative_speed=lead["relative_speed_mps"],
@@ -203,12 +169,7 @@ class LongitudinalController:
             else "unknown"
         )
         if not active_source.startswith("traffic_light"):
-            self.active_stop_line_id = None
-            self.red_stop_planner.reset()
-            self.last_red_stop_info = self.red_stop_planner.info(
-                distance_m=0.0,
-                effective_distance_m=0.0,
-            )
+            self.traffic_light_planned_deceleration_mps2 = None
 
         deceleration_limit = (
             self.traffic_light_emergency_deceleration_mps2
@@ -231,19 +192,9 @@ class LongitudinalController:
         )
 
         if self.hold_active:
-            # Son hız sıfıra yaklaşırken fren ivmesini bir anda kesme. Düşük
-            # tutma frenine küçük bir pedal rampasıyla geç.
-            self.previous_acceleration_mps2 = min(
-                0.0,
-                self.previous_acceleration_mps2
-                + self.traffic_light_braking_jerk_mps3 * self.dt,
-            )
-            acceleration = self.previous_acceleration_mps2
-            throttle = 0.0
-            brake = self.limit_traffic_light_brake(
-                self.hold_brake,
-                emergency=False,
-            )
+            self.previous_acceleration_mps2 = 0.0
+            acceleration = 0.0
+            throttle, brake = 0.0, self.hold_brake
             mode = self.hold_mode(self.hold_source)
         else:
             acceleration = self.limit_jerk(
@@ -254,20 +205,13 @@ class LongitudinalController:
                 acceleration,
                 ego_speed,
             )
-            if active_source.startswith("traffic_light"):
-                # Negatif plan komutunda gaz tamamen kesilir. Araç fiziği
-                # planlanandan fazla yavaşlatmışsa planlayıcının en fazla
-                # 0.35 m/s² olan küçük toparlama komutuna izin verilir.
-                if desired_acceleration <= 0.0:
-                    throttle = 0.0
-                brake = self.limit_traffic_light_brake(
-                    brake,
-                    emergency=bool(
-                        self.last_red_stop_info.get("emergency", False)
-                    ),
-                )
-            else:
-                self.previous_brake = float(brake)
+            if (
+                active_source.startswith("traffic_light")
+                and desired_acceleration < 0.0
+            ):
+                # Kırmızı ışık görülür görülmez gazı bırak; jerk sınırlayıcı
+                # fren kuvvetini yumuşak biçimde artırırken araç önce süzülsün.
+                throttle = 0.0
             mode = self.select_mode(
                 lead=lead,
                 lead_confirmed=lead_confirmed,
@@ -303,12 +247,8 @@ class LongitudinalController:
             "hold_active": self.hold_active,
             "hold_source": self.hold_source,
             "restart_active": mode == "RESTART",
-            "red_stop_plan": dict(self.last_red_stop_info),
             "traffic_light_planned_deceleration_mps2": (
-                -float(self.last_red_stop_info.get(
-                    "reference_acceleration_mps2",
-                    0.0,
-                ))
+                self.traffic_light_planned_deceleration_mps2
             ),
         }
         return throttle, brake, info
@@ -393,13 +333,75 @@ class LongitudinalController:
         source: str,
     ) -> float:
         if str(source).startswith("traffic_light"):
-            acceleration, planner_info = self.red_stop_planner.update(
-                speed_mps=ego_speed_mps,
-                distance_m=distance_m,
-                active=True,
+            gap_error = float(distance_m) - self.traffic_light_stop_gap_m
+
+            # If braking has already reduced speed too much, creep towards the
+            # stop line instead of remaining several metres behind it.
+            if gap_error > 0.35 and ego_speed_mps < 1.00:
+                crawl_target_speed = clamp(
+                    0.20 + 0.28 * gap_error,
+                    0.20,
+                    0.75,
+                )
+                return clamp(
+                    0.90 * (crawl_target_speed - ego_speed_mps),
+                    -1.20,
+                    0.45,
+                )
+
+            if gap_error <= 0.0:
+                return -clamp(
+                    1.0 + 1.5 * ego_speed_mps,
+                    0.0,
+                    self.traffic_light_max_deceleration_mps2,
+                )
+
+            usable_distance = max(0.20, gap_error)
+            required_deceleration = (
+                ego_speed_mps * ego_speed_mps / (2.0 * usable_distance)
             )
-            self.last_red_stop_info = planner_info
-            return float(acceleration)
+            required_deceleration = clamp(
+                required_deceleration,
+                0.0,
+                self.traffic_light_emergency_deceleration_mps2,
+            )
+
+            # İlk kırmızı kabul edildiğinde gereken yavaşlama planlanır.
+            # İdeal sabit ivmeli harekette v²/(2d) yol boyunca aynı kalır.
+            # Ölçüm gürültüsü nedeniyle hedefi yalnız yavaşça düzeltiriz.
+            if self.traffic_light_planned_deceleration_mps2 is None:
+                self.traffic_light_planned_deceleration_mps2 = (
+                    required_deceleration
+                )
+            elif (
+                required_deceleration
+                >= self.traffic_light_late_deceleration_mps2
+            ):
+                # Geç algılama veya yetersiz kalan mesafe: konforu değil,
+                # kırmızıda durmayı önceliklendir.
+                self.traffic_light_planned_deceleration_mps2 = max(
+                    self.traffic_light_planned_deceleration_mps2,
+                    required_deceleration,
+                )
+            else:
+                maximum_adjustment = (
+                    self.traffic_light_plan_adjustment_mps3 * self.dt
+                )
+                plan_error = (
+                    required_deceleration
+                    - self.traffic_light_planned_deceleration_mps2
+                )
+                self.traffic_light_planned_deceleration_mps2 += clamp(
+                    plan_error,
+                    -maximum_adjustment,
+                    maximum_adjustment,
+                )
+
+            return -clamp(
+                self.traffic_light_planned_deceleration_mps2,
+                0.0,
+                self.traffic_light_emergency_deceleration_mps2,
+            )
 
         ratio = desired_gap_m / max(distance_m, 0.25)
         closing_speed = max(0.0, -relative_speed_mps)
@@ -520,7 +522,6 @@ class LongitudinalController:
         return "HOLD"
 
     def notify_emergency_stop(self) -> None:
-        self.red_stop_planner.reset()
         self.previous_acceleration_mps2 = 0.0
         self.speed_integral = 0.0
         self.restart_ticks_remaining = 0
@@ -558,21 +559,6 @@ class LongitudinalController:
 
         source = str(lead.get("source", "unknown"))
         measured_lead_speed = max(0.0, ego_speed + lead["relative_speed_mps"])
-
-        # Stop line is static and its distance is already route-aligned and
-        # filtered by TrafficLightObserver. Generic moving-lead filtering would
-        # add phase lag and spoil the stop profile.
-        if source.startswith("traffic_light"):
-            self.filtered_distance_m = float(lead["distance_m"])
-            self.filtered_lead_speed_mps = 0.0
-            self.filtered_source = source
-            filtered = dict(lead)
-            filtered["distance_m"] = self.filtered_distance_m
-            filtered["lead_speed_mps"] = 0.0
-            filtered["relative_speed_mps"] = -ego_speed
-            filtered["measured_lead_speed_mps"] = 0.0
-            return filtered
-
         source_changed = source != self.filtered_source
         if self.filtered_distance_m is None or source_changed:
             self.filtered_distance_m = lead["distance_m"]
@@ -606,22 +592,17 @@ class LongitudinalController:
         desired_acceleration: float,
         source: str = "unknown",
     ) -> float:
-        if str(source).startswith("traffic_light"):
-            planned_jerk = float(
-                self.last_red_stop_info.get(
-                    "jerk_mps3",
-                    self.traffic_light_braking_jerk_mps3,
-                )
-            )
-            if bool(self.last_red_stop_info.get("emergency", False)):
+        if (
+            str(source) == "traffic_light_red"
+            and desired_acceleration < self.previous_acceleration_mps2
+        ):
+            if (
+                -float(desired_acceleration)
+                >= self.traffic_light_late_deceleration_mps2
+            ):
                 jerk_limit = self.traffic_light_late_braking_jerk_mps3
             else:
-                # Planın kendi jerk değerinden biraz yüksek sınır verilir;
-                # böylece hız geri beslemesi uygulanırken profil boğulmaz.
-                jerk_limit = max(
-                    self.traffic_light_braking_jerk_mps3,
-                    1.20 * planned_jerk,
-                )
+                jerk_limit = self.traffic_light_braking_jerk_mps3
         else:
             jerk_limit = (
                 self.acceleration_jerk_mps3
@@ -637,35 +618,6 @@ class LongitudinalController:
         )
         self.previous_acceleration_mps2 += change
         return self.previous_acceleration_mps2
-
-    def limit_traffic_light_brake(
-        self,
-        target_brake: float,
-        emergency: bool,
-    ) -> float:
-        target_brake = clamp(float(target_brake), 0.0, self.maximum_brake)
-        if emergency:
-            apply_rate = 4.0
-        else:
-            apply_rate = self.traffic_light_brake_apply_rate_per_s
-
-        rate = (
-            apply_rate
-            if target_brake >= self.previous_brake
-            else self.traffic_light_brake_release_rate_per_s
-        )
-        maximum_change = rate * self.dt
-        self.previous_brake += clamp(
-            target_brake - self.previous_brake,
-            -maximum_change,
-            maximum_change,
-        )
-        self.previous_brake = clamp(
-            self.previous_brake,
-            0.0,
-            self.maximum_brake,
-        )
-        return self.previous_brake
 
     def convert_acceleration_to_pedals(
         self,
@@ -700,13 +652,7 @@ class LongitudinalController:
 
         if not math.isfinite(distance) or not math.isfinite(relative_speed):
             return None
-        source = str(lead_vehicle.get("source", "unknown"))
-        maximum_distance_m = (
-            250.0
-            if source.startswith("traffic_light")
-            else 120.0
-        )
-        if not 0.20 < distance <= maximum_distance_m:
+        if not 0.20 < distance <= 120.0:
             return None
         if not -40.0 <= relative_speed <= 40.0:
             return None
@@ -718,14 +664,8 @@ class LongitudinalController:
         }
 
     def reset(self) -> None:
-        self.red_stop_planner.reset()
-        self.last_red_stop_info = self.red_stop_planner.info(
-            distance_m=0.0,
-            effective_distance_m=0.0,
-        )
         self.speed_integral = 0.0
         self.previous_acceleration_mps2 = 0.0
-        self.previous_brake = 0.0
         self.hold_active = False
         self.hold_source = None
         self.release_evidence_ticks = 0
@@ -736,4 +676,3 @@ class LongitudinalController:
         self.filtered_distance_m = None
         self.filtered_lead_speed_mps = None
         self.filtered_source = None
-        self.active_stop_line_id = None

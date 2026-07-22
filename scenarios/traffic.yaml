@@ -1,5 +1,5 @@
 name: traffic_world
-map: Town03
+map: Town02
 
 simulation:
   synchronous_mode: true
@@ -10,6 +10,6 @@ traffic:
   npc_count: 40
   safe_distance_m: 3.0
   speed_difference_percent: 0.0
-  traffic_light_red_time_s: 4.0
+  traffic_light_red_time_s: 1.0
   traffic_light_yellow_time_s: 1.5
-  traffic_light_green_time_s: 8.0
+  traffic_light_green_time_s: 10.0

@@ -16,7 +16,7 @@ def test_activation_distance_grows_with_speed_squared():
     distance_50 = observer.activation_distance_m(50.0 / 3.6)
     distance_100 = observer.activation_distance_m(100.0 / 3.6)
 
-    assert 6.0 <= distance_10 <= 8.0
+    assert 7.0 <= distance_10 <= 9.0
     assert 105.0 <= distance_50 <= 112.0
     assert distance_100 == 220.0
     assert distance_10 < distance_50 < distance_100

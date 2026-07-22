@@ -35,6 +35,6 @@ def test_two_votes_confirm_state():
 
 def test_yellow_dilemma_zone_continues_when_too_close():
     item = observer()
-    assert item.requires_stop("yellow", distance_m=40.0, speed_mps=10.0) is True
+    assert item.requires_stop("yellow", distance_m=30.0, speed_mps=10.0) is True
     assert item.requires_stop("yellow", distance_m=5.0, speed_mps=10.0) is False
     assert item.requires_stop("red", distance_m=5.0, speed_mps=10.0) is True

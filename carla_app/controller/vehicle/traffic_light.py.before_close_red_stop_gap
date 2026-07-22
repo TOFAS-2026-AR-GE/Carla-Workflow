@@ -62,7 +62,7 @@ class TrafficLightObserver:
         self.filtered_distance_m = None
         self.last_raw_distance_m = None
 
-        self.stop_gap_m = 0.20
+        self.stop_gap_m = 1.20
         self.comfort_peak_deceleration_mps2 = 1.80
         self.comfort_jerk_mps3 = 0.90
         self.perception_reserve_s = 0.35

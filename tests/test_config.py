@@ -27,6 +27,10 @@ class SensorModeTests(unittest.TestCase):
             (settings.camera_width, settings.camera_height, settings.camera_fov),
             (1640, 590, 150.0),
         )
+        self.assertEqual(
+            (settings.dashboard_width, settings.dashboard_height),
+            (1500, 600),
+        )
         self.assertEqual(settings.perception_latency_budget_ms, 80.0)
 
     def test_bev_mode_does_not_enable_recording(self):

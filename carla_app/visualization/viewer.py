@@ -14,8 +14,8 @@ class PerceptionViewer:
         carla_map=None,
         navigation=None,
         window_name="CARLA Akilli Surus",
-        dashboard_width=1920,
-        dashboard_height=700,
+        dashboard_width=1500,
+        dashboard_height=600,
         navigation_render_every_n_frames=2,
     ):
         self.window_name = window_name
@@ -23,7 +23,7 @@ class PerceptionViewer:
         self.bev_mode = "driving"
         self.bev_button_rect = None
         self.dashboard_width = max(1100, int(dashboard_width))
-        self.dashboard_height = max(650, int(dashboard_height))
+        self.dashboard_height = max(480, int(dashboard_height))
         self.map_width = min(520, max(430, self.dashboard_width // 4))
         self.camera_width = self.dashboard_width - self.map_width - 4
         self.map_offset_x = self.camera_width + 4

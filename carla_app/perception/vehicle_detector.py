@@ -61,6 +61,7 @@ class VehicleDetector:
         device,
         use_half=True,
         camera_batch_size=4,
+        warmup_image_shape=None,
     ):
         self.model = YOLO(str(model_path), task="detect")
         self.confidence = float(confidence)
@@ -71,6 +72,9 @@ class VehicleDetector:
         )
         self.use_half = bool(use_half and is_cuda_device(self.device))
         self.camera_batch_size = max(1, int(camera_batch_size))
+        self.warmup_image_shape = self._normalize_warmup_shape(
+            warmup_image_shape
+        )
 
         if not 0.0 < self.confidence <= 1.0:
             raise ValueError("VEHICLE_CONFIDENCE 0 ile 1 arasinda olmali.")
@@ -294,11 +298,29 @@ class VehicleDetector:
         """İlk canlı karedeki model hazırlama maliyetini uygulama açılışında öder."""
         if not is_cuda_device(self.device):
             return
+        height, width = self.warmup_image_shape
         dummy = np.zeros(
-            (self.image_size, self.image_size, 3),
+            (height, width, 3),
             dtype=np.uint8,
         )
-        self._predict(dummy, self.relevant_class_ids)
+        # İlk çağrı model/çekirdek hazırlığını, ikinci çağrı cuDNN benchmark
+        # seçimini tamamlar. Canlı kamerayla aynı en-boy oranını kullanmak,
+        # 1640x590 ilk karede yeni bir CUDA şeklinin derlenmesini önler.
+        for _iteration in range(2):
+            self._predict(dummy, self.relevant_class_ids)
+
+    def _normalize_warmup_shape(self, shape):
+        if shape is None:
+            return (self.image_size, self.image_size)
+        try:
+            height, width = shape
+            height = int(height)
+            width = int(width)
+        except (TypeError, ValueError):
+            return (self.image_size, self.image_size)
+        if height <= 0 or width <= 0:
+            return (self.image_size, self.image_size)
+        return (height, width)
 
     def _find_vehicle_class_ids(self, names):
         selected = []

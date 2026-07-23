@@ -70,6 +70,15 @@ yalnız birincil ön kamerada çalışır ve her modda görsel sonuç üretebili
 CARLA waypoint tabanlı şerit ground-truth projeksiyonu yalnız `tests/` altında
 bulunur; üretim algılama veya kontrol akışına yüklenmez.
 
+OpenCV pencere ölçüsü kamera kalibrasyonundan ayrıdır. Varsayılan
+`1500x600` gösterim, `1640x590` ve 150 derece UFLD eğitim kamerasını yalnız
+letterbox ile küçültür; sensör pozunu ve model piksel koordinatlarını oynatmaz.
+
+Trafik ışığında kamera uzak algılamayı sağlar. CARLA'nın yalnız ego aracını
+etkileyen kırmızı/turuncu durumu güvenlik yedeğidir; mevcutsa trafik ışığının
+stop waypoint mesafesi kullanılır. Böylece görüntü kutusu kaçırılsa bile
+etkileyen kırmızı ışık kontrol zincirinde durma engeline dönüşür.
+
 ## Nerede değişiklik yapılır?
 
 | İstenen değişiklik | Başlangıç dosyası |

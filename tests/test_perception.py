@@ -30,6 +30,19 @@ from carla_app.sensors.processors import image_to_rgb
 
 
 class VehicleDetectorTests(unittest.TestCase):
+    def test_warmup_shape_uses_live_camera_aspect_ratio(self):
+        detector = VehicleDetector.__new__(VehicleDetector)
+        detector.image_size = 640
+
+        self.assertEqual(
+            detector._normalize_warmup_shape((590, 1640)),
+            (590, 1640),
+        )
+        self.assertEqual(
+            detector._normalize_warmup_shape(None),
+            (640, 640),
+        )
+
     def test_bundled_model_class_names_select_vehicle_classes(self):
         names = {
             0: "bike",

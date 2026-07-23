@@ -328,6 +328,78 @@ class BehaviorPlannerTests(unittest.TestCase):
         self.assertEqual(decision["mode"], "STOPPED_AT_RED")
         self.assertEqual(decision["target_speed_mps"], 0.0)
 
+    def test_simulator_red_stops_when_camera_misses_the_light(self):
+        state = road_state(6.5)
+        state["simulator_traffic_light"] = {
+            "available": True,
+            "affected": True,
+            "color": "red",
+            "estimated_distance_m": 12.0,
+            "actor_id": 73,
+        }
+
+        decision = self.planner.plan(
+            state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {},
+        )
+
+        self.assertEqual(decision["mode"], "APPROACH_RED_LIGHT")
+        self.assertEqual(
+            decision["primary_detection"]["state_source"],
+            "carla_vehicle_state",
+        )
+        self.assertEqual(
+            decision["control_obstacle"]["source"],
+            "traffic_light_red",
+        )
+        self.assertLess(decision["target_speed_mps"], state["speed_mps"])
+
+    def test_simulator_red_overrides_stale_camera_green(self):
+        state = road_state(4.0)
+        state["simulator_traffic_light"] = {
+            "available": True,
+            "affected": True,
+            "color": "red",
+            "estimated_distance_m": 8.0,
+            "actor_id": 73,
+        }
+
+        decision = self.planner.plan(
+            state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {"lead_traffic_light": light("green", 20.0)},
+        )
+
+        self.assertEqual(decision["mode"], "APPROACH_RED_LIGHT")
+        self.assertEqual(decision["primary_detection"]["color"], "red")
+        self.assertEqual(
+            decision["primary_detection"]["state_source"],
+            "carla_vehicle_state",
+        )
+
+    def test_old_carla_red_without_stop_waypoint_uses_safe_fallback(self):
+        state = road_state(6.5)
+        state["simulator_traffic_light"] = {
+            "available": True,
+            "affected": True,
+            "color": "red",
+            "estimated_distance_m": None,
+        }
+
+        decision = self.planner.plan(
+            state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {},
+        )
+
+        self.assertEqual(decision["mode"], "APPROACH_RED_LIGHT")
+        self.assertIsNotNone(decision["control_obstacle"])
+        self.assertLess(decision["target_speed_mps"], state["speed_mps"])
+
     def test_green_after_red_starts_smoothly(self):
         self.plan(0.0, {"lead_traffic_light": light("red", 5.0)})
         decision = self.plan(0.0, {"lead_traffic_light": light("green", 5.0)})

@@ -237,12 +237,12 @@ class BehaviorPlanner:
         return self.no_light_decision()
 
     def resolve_traffic_light(self, context, state, ego_speed):
-        """Kamera ışığını seçer, çizgideyken CARLA yeşiliyle kilidi açar.
+        """Kamera ışığını seçer ve CARLA durumunu güvenlik yedeği yapar.
 
-        Kamera kırmızıyı uzaktan bulup aracı durdurur. Çok yakında trafik
-        lambası görüntünün üstünden çıkabildiği için, yalnızca zaten durmuş
-        ve kırmızıya kilitlenmiş araçta CARLA'nın etkileyen ışık durumu
-        ikinci doğrulama olarak kullanılır.
+        Kamera kırmızıyı uzaktan bulup aracı yumuşak biçimde durdurur. Kamera
+        ışığı kaçırsa bile CARLA bu aracı etkileyen kırmızı/turuncu ışığı
+        bildiriyorsa geçişe izin verilmez. Çok yakında lamba görüntünün üstünden
+        çıktığında CARLA yeşili de yalnız kilitli ve durmuş araçta doğrulanır.
         """
         camera_light = context.get("lead_traffic_light")
         if camera_light is not None:
@@ -251,11 +251,43 @@ class BehaviorPlanner:
             light = self.recall_stop_light(state)
 
         simulator_light = state.get("simulator_traffic_light", {}) or {}
-        simulator_says_green = (
+        simulator_is_reliable = (
             bool(simulator_light.get("available"))
             and bool(simulator_light.get("affected"))
-            and simulator_light.get("color") == "green"
         )
+        simulator_color = str(simulator_light.get("color", "unknown"))
+        simulator_says_green = (
+            simulator_is_reliable
+            and simulator_color == "green"
+        )
+        simulator_stop_light = None
+        if simulator_is_reliable and simulator_color in {"red", "orange"}:
+            simulator_stop_light = self.make_simulator_stop_light(
+                simulator_light,
+                ego_speed,
+            )
+
+        # CARLA yalnız gerçekten ego aracını etkileyen ışığı bildirir. Bu
+        # nedenle etkileyen kırmızı, kameranın eksik/eski yeşilinden daha
+        # güvenlidir. İki kaynak da dur diyorsa çizgiye daha yakın mesafe
+        # seçilerek ışığı geçme riski azaltılır.
+        if simulator_stop_light is not None:
+            light_color = str((light or {}).get("color", "unknown"))
+            if light is None or light_color not in {"red", "orange"}:
+                light = simulator_stop_light
+            else:
+                camera_distance = self.detection_distance(light)
+                simulator_distance = self.detection_distance(
+                    simulator_stop_light
+                )
+                if (
+                    camera_distance is None
+                    or (
+                        simulator_distance is not None
+                        and simulator_distance < camera_distance
+                    )
+                ):
+                    light = simulator_stop_light
 
         # Yeşil doğrulandıktan sonra kamera takipçisi birkaç kare daha eski
         # kararlı kırmızıyı taşıyabilir. Aynı ışığın bu gecikmiş kırmızısını
@@ -293,6 +325,38 @@ class BehaviorPlanner:
             return self.make_confirmed_green(light)
 
         return light
+
+    def make_simulator_stop_light(self, simulator_light, ego_speed):
+        """CARLA kırmızı/turuncusunu planlayıcının ışık biçimine dönüştürür."""
+        distance = self.detection_distance(simulator_light)
+        if distance is None:
+            # Eski CARLA sürümlerinde stop waypoint API'si yoktur. Araç ışığın
+            # tetikleme alanındayken, normal azami yavaşlama ile durabileceği
+            # mesafe güvenli ve sınırlı bir yedektir.
+            stop_distance = self.stopping_distance_m(
+                ego_speed,
+                self.parameters.maximum_normal_deceleration_mps2,
+            )
+            distance = (
+                self.parameters.traffic_light_stop_offset_m
+                + stop_distance
+            )
+
+        actor_id = simulator_light.get("actor_id")
+        return {
+            "color": str(simulator_light.get("color", "unknown")),
+            "observed_color": str(simulator_light.get("color", "unknown")),
+            "estimated_distance_m": max(0.25, float(distance)),
+            "confidence": 1.0,
+            "smoothed_confidence": 1.0,
+            "track_id": (
+                f"carla-light-{actor_id}"
+                if actor_id is not None
+                else "carla-affecting-light"
+            ),
+            "state_source": "carla_vehicle_state",
+            "latched_without_detection": False,
+        }
 
     def make_confirmed_green(self, light):
         """Kırmızı kaydından yeşil serbest bırakma algılaması üretir."""

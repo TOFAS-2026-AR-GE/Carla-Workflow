@@ -185,7 +185,10 @@ Normalize entropi/no-lane marjı tamamen kararsız satırları elerken komşu
 hücrelere yayılan geçerli tahmini korur. Dört şerit kimliğinin ham satır
 ankrajları ayrı renkli noktalarla, güven ağırlıklı ve aykırı-nokta dayanımlı
 ikinci derece `x(y)` eğrileri aynı renkli çizgilerle gösterilir. Kamera paneli
-en-boy oranını bozmadan letterbox ile ölçeklenir. Ego şeridinin iki sınırı
+en-boy oranını bozmadan letterbox ile ölçeklenir. Varsayılan OpenCV penceresi
+`1500x600` boyutundadır; `DASHBOARD_WIDTH` ve `DASHBOARD_HEIGHT` yalnız
+ekran boyutunu değiştirir, UFLD eğitim kamerasının pozunu/FOV'unu değiştirmez.
+Ego şeridinin iki sınırı
 geçerli ve birbirini kesmiyorsa araları saydam yeşil koridor olarak gösterilir.
 Ham model noktaları, işlenmiş eğriler veya bunlardan türetilen hiçbir değer
 direksiyon, gaz ya da fren hesabına verilmez; aracın referansı navigasyon
@@ -207,7 +210,8 @@ ENABLE_FP16_INFERENCE=true
 UFLD resize ve ImageNet normalizasyonunu CUDA üzerinde yapar; CPU'dan GPU'ya
 büyük bir `float32` tensör yerine sabitlenmiş bellekteki ham kamera görüntüsü
 taşınır. YOLO ve isteğe bağlı tabela modelleri FP16 çalışır. Modeller açılışta
-bir kez ısıtıldığı için ilk canlı karede kernel veya backend hazırlama
+canlı kamerayla aynı `1640x590` en-boy oranında iki kez ısıtıldığı için ilk
+canlı karede yeni şekil için kernel, backend veya cuDNN benchmark hazırlama
 takılması oluşmaz. Geçici CUDA bellek baskısında önce bellek önbelleği
 temizlenerek CUDA aynı işlem için bir kez daha denenir; yalnız ikinci hata da
 başarısızsa güvenli CPU yedeğine geçilir.

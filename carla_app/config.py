@@ -196,11 +196,11 @@ class Settings:
         )
         self.dashboard_width = max(
             1100,
-            int(os.getenv("DASHBOARD_WIDTH", "1920")),
+            int(os.getenv("DASHBOARD_WIDTH", "1500")),
         )
         self.dashboard_height = max(
-            650,
-            int(os.getenv("DASHBOARD_HEIGHT", "700")),
+            480,
+            int(os.getenv("DASHBOARD_HEIGHT", "600")),
         )
         self.navigation_speed_kmh = max(
             10.0,

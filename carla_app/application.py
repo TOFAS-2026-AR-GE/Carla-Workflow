@@ -1,18 +1,21 @@
 """CARLA uygulamasını açar, ana döngüyü çalıştırır ve güvenli kapatır."""
 
 import math
+import time
 
 from carla_app.bev import BevModule
 from carla_app.config import DrivingParameters, Settings
 from carla_app.controller.vehicle.lead_vehicle import LeadVehicleTracker
 from carla_app.controller.vehicle.vehicle_controller import VehicleController
 from carla_app.core.client import CarlaSession
+from carla_app.core.performance import PerformanceMonitor
 from carla_app.core.route_manager import PersistentRouteManager
 from carla_app.core.scenario import load_scenario
 from carla_app.core.spectator import update_spectator
 from carla_app.core.state import read_vehicle_state, serializable_vehicle_state
 from carla_app.core.traffic import Traffic
 from carla_app.core.vehicle import spawn_ego_vehicle
+from carla_app.navigation import NavigationSystem
 from carla_app.perception.road_context import RoadContextTracker
 from carla_app.perception.system import PerceptionSystem
 from carla_app.perception.worker import PerceptionWorker
@@ -30,6 +33,7 @@ class CarlaApplication:
         self.world = None
         self.vehicle = None
         self.route_manager = None
+        self.navigation = None
         self.traffic = None
         self.sensors = None
         self.worker = None
@@ -43,6 +47,7 @@ class CarlaApplication:
         self.previous_control_mode = None
         self.previous_bev_validation_status = None
         self.previous_bev_contribution_track_id = None
+        self.performance = None
 
     def run(self):
         """Uygulamayı açar, ana döngüyü çalıştırır ve her durumda temizler."""
@@ -83,6 +88,12 @@ class CarlaApplication:
             recovery_distance_m=8.0,
             recovery_ticks=max(10, int(round(1.0 / self.dt))),
         )
+        self.navigation = NavigationSystem(
+            self.world.get_map(),
+            self.route_manager,
+            cruise_speed_kmh=self.settings.navigation_speed_kmh,
+            arrival_distance_m=self.settings.navigation_arrival_distance_m,
+        )
 
         self.traffic = Traffic(client, self.world, scenario)
         self.traffic.spawn()
@@ -104,7 +115,15 @@ class CarlaApplication:
 
         perception = PerceptionSystem(self.settings)
         self.worker = PerceptionWorker(perception)
-        self.viewer = PerceptionViewer()
+        self.viewer = PerceptionViewer(
+            carla_map=self.world.get_map(),
+            navigation=self.navigation,
+            dashboard_width=self.settings.dashboard_width,
+            dashboard_height=self.settings.dashboard_height,
+            navigation_render_every_n_frames=(
+                self.settings.navigation_render_every_n_frames
+            ),
+        )
         self.controller = VehicleController(
             self.dt,
             cruise_speed_kmh=self.settings.maximum_speed_kmh,
@@ -132,7 +151,9 @@ class CarlaApplication:
             1,
             int(self.settings.perception_every_n_frames),
         )
+        self.performance = PerformanceMonitor(self.dt * 1000.0)
 
+        print("[INFO] Haritada sağ tık: hedef seç | ONAYLA: rotayı başlat")
         print("[INFO] Q, ESC veya pencerenin X düğmesi ile çıkış.")
         print(
             "[INFO] Kontrol: Pure Pursuit warm-start + MPC direksiyon + "
@@ -160,10 +181,15 @@ class CarlaApplication:
 
     def process_frame(self, frame_id):
         """Tek dünya karesinin algılama, kontrol, kayıt ve gösterimini yapar."""
+        process_started_at = time.perf_counter()
         state = read_vehicle_state(
             self.world,
             self.vehicle,
             route_manager=self.route_manager,
+        )
+        navigation_state = self.navigation.update(
+            state["location"],
+            state["speed_mps"],
         )
         camera_frame_id, rgb_image = self.sensors.get_rgb(frame_id)
 
@@ -228,6 +254,7 @@ class CarlaApplication:
             lead_vehicle,
             emergency_obstacle=emergency_obstacle,
             road_context=road_context,
+            navigation_state=navigation_state,
         )
         if bev_validation is not None:
             control_info["bev_validation"] = bev_validation
@@ -302,14 +329,27 @@ class CarlaApplication:
             )
             bev_image = self.bev_module.get_latest()
 
-        return self.viewer.show(
+        viewer_started_at = time.perf_counter()
+        keep_running = self.viewer.show(
             perception_result,
             fallback_image=rgb_image,
             fallback_frame_id=camera_frame_id,
             current_frame_id=frame_id,
             bev_image=bev_image,
             road_context=road_context,
+            vehicle_state=state,
+            navigation_state=navigation_state,
         )
+        viewer_ms = (time.perf_counter() - viewer_started_at) * 1000.0
+        process_ms = (time.perf_counter() - process_started_at) * 1000.0
+        self.performance.update(
+            process_ms=process_ms,
+            viewer_ms=viewer_ms,
+            camera_wait_ms=self.sensors.last_camera_wait_ms,
+            perception_result=perception_result,
+            worker_diagnostics=self.worker.get_diagnostics(),
+        )
+        return keep_running
 
     def shutdown(self):
         """Açılmış parçaları ters sırayla kapatır."""
@@ -380,6 +420,8 @@ class CarlaApplication:
             f" perception={float(perception_result.get('elapsed_ms', 0.0)):.1f}ms"
             f" queue={float(perception_result.get('queue_delay_ms', 0.0)):.1f}ms"
         )
+        if self.performance is not None:
+            message += self.performance.summary()
         lane_detection = perception_result.get("lane_detection", {})
         if lane_detection.get("available"):
             message += (

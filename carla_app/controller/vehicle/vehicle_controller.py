@@ -42,6 +42,7 @@ class VehicleController:
         lead_vehicle,
         emergency_obstacle=None,
         road_context=None,
+        navigation_state=None,
     ):
         """Tek çevrim için direksiyon, gaz ve fren komutunu üretir."""
         steer = self.lateral.run_step(state)
@@ -59,6 +60,15 @@ class VehicleController:
             lead_vehicle=lead_vehicle,
         )
         target_speed = behavior["target_speed_mps"]
+        navigation_state = navigation_state or {}
+        navigation_enabled = bool(navigation_state.get("drive_enabled", True))
+        navigation_target = float(
+            navigation_state.get("target_speed_mps", target_speed)
+        )
+        if navigation_enabled:
+            target_speed = min(target_speed, navigation_target)
+        else:
+            target_speed = 0.0
 
         # Tek bir ham radar noktası yalnızca acil frene gider. Normal takip,
         # kamera-radar takibini veya doğrulanmış radar kümesini kullanır.
@@ -110,6 +120,12 @@ class VehicleController:
         mode = behavior["mode"]
         if emergency:
             mode = "EMERGENCY"
+        elif not navigation_enabled:
+            navigation_status = navigation_state.get("status", "WAITING")
+            if navigation_status == "ARRIVED":
+                mode = "DESTINATION_REACHED"
+            else:
+                mode = "WAITING_FOR_ROUTE"
         elif behavior["mode"] == "FOLLOW_VEHICLE":
             if longitudinal_info["mode"] == "HOLD":
                 mode = "FOLLOW_VEHICLE"
@@ -137,6 +153,7 @@ class VehicleController:
             "longitudinal_lead": control_lead,
             "behavior": behavior,
             "road_context": road_context or {},
+            "navigation": navigation_state,
         }
         return control, info
 

@@ -7,4 +7,5 @@ ultralytics>=8.2,<9
 opencv-python>=4.8,<6
 Pillow>=10,<13
 huggingface-hub>=0.36,<2
-onnxruntime>=1.17,<2
+onnxruntime-gpu>=1.20,<2; platform_system != "Darwin"
+onnxruntime>=1.20,<2; platform_system == "Darwin"

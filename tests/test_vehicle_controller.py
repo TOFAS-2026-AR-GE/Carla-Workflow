@@ -90,6 +90,24 @@ class VehicleControllerIntegrationTests(unittest.TestCase):
         self.assertEqual(restart_control.brake, 0.0)
         self.assertEqual(restart_info["longitudinal"]["mode"], "RESTART")
 
+    def test_vehicle_holds_until_navigation_route_is_confirmed(self):
+        controller = VehicleController(dt=0.05)
+        navigation = {
+            "status": "WAITING",
+            "drive_enabled": False,
+            "target_speed_mps": 0.0,
+        }
+
+        control, info = controller.run_step(
+            self.stopped_state("green"),
+            lead_vehicle=None,
+            navigation_state=navigation,
+        )
+
+        self.assertEqual(control.throttle, 0.0)
+        self.assertGreater(control.brake, 0.0)
+        self.assertEqual(info["mode"], "WAITING_FOR_ROUTE")
+
     def test_immediate_collision_risk_overrides_throttle_with_full_brake(self):
         controller = VehicleController(dt=0.05)
         state = {

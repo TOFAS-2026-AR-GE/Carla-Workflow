@@ -2,6 +2,7 @@
 
 import time
 
+from carla_app.perception.device import configure_torch_inference
 from carla_app.perception.lane_detector import LaneDetector
 from carla_app.perception.sign_detector import TrafficSignDetector
 from carla_app.perception.vehicle_detector import VehicleDetector
@@ -11,11 +12,16 @@ class PerceptionSystem:
     """Bir model hata verdiğinde diğer modelin sonucunu korur."""
 
     def __init__(self, settings):
+        cuda_ready = configure_torch_inference()
+        if cuda_ready:
+            print("[OK] CUDA inference: cuDNN benchmark + TF32 aktif.")
+
         self.vehicle_detector = VehicleDetector(
             settings.vehicle_model,
             settings.vehicle_confidence,
             settings.vehicle_image_size,
             settings.vehicle_device,
+            use_half=settings.enable_fp16_inference,
         )
 
         self.sign_detector = None
@@ -30,6 +36,7 @@ class PerceptionSystem:
                 settings.sign_detector_image_size,
                 settings.sign_classifier_image_size,
                 settings.sign_device,
+                use_half=settings.enable_fp16_inference,
             )
         else:
             print("[INFO] Trafik levhasi algilama kapali.")
@@ -41,6 +48,7 @@ class PerceptionSystem:
                 settings.lane_device,
                 settings.lane_minimum_points,
                 settings.lane_confidence,
+                use_half=settings.enable_fp16_inference,
             )
         else:
             print("[INFO] UFLD serit algilama kapali.")

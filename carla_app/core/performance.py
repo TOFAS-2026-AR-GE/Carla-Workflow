@@ -1,0 +1,60 @@
+"""Canlı döngü sürelerini düşük maliyetli hareketli ortalamayla izler."""
+
+
+class PerformanceMonitor:
+    """Kare bütçesi, görüntüleme ve algılama kuyruğu gecikmesini özetler."""
+
+    def __init__(self, frame_budget_ms, smoothing=0.12):
+        self.frame_budget_ms = max(1.0, float(frame_budget_ms))
+        self.smoothing = min(1.0, max(0.01, float(smoothing)))
+        self.values = {}
+        self.over_budget_frames = 0
+        self.total_frames = 0
+
+    def update(
+        self,
+        process_ms,
+        viewer_ms,
+        camera_wait_ms,
+        perception_result,
+        worker_diagnostics,
+    ):
+        self.total_frames += 1
+        if float(process_ms) > self.frame_budget_ms:
+            self.over_budget_frames += 1
+
+        perception_result = perception_result or {}
+        self._ema("process_ms", process_ms)
+        self._ema("viewer_ms", viewer_ms)
+        self._ema("camera_wait_ms", camera_wait_ms)
+        self._ema(
+            "inference_ms",
+            float(perception_result.get("elapsed_ms", 0.0)),
+        )
+        self._ema(
+            "queue_ms",
+            float(perception_result.get("queue_delay_ms", 0.0)),
+        )
+        self.values["dropped"] = int(worker_diagnostics.get("dropped", 0))
+        self.values["processed"] = int(worker_diagnostics.get("processed", 0))
+
+    def summary(self):
+        if self.total_frames == 0:
+            return ""
+        budget_ratio = 100.0 * self.over_budget_frames / self.total_frames
+        return (
+            f" loop={self.values.get('process_ms', 0.0):.1f}ms"
+            f" view={self.values.get('viewer_ms', 0.0):.1f}ms"
+            f" infer={self.values.get('inference_ms', 0.0):.1f}ms"
+            f" q={self.values.get('queue_ms', 0.0):.1f}ms"
+            f" drop={int(self.values.get('dropped', 0))}"
+            f" budget_over={budget_ratio:.0f}%"
+        )
+
+    def _ema(self, name, value):
+        value = max(0.0, float(value))
+        previous = self.values.get(name)
+        if previous is None:
+            self.values[name] = value
+            return
+        self.values[name] = previous + self.smoothing * (value - previous)

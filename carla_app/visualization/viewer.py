@@ -3,15 +3,52 @@
 import cv2
 import numpy as np
 
+from carla_app.visualization.map_renderer import MapRenderer
+
 
 class PerceptionViewer:
     """Algılama sonuçlarını gösterir ve kullanıcı çıkışını izler."""
-    def __init__(self, window_name="CARLA Perception"):
+
+    def __init__(
+        self,
+        carla_map=None,
+        navigation=None,
+        window_name="CARLA Akilli Surus",
+        dashboard_width=1580,
+        dashboard_height=780,
+        navigation_render_every_n_frames=2,
+    ):
         self.window_name = window_name
         self.closed = False
         self.bev_mode = "driving"
         self.bev_button_rect = None
+        self.navigation = navigation
+        self.dashboard_width = max(1100, int(dashboard_width))
+        self.dashboard_height = max(650, int(dashboard_height))
+        self.map_width = min(600, max(430, self.dashboard_width // 3))
+        self.camera_width = self.dashboard_width - self.map_width - 4
+        self.map_offset_x = self.camera_width + 4
+        self.last_vehicle_location = None
+        self.last_navigation = {}
+        self.navigation_render_every_n_frames = max(
+            1,
+            int(navigation_render_every_n_frames),
+        )
+        self.cached_map_panel = None
+        self.cached_navigation_key = None
+        self.map_renderer = None
+        if carla_map is not None:
+            self.map_renderer = MapRenderer(
+                carla_map,
+                width=self.map_width,
+                height=self.dashboard_height,
+            )
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(
+            window_name,
+            self.dashboard_width,
+            self.dashboard_height,
+        )
         cv2.setMouseCallback(window_name, self._mouse_callback)
 
     def show(
@@ -22,6 +59,8 @@ class PerceptionViewer:
         current_frame_id=None,
         bev_image=None,
         road_context=None,
+        vehicle_state=None,
+        navigation_state=None,
     ):
         if self.closed:
             return False
@@ -47,9 +86,7 @@ class PerceptionViewer:
             return self._window_is_open() and self._read_key()
 
         if image is None:
-            cv2.imshow(self.window_name, bev_image)
-            self.closed = not (self._window_is_open() and self._read_key())
-            return not self.closed
+            image = np.zeros((600, 800, 3), dtype=np.uint8)
 
         frame = np.ascontiguousarray(image[:, :, :3][:, :, ::-1])
         for detection in vehicles:
@@ -113,27 +150,107 @@ class PerceptionViewer:
                 cv2.LINE_AA,
             )
 
-        display_frame = self.combine_panels(frame, bev_image)
+        vehicle_state = vehicle_state or {}
+        self.last_vehicle_location = vehicle_state.get("location")
+        self.last_navigation = navigation_state or {}
+        map_panel = None
+        if self.map_renderer is not None:
+            navigation_key = self._navigation_key(self.last_navigation)
+            frame_number = int(current_frame_id or 0)
+            render_due = (
+                self.cached_map_panel is None
+                or navigation_key != self.cached_navigation_key
+                or frame_number % self.navigation_render_every_n_frames == 0
+            )
+            if render_due:
+                self.cached_map_panel = self.map_renderer.render(
+                    self.last_navigation,
+                    self.last_vehicle_location,
+                    vehicle_state.get("yaw", 0.0),
+                    vehicle_state.get("speed_kmh", 0.0),
+                )
+                self.cached_navigation_key = navigation_key
+            map_panel = self.cached_map_panel
+
+        display_frame = self.combine_panels(frame, bev_image, map_panel)
         cv2.imshow(self.window_name, display_frame)
         self.closed = not (self._window_is_open() and self._read_key())
         return not self.closed
 
-    def combine_panels(self, perception_frame, bev_image):
-        """Kamera ve BEV panelini switch düğmesiyle yan yana birleştirir."""
-        if bev_image is None:
-            self.bev_button_rect = None
-            return perception_frame
+    def combine_panels(self, perception_frame, bev_image, map_panel=None):
+        """Kamera, isteğe bağlı BEV ve navigasyonu tek büyük pencerede birleştirir."""
+        if not hasattr(self, "dashboard_height"):
+            if bev_image is None:
+                self.bev_button_rect = None
+                return perception_frame
+            target_width = perception_frame.shape[1]
+            target_height = perception_frame.shape[0]
+            bev_panel = cv2.resize(
+                bev_image,
+                (target_width, target_height),
+                interpolation=cv2.INTER_AREA,
+            )
+            divider = np.full((target_height, 3, 3), 210, dtype=np.uint8)
+            combined = np.hstack((perception_frame, divider, bev_panel))
+            self.draw_bev_switch(combined)
+            return combined
 
-        target_width = perception_frame.shape[1]
-        target_height = perception_frame.shape[0]
-        bev_panel = cv2.resize(
-            bev_image,
-            (target_width, target_height),
-            interpolation=cv2.INTER_AREA,
+        source_height, source_width = perception_frame.shape[:2]
+        interpolation = (
+            cv2.INTER_AREA
+            if source_width > self.camera_width
+            or source_height > self.dashboard_height
+            else cv2.INTER_LINEAR
         )
-        divider = np.full((target_height, 3, 3), 210, dtype=np.uint8)
-        combined = np.hstack((perception_frame, divider, bev_panel))
-        self.draw_bev_switch(combined)
+        camera_panel = cv2.resize(
+            perception_frame,
+            (self.camera_width, self.dashboard_height),
+            interpolation=interpolation,
+        )
+
+        if bev_image is not None:
+            inset_width = min(360, self.camera_width // 3)
+            inset_height = int(inset_width * 0.70)
+            inset = cv2.resize(
+                bev_image,
+                (inset_width, inset_height),
+                interpolation=cv2.INTER_AREA,
+            )
+            x1 = self.camera_width - inset_width - 18
+            y1 = self.dashboard_height - inset_height - 18
+            cv2.rectangle(
+                camera_panel,
+                (x1 - 3, y1 - 27),
+                (self.camera_width - 15, self.dashboard_height - 15),
+                (20, 24, 30),
+                -1,
+            )
+            camera_panel[y1 : y1 + inset_height, x1 : x1 + inset_width] = inset
+            cv2.putText(
+                camera_panel,
+                f"BEV {self.bev_mode.upper()}",
+                (x1, y1 - 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.43,
+                (230, 235, 240),
+                1,
+                cv2.LINE_AA,
+            )
+            self.draw_bev_switch(camera_panel)
+        else:
+            self.bev_button_rect = None
+
+        if map_panel is None:
+            self.map_offset_x = 0
+            return camera_panel
+
+        divider = np.full(
+            (self.dashboard_height, 4, 3),
+            (8, 11, 15),
+            dtype=np.uint8,
+        )
+        self.map_offset_x = self.camera_width + divider.shape[1]
+        combined = np.hstack((camera_panel, divider, map_panel))
         return combined
 
     def draw_bev_switch(self, frame):
@@ -141,7 +258,8 @@ class PerceptionViewer:
         width = 174
         height = 30
         margin = 10
-        x1 = frame.shape[1] - width - margin
+        panel_width = getattr(self, "camera_width", frame.shape[1])
+        x1 = panel_width - width - margin
         y1 = 10
         x2 = x1 + width
         y2 = y1 + height
@@ -178,14 +296,38 @@ class PerceptionViewer:
         )
 
     def _mouse_callback(self, event, x, y, _flags, _parameter):
-        """Switch'in tıklanan yarısını aktif BEV modu yapar."""
-        if event != cv2.EVENT_LBUTTONUP or self.bev_button_rect is None:
+        """Harita hedefini, onayı ve BEV düğmesini aynı pencerede işler."""
+        if (
+            event == getattr(cv2, "EVENT_RBUTTONUP", 5)
+            and self.navigation is not None
+            and self.map_renderer is not None
+        ):
+            map_x = x - self.map_offset_x
+            world_point = self.map_renderer.screen_to_world(map_x, y)
+            if world_point is not None:
+                self.navigation.select_destination(*world_point)
             return
-        x1, y1, x2, y2 = self.bev_button_rect
-        if not x1 <= x <= x2 or not y1 <= y <= y2:
+
+        if event != cv2.EVENT_LBUTTONUP:
             return
-        middle = (x1 + x2) // 2
-        self.bev_mode = "driving" if x < middle else "debug"
+
+        if self.bev_button_rect is not None:
+            x1, y1, x2, y2 = self.bev_button_rect
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                middle = (x1 + x2) // 2
+                self.bev_mode = "driving" if x < middle else "debug"
+                return
+
+        if self.navigation is None or self.map_renderer is None:
+            return
+        map_x = x - self.map_offset_x
+        if self.map_renderer.is_confirm_button(map_x, y):
+            if self.last_vehicle_location is not None:
+                self.navigation.confirm_destination(
+                    self.last_vehicle_location
+                )
+        elif self.map_renderer.is_cancel_button(map_x, y):
+            self.navigation.cancel_pending()
 
     def toggle_bev_mode(self):
         """Klavye için sürüş ve debug ekranı arasında geçiş yapar."""
@@ -213,6 +355,21 @@ class PerceptionViewer:
             self.toggle_bev_mode()
             return True
         return key not in (27, ord("q"), ord("Q"))
+
+    @staticmethod
+    def _navigation_key(navigation):
+        pending = navigation.get("pending_destination")
+        pending_key = None
+        if pending is not None:
+            pending_key = (
+                round(float(pending.x), 2),
+                round(float(pending.y), 2),
+            )
+        return (
+            navigation.get("status"),
+            pending_key,
+            id(navigation.get("route")),
+        )
 
     def _draw(self, frame, detection, color, prefix):
         box = detection["bbox"]

@@ -135,6 +135,26 @@ class Settings:
         self.camera_width = int(os.getenv("CAMERA_WIDTH", "800"))
         self.camera_height = int(os.getenv("CAMERA_HEIGHT", "600"))
         self.camera_fov = float(os.getenv("CAMERA_FOV", "90"))
+        self.dashboard_width = max(
+            1100,
+            int(os.getenv("DASHBOARD_WIDTH", "1580")),
+        )
+        self.dashboard_height = max(
+            650,
+            int(os.getenv("DASHBOARD_HEIGHT", "780")),
+        )
+        self.navigation_speed_kmh = max(
+            10.0,
+            float(os.getenv("NAVIGATION_SPEED_KMH", "45")),
+        )
+        self.navigation_arrival_distance_m = max(
+            1.0,
+            float(os.getenv("NAVIGATION_ARRIVAL_DISTANCE_M", "2.5")),
+        )
+        self.navigation_render_every_n_frames = max(
+            1,
+            int(os.getenv("NAVIGATION_RENDER_EVERY_N_FRAMES", "2")),
+        )
 
         self.vehicle_model = _path(
             os.getenv("VEHICLE_MODEL", "models/vehicle/carla_yolov8n_best.pt")
@@ -155,12 +175,16 @@ class Settings:
         self.vehicle_device = os.getenv("VEHICLE_DEVICE", "auto").strip()
         if not self.vehicle_device:
             self.vehicle_device = "auto"
-        self.sign_device = os.getenv("SIGN_DEVICE", "cpu").strip()
+        self.sign_device = os.getenv("SIGN_DEVICE", "auto").strip()
         if not self.sign_device:
-            self.sign_device = "cpu"
+            self.sign_device = "auto"
         self.lane_device = os.getenv("LANE_DEVICE", "auto").strip()
         if not self.lane_device:
             self.lane_device = "auto"
+        self.enable_fp16_inference = _boolean(
+            "ENABLE_FP16_INFERENCE",
+            True,
+        )
 
         self.vehicle_confidence = float(
             os.getenv("VEHICLE_CONFIDENCE", "0.05")

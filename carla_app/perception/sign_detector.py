@@ -5,7 +5,12 @@ import json
 import numpy as np
 from ultralytics import YOLO
 
-from carla_app.perception.device import move_model_to_cpu, resolve_device
+from carla_app.perception.device import (
+    is_cuda_device,
+    move_model_to_cpu,
+    recover_cuda_memory,
+    resolve_device,
+)
 
 
 class TrafficSignDetector:
@@ -20,6 +25,7 @@ class TrafficSignDetector:
         detector_image_size,
         classifier_image_size,
         device,
+        use_half=True,
     ):
         self.detector = YOLO(str(detector_path), task="detect")
         self.classifier = YOLO(str(classifier_path), task="classify")
@@ -30,7 +36,12 @@ class TrafficSignDetector:
         self.detector_image_size = detector_image_size
         self.classifier_image_size = classifier_image_size
         self.device = resolve_device(device)
-        print(f"[OK] Trafik levhasi modelleri: {self.device}")
+        self.use_half = bool(use_half and is_cuda_device(self.device))
+        print(
+            f"[OK] Trafik levhasi modelleri: {self.device}, "
+            f"fp16={self.use_half}"
+        )
+        self._warmup_cuda()
 
     def detect(self, rgb_image):
         bgr_image = np.ascontiguousarray(rgb_image[:, :, ::-1])
@@ -107,8 +118,23 @@ class TrafficSignDetector:
                 imgsz=self.detector_image_size,
                 device=self.device,
                 verbose=False,
+                half=bool(getattr(self, "use_half", False)),
             )
         except (RuntimeError, ValueError) as error:
+            if is_cuda_device(self.device):
+                recover_cuda_memory()
+                try:
+                    return self.detector.predict(
+                        source=image,
+                        conf=self.detector_confidence,
+                        iou=self.detector_iou,
+                        imgsz=self.detector_image_size,
+                        device=self.device,
+                        verbose=False,
+                        half=bool(getattr(self, "use_half", False)),
+                    )
+                except (RuntimeError, ValueError) as retry_error:
+                    error = retry_error
             self._switch_to_cpu(error)
             return self.detector.predict(
                 source=image,
@@ -117,6 +143,7 @@ class TrafficSignDetector:
                 imgsz=self.detector_image_size,
                 device="cpu",
                 verbose=False,
+                half=False,
             )
 
     def _predict_classifier(self, image):
@@ -127,14 +154,28 @@ class TrafficSignDetector:
                 imgsz=self.classifier_image_size,
                 device=self.device,
                 verbose=False,
+                half=bool(getattr(self, "use_half", False)),
             )
         except (RuntimeError, ValueError) as error:
+            if is_cuda_device(self.device):
+                recover_cuda_memory()
+                try:
+                    return self.classifier.predict(
+                        source=image,
+                        imgsz=self.classifier_image_size,
+                        device=self.device,
+                        verbose=False,
+                        half=bool(getattr(self, "use_half", False)),
+                    )
+                except (RuntimeError, ValueError) as retry_error:
+                    error = retry_error
             self._switch_to_cpu(error)
             return self.classifier.predict(
                 source=image,
                 imgsz=self.classifier_image_size,
                 device="cpu",
                 verbose=False,
+                half=False,
             )
 
     def _switch_to_cpu(self, error):
@@ -147,5 +188,21 @@ class TrafficSignDetector:
             "CPU ile yeniden deneniyor."
         )
         self.device = "cpu"
+        self.use_half = False
         move_model_to_cpu(self.detector)
         move_model_to_cpu(self.classifier)
+
+    def _warmup_cuda(self):
+        """ONNX/TensorRT sağlayıcılarını canlı kare gelmeden hazırlar."""
+        if not is_cuda_device(self.device):
+            return
+        detector_image = np.zeros(
+            (self.detector_image_size, self.detector_image_size, 3),
+            dtype=np.uint8,
+        )
+        classifier_image = np.zeros(
+            (self.classifier_image_size, self.classifier_image_size, 3),
+            dtype=np.uint8,
+        )
+        self._predict_detector(detector_image)
+        self._predict_classifier(classifier_image)

@@ -38,17 +38,47 @@ class PersistentRouteManager:
 
         self.waypoints = []
         self.lost_ticks = 0
+        self.planned_route_active = False
+        self.planned_remaining_by_id = {}
+
+    def set_planned_route(self, waypoints):
+        """Navigasyon planlayıcısının ürettiği rotayı izlemeye başlar."""
+        route = list(waypoints)
+        if len(route) < 2:
+            raise ValueError("Planlanan rota en az iki waypoint içermeli.")
+        self.waypoints = route
+        self.planned_route_active = True
+        self.lost_ticks = 0
+        self.planned_remaining_by_id = {}
+        remaining = 0.0
+        self.planned_remaining_by_id[id(route[-1])] = 0.0
+        for first, second in reversed(list(zip(route, route[1:]))):
+            remaining += self.distance_between(
+                first.transform.location,
+                second.transform.location,
+            )
+            self.planned_remaining_by_id[id(first)] = remaining
+
+    def clear_planned_route(self):
+        """Eski navigasyon rotasını kaldırır."""
+        self.waypoints = []
+        self.planned_route_active = False
+        self.lost_ticks = 0
+        self.planned_remaining_by_id = {}
 
     def update(self, vehicle_location):
         if not self.waypoints:
             self.initialize(vehicle_location)
 
         self.trim_passed_waypoints(vehicle_location)
-        self.extend_route()
+        if not self.planned_route_active:
+            self.extend_route()
 
         deviation = self.distance_to_route(vehicle_location)
 
-        if deviation > self.recovery_distance_m:
+        if self.planned_route_active:
+            self.lost_ticks = 0
+        elif deviation > self.recovery_distance_m:
             self.lost_ticks += 1
         else:
             self.lost_ticks = 0
@@ -60,7 +90,8 @@ class PersistentRouteManager:
             self.lost_ticks = 0
 
         self.trim_passed_waypoints(vehicle_location)
-        self.extend_route()
+        if not self.planned_route_active:
+            self.extend_route()
 
         return (
             self.current_waypoint(vehicle_location),
@@ -78,6 +109,8 @@ class PersistentRouteManager:
             raise RuntimeError("Arac icin surus seridi bulunamadi.")
 
         self.waypoints = [waypoint]
+        self.planned_route_active = False
+        self.planned_remaining_by_id = {}
         self.extend_route()
 
     def trim_passed_waypoints(self, vehicle_location):
@@ -217,6 +250,38 @@ class PersistentRouteManager:
         for waypoint in self.waypoints:
             locations.append(waypoint.transform.location)
         return locations
+
+    def remaining_distance(self, vehicle_location):
+        """Aracın mevcut yerinden rotanın sonuna kalan yaklaşık metreyi verir."""
+        if not self.waypoints:
+            return 0.0
+
+        search_count = min(80, len(self.waypoints))
+        nearest_index = min(
+            range(search_count),
+            key=lambda index: self.distance_between(
+                vehicle_location,
+                self.waypoints[index].transform.location,
+            ),
+        )
+
+        first_location = self.waypoints[nearest_index].transform.location
+        total = self.distance_between(vehicle_location, first_location)
+        cached_remaining = self.planned_remaining_by_id.get(
+            id(self.waypoints[nearest_index])
+        )
+        if self.planned_route_active and cached_remaining is not None:
+            return total + cached_remaining
+
+        for first, second in zip(
+            self.waypoints[nearest_index:],
+            self.waypoints[nearest_index + 1 :],
+        ):
+            total += self.distance_between(
+                first.transform.location,
+                second.transform.location,
+            )
+        return total
 
     def distance_to_route(self, vehicle_location):
         if not self.waypoints:

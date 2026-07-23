@@ -3,7 +3,12 @@
 import numpy as np
 from ultralytics import YOLO
 
-from carla_app.perception.device import move_model_to_cpu, resolve_device
+from carla_app.perception.device import (
+    is_cuda_device,
+    move_model_to_cpu,
+    recover_cuda_memory,
+    resolve_device,
+)
 
 
 class VehicleDetector:
@@ -47,11 +52,19 @@ class VehicleDetector:
         "vehicle",
     }
 
-    def __init__(self, model_path, confidence, image_size, device):
+    def __init__(
+        self,
+        model_path,
+        confidence,
+        image_size,
+        device,
+        use_half=True,
+    ):
         self.model = YOLO(str(model_path), task="detect")
         self.confidence = float(confidence)
         self.image_size = int(image_size)
         self.device = resolve_device(device)
+        self.use_half = bool(use_half and is_cuda_device(self.device))
 
         if not 0.0 < self.confidence <= 1.0:
             raise ValueError("VEHICLE_CONFIDENCE 0 ile 1 arasinda olmali.")
@@ -77,8 +90,10 @@ class VehicleDetector:
         print(
             f"[OK] Vehicle modeli: device={self.device}, "
             f"vehicle_classes={selected_names}, "
-            f"traffic_classes={relevant_names}, conf={self.confidence:.2f}"
+            f"traffic_classes={relevant_names}, conf={self.confidence:.2f}, "
+            f"fp16={self.use_half}"
         )
+        self._warmup_cuda()
 
     def detect(self, rgb_image):
         """Tek RGB kamera karesindeki araç kutularını döndürür."""
@@ -217,11 +232,22 @@ class VehicleDetector:
             if self.device == "cpu":
                 raise
 
+            recover_cuda_memory()
+            try:
+                return self._predict_on_device(
+                    bgr_image,
+                    self.device,
+                    class_ids,
+                )
+            except (RuntimeError, ValueError):
+                pass
+
             print(
                 f"[WARN] Vehicle GPU inference basarisiz ({error}); "
                 "CPU ile yeniden deneniyor."
             )
             self.device = "cpu"
+            self.use_half = False
             move_model_to_cpu(self.model)
             return self._predict_on_device(bgr_image, "cpu", class_ids)
 
@@ -238,6 +264,10 @@ class VehicleDetector:
             classes=class_ids,
             verbose=False,
             max_det=100,
+            half=bool(
+                getattr(self, "use_half", False)
+                and is_cuda_device(device)
+            ),
         )
 
     def _validate_image(self, rgb_image):
@@ -250,6 +280,16 @@ class VehicleDetector:
                 "Kamera goruntusu HxWx3 formatinda olmali; "
                 f"gelen shape: {rgb_image.shape}"
             )
+
+    def _warmup_cuda(self):
+        """İlk canlı karedeki model hazırlama maliyetini uygulama açılışında öder."""
+        if not is_cuda_device(self.device):
+            return
+        dummy = np.zeros(
+            (self.image_size, self.image_size, 3),
+            dtype=np.uint8,
+        )
+        self._predict(dummy, self.relevant_class_ids)
 
     def _find_vehicle_class_ids(self, names):
         selected = []

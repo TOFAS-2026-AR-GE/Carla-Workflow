@@ -10,7 +10,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from carla_app.perception.device import resolve_device
+from carla_app.perception.device import is_cuda_device, resolve_device
 
 MODEL_WIDTH = 800
 MODEL_HEIGHT = 288
@@ -125,6 +125,7 @@ class LaneDetector:
         device="auto",
         minimum_points=3,
         minimum_confidence=0.30,
+        use_half=True,
     ):
         path = Path(model_path)
         if not path.is_file():
@@ -138,6 +139,8 @@ class LaneDetector:
         if str(requested_device).isdigit():
             requested_device = f"cuda:{requested_device}"
         self.device = str(requested_device)
+        self.cuda_enabled = is_cuda_device(self.device)
+        self.use_half = bool(use_half and self.cuda_enabled)
         self.minimum_points = max(3, int(minimum_points))
         self.minimum_confidence = float(minimum_confidence)
         self.torch = torch
@@ -163,6 +166,28 @@ class LaneDetector:
             raise RuntimeError(f"UFLD checkpoint uyumsuz katmanlari: {names}")
 
         self.model = model.to(self.device).eval()
+        self.host_buffer = None
+        self.host_buffer_shape = None
+        if self.cuda_enabled:
+            self.model = self.model.to(memory_format=torch.channels_last)
+            if self.use_half:
+                self.model = self.model.half()
+            dtype = torch.float16 if self.use_half else torch.float32
+            self.mean = torch.tensor(
+                IMAGENET_MEAN,
+                device=self.device,
+                dtype=dtype,
+            ).view(1, 3, 1, 1)
+            self.std = torch.tensor(
+                IMAGENET_STD,
+                device=self.device,
+                dtype=dtype,
+            ).view(1, 3, 1, 1)
+            self._warmup_cuda(dtype)
+        print(
+            f"[OK] UFLD modeli: device={self.device}, "
+            f"fp16={self.use_half}"
+        )
 
     @staticmethod
     def _state_dict_from_checkpoint(checkpoint):
@@ -182,8 +207,7 @@ class LaneDetector:
 
     def detect(self, rgb_image):
         started_at = time.perf_counter()
-        prepared = prepare_ufld_input(rgb_image)
-        tensor = self.torch.from_numpy(prepared).to(self.device)
+        tensor = self._prepare_tensor(rgb_image)
         with self.torch.inference_mode():
             logits = self.model(tensor)
         logits = logits.detach().float().cpu().numpy()
@@ -204,3 +228,54 @@ class LaneDetector:
             "detected_count": sum(lane["detected"] for lane in lanes),
             "elapsed_ms": (time.perf_counter() - started_at) * 1000.0,
         }
+
+    def _prepare_tensor(self, rgb_image):
+        """CUDA varsa resize ve normalizasyonu GPU'da, yoksa CPU'da yapar."""
+        if not self.cuda_enabled:
+            prepared = prepare_ufld_input(rgb_image)
+            return self.torch.from_numpy(prepared).to(self.device)
+
+        import torch.nn.functional as functional
+
+        image = np.asarray(rgb_image)
+        if image.ndim != 3 or image.shape[2] < 3:
+            raise ValueError("UFLD girdisi HxWx3 RGB goruntu olmali.")
+        image = np.ascontiguousarray(image[:, :, :3])
+        shape = tuple(image.shape)
+        if self.host_buffer is None or self.host_buffer_shape != shape:
+            self.host_buffer = self.torch.empty(
+                shape,
+                dtype=self.torch.uint8,
+                pin_memory=True,
+            )
+            self.host_buffer_shape = shape
+
+        self.host_buffer.copy_(self.torch.from_numpy(image))
+        tensor = self.host_buffer.to(self.device, non_blocking=True)
+        tensor = tensor.permute(2, 0, 1).unsqueeze(0)
+        tensor = tensor.to(
+            dtype=(
+                self.torch.float16
+                if self.use_half
+                else self.torch.float32
+            )
+        )
+        tensor = functional.interpolate(
+            tensor,
+            size=(MODEL_HEIGHT, MODEL_WIDTH),
+            mode="bilinear",
+            align_corners=False,
+        )
+        tensor = tensor.div_(255.0).sub_(self.mean).div_(self.std)
+        return tensor.contiguous(memory_format=self.torch.channels_last)
+
+    def _warmup_cuda(self, dtype):
+        """İlk canlı karedeki CUDA kernel hazırlama gecikmesini açılışa taşır."""
+        tensor = self.torch.zeros(
+            (1, 3, MODEL_HEIGHT, MODEL_WIDTH),
+            device=self.device,
+            dtype=dtype,
+        ).contiguous(memory_format=self.torch.channels_last)
+        with self.torch.inference_mode():
+            self.model(tensor)
+        self.torch.cuda.synchronize()

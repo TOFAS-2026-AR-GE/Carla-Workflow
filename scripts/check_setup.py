@@ -55,7 +55,26 @@ try:
             "daha yavas calisir."
         )
 except ImportError:
-    pass
+    torch = None
+
+if settings.enable_sign_detection and find_spec("onnxruntime"):
+    onnxruntime = import_module("onnxruntime")
+    providers = set(onnxruntime.get_available_providers())
+    cuda_provider = "CUDAExecutionProvider" in providers
+    status = "OK" if cuda_provider else "UYARI"
+    print(
+        f"{status:5} ONNX CUDA provider "
+        f"{'aktif' if cuda_provider else 'bulunamadi'}"
+    )
+
+if torch is not None and torch.cuda.is_available():
+    print(
+        "OK    Model cihazlari "
+        f"vehicle={settings.vehicle_device} "
+        f"sign={settings.sign_device} "
+        f"lane={settings.lane_device} "
+        f"fp16={settings.enable_fp16_inference}"
+    )
 
 for path in model_paths:
     status = "OK" if path.is_file() else "EKSIK"

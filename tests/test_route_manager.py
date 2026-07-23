@@ -45,6 +45,26 @@ class FakeMap:
 
 
 class PersistentRouteManagerTests(unittest.TestCase):
+    def test_planned_route_is_not_extended_into_an_arbitrary_turn(self):
+        manager = PersistentRouteManager(FakeMap(), horizon_m=30.0)
+        planned = [FakeWaypoint(float(x), limit=100) for x in range(6)]
+
+        manager.set_planned_route(planned)
+        _waypoint, reference_path = manager.update(location(1.0))
+
+        self.assertTrue(manager.planned_route_active)
+        self.assertLessEqual(reference_path[-1].x, 5.0)
+
+    def test_remaining_distance_uses_planned_route_length(self):
+        manager = PersistentRouteManager(FakeMap(), horizon_m=30.0)
+        manager.set_planned_route(
+            [FakeWaypoint(float(x), limit=100) for x in range(11)]
+        )
+
+        remaining = manager.remaining_distance(location(4.0))
+
+        self.assertAlmostEqual(remaining, 6.0, places=6)
+
     def test_crossing_one_lane_does_not_replace_the_reference_route(self):
         carla_map = FakeMap()
         manager = PersistentRouteManager(

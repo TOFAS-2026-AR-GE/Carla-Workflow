@@ -15,6 +15,9 @@ class PerceptionWorker:
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.last_error = None
+        self.submitted_count = 0
+        self.dropped_count = 0
+        self.processed_count = 0
         self.thread = threading.Thread(
             target=self._loop,
             name="perception-worker",
@@ -43,6 +46,7 @@ class PerceptionWorker:
 
     def submit_item(self, item):
         """Eski bekleyen işi atıp yalnızca en yeni algılama işini tutar."""
+        self.submitted_count += 1
 
         try:
             self.queue.put_nowait(item)
@@ -53,6 +57,7 @@ class PerceptionWorker:
         # Kuyruktaki görüntü artık eskidir; yerine en yeni görüntüyü koy.
         try:
             self.queue.get_nowait()
+            self.dropped_count += 1
         except queue.Empty:
             pass
 
@@ -64,6 +69,14 @@ class PerceptionWorker:
     def get_latest(self):
         with self.lock:
             return self.latest_result
+
+    def get_diagnostics(self):
+        """Kuyrukta kaybedilen ve tamamlanan inference sayılarını döndürür."""
+        return {
+            "submitted": int(self.submitted_count),
+            "dropped": int(self.dropped_count),
+            "processed": int(self.processed_count),
+        }
 
     def stop(self):
         self.stop_event.set()
@@ -118,3 +131,4 @@ class PerceptionWorker:
             self.last_error = None
             with self.lock:
                 self.latest_result = result
+                self.processed_count += 1

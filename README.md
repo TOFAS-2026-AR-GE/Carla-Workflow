@@ -33,6 +33,8 @@ Her CARLA karesinde aşağıdaki sıra izlenir:
 9. BEV modu açıksa `bev/` sensör verilerini ego koordinatına taşır ve ana lead
    kaybolduğunda yalnız taze, çok-sensörlü ve occupancy destekli bir track ile
    güvenli lead recovery uygular. Mevcut ana lead'i hiçbir zaman silmez.
+10. Navigasyon paneli CARLA'nın açık olan haritasını otomatik çizer; onaylanan
+    hedefe en kısa sürüş rotasını üretir ve varışta aracı durdurur.
 
 ## Klasör ve dosya rehberi
 
@@ -42,6 +44,7 @@ Her CARLA karesinde aşağıdaki sıra izlenir:
 | `carla_app/application.py` | Açılış, ana döngü, durum çıktısı ve kapanışı yönetir. |
 | `carla_app/config.py` | `.env` ayarlarını tek yerde okur ve doğrular. |
 | `carla_app/core/` | CARLA bağlantısı, ego araç, trafik, rota ve araç durumunu yönetir. |
+| `carla_app/navigation/` | Harita hedefi, en kısa rota, kalan mesafe ve varış durumunu yönetir. |
 | `carla_app/sensors/layout.py` | Sensör adlarını, konumlarını ve CARLA ayarlarını tanımlar. |
 | `carla_app/sensors/factory.py` | Tanımlanan sensörleri CARLA üzerinde oluşturur. |
 | `carla_app/sensors/manager.py` | Sensörleri açar, okur, kaydeder ve kapatır. |
@@ -52,7 +55,8 @@ Her CARLA karesinde aşağıdaki sıra izlenir:
 | `carla_app/perception/` | YOLO nesneleri, UFLD şeritleri, zamansal takip ve kamera-LiDAR doğrulamasıdır. |
 | `carla_app/bev/` | Kalibrasyonlu IPM, sensör füzyonu, takip ve occupancy grid üretir. |
 | `carla_app/controller/vehicle/` | Ön araç seçimi, direksiyon, hız, gaz-fren ve acil frendir. |
-| `carla_app/visualization/viewer.py` | Kamera kutularını, UFLD şeritlerini ve BEV panelini gösterir. |
+| `carla_app/visualization/viewer.py` | Kamera, UFLD, BEV ve navigasyonu tek OpenCV penceresinde birleştirir. |
+| `carla_app/visualization/map_renderer.py` | CARLA yol ağını, rotayı, hedefi ve canlı ego konumunu çizer. |
 | `carla_app/visualization/sensor_layout.py` | Sensör yerleşimini tarayıcı verisine dönüştürür. |
 | `carla_app/visualization/sensor_layout.html` | Araba şeklindeki sensör ekranıdır. |
 | `scripts/` | Kurulum kontrolü, model kopyalama ve sensör ekranı komutlarıdır. |
@@ -137,6 +141,74 @@ bash run_linux.sh --bev
 
 OpenCV penceresinde `Q`, `ESC` veya pencerenin kapatma düğmesi uygulamayı
 güvenli biçimde sonlandırır.
+
+## Canlı navigasyon kullanımı
+
+Uygulama açıldığında ego araç bulunduğu yerde frenle bekler. Açık olan CARLA
+haritası (`Town03`, `Town05` gibi) ayrıca seçilmez; panel o anki
+`world.get_map()` verisinden otomatik üretilir.
+
+1. Navigasyon panelindeki bir yolun yakınına farenin **sağ tuşuyla** tıklayın.
+2. Sarı `SECILI` işaretinin doğru sürüş şeridine oturduğunu kontrol edin.
+3. `ROTAYI ONAYLA` düğmesine sol tıklayın.
+4. Araç kırmızı rotayı izler; sarı ego işareti canlı konumla birlikte hareket
+   eder ve kalan mesafe panelde güncellenir.
+5. Araç hedefe yaklaşırken rahat fren mesafesine göre yavaşlar ve hedefte
+   durur.
+
+Onaylamadan önce `IPTAL` ile seçim kaldırılabilir. Sürüş sırasında başka bir
+nokta sağ tıkla seçilip onaylanırsa rota aracın güncel konumundan yeniden
+hesaplanır.
+
+Pencere boyutu ve navigasyon hızı `.env` üzerinden ayarlanabilir:
+
+```dotenv
+DASHBOARD_WIDTH=1580
+DASHBOARD_HEIGHT=780
+NAVIGATION_SPEED_KMH=45
+NAVIGATION_ARRIVAL_DISTANCE_M=2.5
+NAVIGATION_RENDER_EVERY_N_FRAMES=2
+```
+
+UFLD modeli mevcut kamera panelinde şeritleri canlı çizer. Bu aşamada aracın
+ana referans yolu navigasyon waypoint rotasıdır; görüntü tabanlı şerit
+merkezleme daha sonra güven sınırlarıyla bu referansa düzeltme olarak
+eklenmelidir.
+
+## CUDA ve canlı performans
+
+`VEHICLE_DEVICE`, `SIGN_DEVICE` ve `LANE_DEVICE` varsayılan olarak `auto`
+değerindedir. CUDA varsa üç model de ekran kartını seçer. CUDA inference için
+FP16, cuDNN sabit-boyut optimizasyonu ve TF32 varsayılan olarak açıktır:
+
+```dotenv
+VEHICLE_DEVICE=auto
+SIGN_DEVICE=auto
+LANE_DEVICE=auto
+ENABLE_FP16_INFERENCE=true
+```
+
+UFLD resize ve ImageNet normalizasyonunu CUDA üzerinde yapar; CPU'dan GPU'ya
+büyük bir `float32` tensör yerine sabitlenmiş bellekteki ham kamera görüntüsü
+taşınır. YOLO ve isteğe bağlı tabela modelleri FP16 çalışır. Modeller açılışta
+bir kez ısıtıldığı için ilk canlı karede kernel veya backend hazırlama
+takılması oluşmaz. Geçici CUDA bellek baskısında önce bellek önbelleği
+temizlenerek CUDA aynı işlem için bir kez daha denenir; yalnız ikinci hata da
+başarısızsa güvenli CPU yedeğine geçilir.
+
+Durum satırındaki performans alanları:
+
+- `loop`: ana kare işleme süresi,
+- `view`: OpenCV panel süresi,
+- `infer`: algılama işçisinin model süresi,
+- `q`: inference başlamadan önce kuyrukta bekleme,
+- `drop`: daha yeni kare geldiği için bilinçli atılan eski inference işleri,
+- `budget_over`: 50 ms simülasyon kare bütçesini aşan kare yüzdesi.
+
+`q` ve `drop` sürekli büyüyorsa model hızı kamera hızının gerisindedir.
+Öncelikle `VEHICLE_IMAGE_SIZE` düşürülmeli veya
+`PERCEPTION_EVERY_N_FRAMES=2` kullanılmalıdır. Navigasyon haritası varsayılan
+olarak iki simülasyon karesinde bir, kamera paneli ise her kare çizilir.
 
 ## Sensör yerleşimini görme
 

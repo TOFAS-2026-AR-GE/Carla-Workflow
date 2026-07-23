@@ -170,26 +170,25 @@ hesaplanır.
 Pencere boyutu ve navigasyon hızı `.env` üzerinden ayarlanabilir:
 
 ```dotenv
-DASHBOARD_WIDTH=1920
-DASHBOARD_HEIGHT=700
+DASHBOARD_SIZE=640
 NAVIGATION_SPEED_KMH=45
 NAVIGATION_ARRIVAL_DISTANCE_M=2.5
 NAVIGATION_RENDER_EVERY_N_FRAMES=4
 ```
 
-UFLD modeli mevcut kamera panelinde şeritleri canlı çizer. Modelin eğitimindeki
+UFLD modeli ön kamerada çalışmaya devam eder. Normal sürüş görünümünde şerit
+pikseli/eğrisi çizilmez; gerekirse `SHOW_LANE_OVERLAY=true` ile yalnız
+mühendislik incelemesi için açılır. Modelin eğitimindeki
 1640×590, 150° FOV ve araç-koordinatında `(x=1.5, z=2.4)` ön kamera geometrisi
 üretimde de korunur; model girişi 800×288 RGB/ImageNet'tir. 101. no-lane sınıfı
 ile satır seçimi yapılır, yatay konum özgün UFLD softmax beklentisiyle çözülür.
 Normalize entropi/no-lane marjı tamamen kararsız satırları elerken komşu
 hücrelere yayılan geçerli tahmini korur. Dört şerit kimliğinin ham satır
-ankrajları ayrı renkli noktalarla, güven ağırlıklı ve aykırı-nokta dayanımlı
-ikinci derece `x(y)` eğrileri aynı renkli çizgilerle gösterilir. Kamera paneli
-en-boy oranını bozmadan letterbox ile ölçeklenir. Varsayılan OpenCV penceresi
-`1500x600` boyutundadır; `DASHBOARD_WIDTH` ve `DASHBOARD_HEIGHT` yalnız
-ekran boyutunu değiştirir, UFLD eğitim kamerasının pozunu/FOV'unu değiştirmez.
-Ego şeridinin iki sınırı
-geçerli ve birbirini kesmiyorsa araları saydam yeşil koridor olarak gösterilir.
+ankrajları güven ağırlıklı ve aykırı-nokta dayanımlı ikinci derece `x(y)`
+eğrilerine dönüştürülür. Kamera paneli en-boy oranını bozmadan letterbox ile
+ölçeklenir. Varsayılan OpenCV penceresi `640x640` karedir;
+`DASHBOARD_SIZE` yalnız ekran boyutunu değiştirir, UFLD eğitim kamerasının
+pozunu/FOV'unu değiştirmez.
 Ham model noktaları, işlenmiş eğriler veya bunlardan türetilen hiçbir değer
 direksiyon, gaz ya da fren hesabına verilmez; aracın referansı navigasyon
 waypoint rotası olarak kalır.
@@ -336,8 +335,9 @@ kullanılabilir. Manuel çalıştırmadaki eşdeğer değer:
 SENSOR_MODE=bev
 ```
 
-`control` ve `record` modunda OpenCV penceresinde yalnız en-boy oranı korunmuş
-ön kamera/UFLD paneli ile navigasyon paneli bulunur. BEV inset'i oluşturulmaz.
+`control` ve `record` modunda OpenCV penceresinde en-boy oranı korunmuş ön
+kamera ile sol alttaki küçük navigasyon katmanı bulunur. BEV inset'i
+oluşturulmaz; şerit piksel/eğri kaplaması varsayılan olarak kapalıdır.
 `bev` modunda kuş bakışı inset'i ve `SURUS / DEBUG` switch'i eklenir; aynı
 geçiş klavyedeki `B` tuşuyla da yapılabilir.
 
@@ -547,6 +547,7 @@ CAMERA_WAIT_TIMEOUT_MS=10
 
 ENABLE_SIGN_DETECTION=false
 ENABLE_LANE_DETECTION=true
+SHOW_LANE_OVERLAY=false
 LANE_MODEL=models/lane/ufld_carla_best.pth
 LANE_DEVICE=auto
 LANE_CONFIDENCE=0.15
@@ -575,12 +576,14 @@ MAXIMUM_SPEED_KMH=70
 - `ENABLE_LANE_DETECTION=true`: ResNet-18 tabanlı klasik UFLD'yi yalnız ön
   kamerada çalıştırır. 800×288 RGB/ImageNet girdisinden dört şerit adayını,
   piksel noktalarını ve güven değerlerini üretir. Noktalar dayanıklı eğri
-  uydurma ve kısa zamansal yumuşatma sonrasında yalnız OpenCV katmanına gider;
-  Pure Pursuit/MPC rotasını değiştirmez.
+  uydurma ve kısa zamansal yumuşatma sonrasında görsel tanı olarak tutulur;
+  Pure Pursuit/MPC rotasını değiştirmez. `SHOW_LANE_OVERLAY=false`, normal
+  sürüş ekranında bu noktaları ve eğrileri çizmez.
 - `ENABLE_LIDAR_FUSION=true`: zaman uyumlu LiDAR noktalarıyla kamera mesafesini doğrular.
 - `SENSOR_MODE=control`: kayıt yapmadan 7 kamera, 5 radar, LiDAR, GNSS ve
   IMU'nun tamamını açar; model çıkarımını yalnız ön kamerada, BEV
-  doğrulamasını görselsiz çalıştırır.
+  doğrulamasını görselsiz çalıştırır. Kullanılmayan altı çevre kamerası CARLA
+  sensörü olarak açık kalır ancak CPU'da RGB'ye dönüştürülmez.
 - `CAMERA_INFERENCE_BATCH_SIZE=4`: yalnız `PERFORMANCE_PROFILE=manual` iken
   ve `SENSOR_MODE=bev` seçiliyken geçerlidir. `control`/`record` her donanımda
   tek ön kamera çıkarımı yapar.

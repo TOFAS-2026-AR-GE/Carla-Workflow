@@ -1042,8 +1042,9 @@ class ValidationTests(unittest.TestCase):
 
 
 class BevRendererTests(unittest.TestCase):
-    def test_opencv_overlay_draws_objects_signs_context_and_lanes(self):
+    def test_normal_opencv_overlay_omits_lane_pixels(self):
         viewer = PerceptionViewer.__new__(PerceptionViewer)
+        viewer.show_lane_overlay = False
         frame = np.zeros((240, 320, 3), dtype=np.uint8)
         vehicles = [
             {
@@ -1100,11 +1101,37 @@ class BevRendererTests(unittest.TestCase):
                 road_context,
             )
 
-        self.assertEqual(counts, {"boxes": 3, "lanes": 1})
+        self.assertEqual(counts, {"boxes": 3, "lanes": 0})
         self.assertEqual(rectangle.call_count, 3)
-        self.assertEqual(put_text.call_count, 4)
-        self.assertEqual(polylines.call_count, 2)
-        self.assertEqual(circle.call_count, 4)
+        self.assertEqual(put_text.call_count, 3)
+        polylines.assert_not_called()
+        circle.assert_not_called()
+
+    def test_lane_overlay_can_be_enabled_for_debugging(self):
+        viewer = PerceptionViewer.__new__(PerceptionViewer)
+        viewer.show_lane_overlay = True
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        lane_detection = {
+            "lanes": [
+                {
+                    "detected": True,
+                    "lane_index": 1,
+                    "confidence": 0.90,
+                    "points": [[120, 230], [140, 160], [150, 100]],
+                    "raw_points": [[121, 229], [149, 101]],
+                }
+            ]
+        }
+
+        counts = viewer.draw_perception_overlay(
+            frame,
+            vehicles=[],
+            signs=[],
+            lane_detection=lane_detection,
+            road_context={},
+        )
+
+        self.assertEqual(counts, {"boxes": 0, "lanes": 1})
 
     def test_opencv_overlay_fills_only_valid_ego_lane_corridor(self):
         frame = np.zeros((240, 320, 3), dtype=np.uint8)
@@ -1219,6 +1246,29 @@ class BevRendererTests(unittest.TestCase):
         combined = viewer.combine_panels(camera, bev)
 
         self.assertEqual(combined.shape, (100, 323, 3))
+
+    def test_configured_viewer_keeps_square_canvas_with_navigation_inset(self):
+        viewer = PerceptionViewer.__new__(PerceptionViewer)
+        viewer.bev_mode = "driving"
+        viewer.bev_button_rect = None
+        viewer.dashboard_width = 800
+        viewer.dashboard_height = 800
+        viewer.camera_width = 800
+        viewer.camera_height = 800
+        viewer.map_width = 240
+        viewer.map_height = 240
+        viewer.map_margin = 12
+        camera = np.zeros((590, 1640, 3), dtype=np.uint8)
+        map_panel = np.full((240, 240, 3), 100, dtype=np.uint8)
+
+        combined = viewer.combine_panels(
+            camera,
+            bev_image=None,
+            map_panel=map_panel,
+        )
+
+        self.assertEqual(combined.shape, (800, 800, 3))
+        self.assertEqual(viewer.map_rect, (12, 548, 252, 788))
 
     def test_bev_switch_selects_debug_and_driving_modes(self):
         viewer = PerceptionViewer.__new__(PerceptionViewer)

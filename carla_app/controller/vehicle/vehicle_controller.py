@@ -98,10 +98,19 @@ class VehicleController:
         ):
             longitudinal_info[key] = idm_info.get(key)
 
+        # Sanal trafik kuralı durma noktaları normal durumda IDM+PID tarafından
+        # kontrollü biçimde izlenir. Araç kırmızı çizgide durmuşken bu noktanın
+        # 25 cm uzakta olması fiziksel çarpışma değildir ve AEB'yi yüzlerce
+        # kare kilitlememelidir. Yalnız planlayıcının açıkça EMERGENCY dediği
+        # kural tehlikesi bağımsız tam fren katmanına yükseltilir.
+        emergency_rule_obstacle = None
+        if behavior.get("brake_urgency") == "EMERGENCY":
+            emergency_rule_obstacle = behavior.get("control_obstacle")
+
         emergency, safety_info = self.safety.evaluate_candidates(
             lead_vehicle,
             emergency_obstacle,
-            behavior.get("control_obstacle"),
+            emergency_rule_obstacle,
         )
         if emergency:
             self.longitudinal.notify_emergency_stop()

@@ -194,14 +194,15 @@ class Settings:
             240,
             int(os.getenv("BEV_HEIGHT", "600")),
         )
-        self.dashboard_width = max(
-            1100,
-            int(os.getenv("DASHBOARD_WIDTH", "1500")),
+        # Görüntü penceresi tek bir kare ölçüsü kullanır. Eski kurulumlardaki
+        # 1500x600 değerleri .env içinde kalsa bile yeni varsayılanın devreye
+        # girmesi için genişlik/yükseklik yerine bu bağımsız alan okunur.
+        self.dashboard_size = max(
+            640,
+            int(os.getenv("DASHBOARD_SIZE", "640")),
         )
-        self.dashboard_height = max(
-            480,
-            int(os.getenv("DASHBOARD_HEIGHT", "600")),
-        )
+        self.dashboard_width = self.dashboard_size
+        self.dashboard_height = self.dashboard_size
         self.navigation_speed_kmh = max(
             10.0,
             float(os.getenv("NAVIGATION_SPEED_KMH", "45")),
@@ -322,6 +323,10 @@ class Settings:
         self.show_bev_panel = _boolean(
             "SHOW_BEV_PANEL",
             self.sensor_mode == "bev",
+        )
+        self.show_lane_overlay = _boolean(
+            "SHOW_LANE_OVERLAY",
+            False,
         )
         self.enable_multicamera_perception = _boolean(
             "ENABLE_MULTICAMERA_PERCEPTION",

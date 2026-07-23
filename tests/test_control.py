@@ -768,6 +768,36 @@ class EmergencyBrakeTests(unittest.TestCase):
         self.assertTrue(second_emergency)
         self.assertEqual(info["hazard_count"], 2)
 
+    def test_persistent_hazard_counter_saturates_and_releases_on_clear_frame(self):
+        supervisor = EmergencyBrakeSupervisor()
+        obstacle = {
+            "track_id": 8,
+            "distance_m": 5.0,
+            "relative_speed_mps": -10.0,
+            "source": "camera_radar_track",
+            "measurement_frame_id": 1,
+        }
+        for frame_id in range(1, 601):
+            obstacle["measurement_frame_id"] = frame_id
+            emergency, info = supervisor.evaluate(obstacle)
+
+        self.assertTrue(emergency)
+        self.assertEqual(
+            info["hazard_count"],
+            supervisor.confirmation_ticks,
+        )
+
+        clear = dict(
+            obstacle,
+            distance_m=8.0,
+            relative_speed_mps=0.0,
+            measurement_frame_id=601,
+        )
+        released, clear_info = supervisor.evaluate(clear)
+
+        self.assertFalse(released)
+        self.assertEqual(clear_info["hazard_count"], 1)
+
     def test_different_raw_points_do_not_build_one_hazard(self):
         supervisor = EmergencyBrakeSupervisor()
         first = {

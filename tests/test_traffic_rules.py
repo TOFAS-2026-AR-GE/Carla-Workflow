@@ -490,6 +490,56 @@ class BehaviorPlannerTests(unittest.TestCase):
         self.assertNotEqual(next_tick["mode"], "STOPPED_AT_RED")
         self.assertIsNone(next_tick["control_obstacle"])
 
+    def test_new_simulator_red_cancels_green_override_immediately(self):
+        state = road_state(0.0)
+        state["simulator_traffic_light"] = {
+            "available": True,
+            "affected": True,
+            "color": "red",
+            "estimated_distance_m": 3.25,
+            "actor_id": 73,
+        }
+        old_red = light("red", 5.8, track_id=7)
+        self.planner.plan(
+            state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {"lead_traffic_light": old_red},
+        )
+
+        state["simulator_traffic_light"]["color"] = "green"
+        self.planner.plan(
+            state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {"lead_traffic_light": old_red},
+        )
+        released = self.planner.plan(
+            state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {"lead_traffic_light": old_red},
+        )
+        state["simulator_traffic_light"]["color"] = "red"
+        red_again = self.planner.plan(
+            state,
+            60.0 / 3.6,
+            self.speed_plan,
+            {"lead_traffic_light": old_red},
+        )
+
+        self.assertEqual(released["mode"], "START_ON_GREEN")
+        self.assertEqual(red_again["mode"], "STOPPED_AT_RED")
+        self.assertEqual(
+            red_again["primary_detection"]["state_source"],
+            "carla_vehicle_state",
+        )
+        self.assertEqual(
+            red_again["control_obstacle"]["source"],
+            "traffic_light_red",
+        )
+        self.assertFalse(self.planner.green_override_active)
+
     def test_confirmed_red_remains_active_after_camera_loses_the_light(self):
         state = road_state(3.0)
         decision = self.planner.plan(

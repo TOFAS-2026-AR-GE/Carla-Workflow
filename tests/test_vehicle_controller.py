@@ -90,6 +90,50 @@ class VehicleControllerIntegrationTests(unittest.TestCase):
         self.assertEqual(restart_control.brake, 0.0)
         self.assertEqual(restart_info["longitudinal"]["mode"], "RESTART")
 
+    def test_red_hold_does_not_latch_aeb_after_green(self):
+        controller = VehicleController(dt=0.05)
+        stale_camera_red = {
+            "color": "red",
+            "track_id": 12,
+            "estimated_distance_m": 3.25,
+            "confidence": 0.90,
+            "smoothed_confidence": 0.90,
+            "state_source": "camera_tracker",
+        }
+        road_context = {"lead_traffic_light": stale_camera_red}
+
+        for _ in range(600):
+            red_control, red_info = controller.run_step(
+                self.stopped_state("red"),
+                lead_vehicle=None,
+                road_context=road_context,
+            )
+
+        controller.run_step(
+            self.stopped_state("green"),
+            lead_vehicle=None,
+            road_context=road_context,
+        )
+        green_control, green_info = controller.run_step(
+            self.stopped_state("green"),
+            lead_vehicle=None,
+            road_context=road_context,
+        )
+        restart_control, restart_info = controller.run_step(
+            self.stopped_state("green"),
+            lead_vehicle=None,
+            road_context=road_context,
+        )
+
+        self.assertEqual(red_info["mode"], "STOPPED_AT_RED")
+        self.assertEqual(red_control.brake, 0.35)
+        self.assertEqual(red_info["safety"]["hazard_count"], 0)
+        self.assertEqual(green_info["mode"], "START_ON_GREEN")
+        self.assertLess(green_control.brake, 1.0)
+        self.assertEqual(restart_info["mode"], "CRUISE")
+        self.assertGreater(restart_control.throttle, 0.0)
+        self.assertEqual(restart_control.brake, 0.0)
+
     def test_vehicle_holds_until_navigation_route_is_confirmed(self):
         controller = VehicleController(dt=0.05)
         navigation = {
@@ -275,6 +319,43 @@ class VehicleControllerIntegrationTests(unittest.TestCase):
             tracked_lead["distance_m"],
         )
         self.assertNotEqual(info["mode"], "EMERGENCY")
+
+    def test_speed_limit_and_lead_distance_are_combined_without_false_aeb(self):
+        controller = VehicleController(dt=0.05)
+        state = {
+            "location": location(0.0),
+            "yaw": 0.0,
+            "speed_mps": 8.0,
+            "speed_kmh": 28.8,
+            "reference_path": [location(x) for x in range(81)],
+            "lane_width": 3.5,
+            "road_id": 1,
+            "lane_id": -1,
+            "is_junction": False,
+        }
+        lead = {
+            "track_id": 21,
+            "distance_m": 15.0,
+            "relative_speed_mps": -1.0,
+            "source": "camera_radar_track",
+            "confidence": 0.95,
+            "measurement_frame_id": 30,
+        }
+
+        control, info = controller.run_step(
+            state,
+            lead_vehicle=lead,
+            road_context={"speed_limit_kmh": 30},
+        )
+
+        self.assertEqual(info["mode"], "FOLLOW_VEHICLE")
+        self.assertIs(info["longitudinal_lead"], lead)
+        self.assertLessEqual(
+            info["behavior_target_speed_mps"],
+            30.0 / 3.6,
+        )
+        self.assertNotEqual(control.brake, 1.0)
+        self.assertEqual(info["safety"]["hazard_count"], 0)
 
 
 if __name__ == "__main__":

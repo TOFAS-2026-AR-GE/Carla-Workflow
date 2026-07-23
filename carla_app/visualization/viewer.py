@@ -14,19 +14,32 @@ class PerceptionViewer:
         carla_map=None,
         navigation=None,
         window_name="CARLA Akilli Surus",
-        dashboard_width=1500,
-        dashboard_height=600,
+        dashboard_width=640,
+        dashboard_height=640,
         navigation_render_every_n_frames=2,
+        show_lane_overlay=False,
     ):
         self.window_name = window_name
         self.closed = False
         self.bev_mode = "driving"
         self.bev_button_rect = None
-        self.dashboard_width = max(1100, int(dashboard_width))
-        self.dashboard_height = max(480, int(dashboard_height))
-        self.map_width = min(520, max(430, self.dashboard_width // 4))
-        self.camera_width = self.dashboard_width - self.map_width - 4
-        self.map_offset_x = self.camera_width + 4
+        self.show_lane_overlay = bool(show_lane_overlay)
+        dashboard_size = max(
+            640,
+            min(int(dashboard_width), int(dashboard_height)),
+        )
+        self.dashboard_width = dashboard_size
+        self.dashboard_height = dashboard_size
+        self.camera_width = dashboard_size
+        self.camera_height = dashboard_size
+        self.map_width = min(240, max(200, dashboard_size // 3))
+        self.map_height = self.map_width
+        self.map_margin = 12
+        self.map_offset_x = self.map_margin
+        self.map_offset_y = (
+            self.dashboard_height - self.map_height - self.map_margin
+        )
+        self.map_rect = None
         self.last_vehicle_location = None
         self.last_navigation = {}
         self.navigation_panel = None
@@ -35,7 +48,7 @@ class PerceptionViewer:
                 carla_map,
                 navigation,
                 width=self.map_width,
-                height=self.dashboard_height,
+                height=self.map_height,
                 render_every_n_frames=navigation_render_every_n_frames,
             )
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -161,7 +174,7 @@ class PerceptionViewer:
         return not self.closed
 
     def combine_panels(self, perception_frame, bev_image, map_panel=None):
-        """Kamera, isteğe bağlı BEV ve navigasyonu tek büyük pencerede birleştirir."""
+        """Kamera, isteğe bağlı BEV ve navigasyonu kare pencerede birleştirir."""
         if not hasattr(self, "dashboard_height"):
             if bev_image is None:
                 self.bev_button_rect = None
@@ -181,12 +194,12 @@ class PerceptionViewer:
         camera_panel = self.resize_with_letterbox(
             perception_frame,
             self.camera_width,
-            self.dashboard_height,
+            self.camera_height,
         )
 
         if bev_image is not None:
-            inset_width = min(360, self.camera_width // 3)
-            inset_height = int(inset_width * 0.70)
+            inset_width = self.map_width
+            inset_height = self.map_height
             inset = cv2.resize(
                 bev_image,
                 (inset_width, inset_height),
@@ -218,16 +231,34 @@ class PerceptionViewer:
 
         if map_panel is None:
             self.map_offset_x = 0
+            self.map_offset_y = 0
+            self.map_rect = None
             return camera_panel
 
-        divider = np.full(
-            (self.dashboard_height, 4, 3),
-            (8, 11, 15),
-            dtype=np.uint8,
+        if map_panel.shape[:2] != (self.map_height, self.map_width):
+            map_panel = cv2.resize(
+                map_panel,
+                (self.map_width, self.map_height),
+                interpolation=cv2.INTER_AREA,
+            )
+        self.map_offset_x = self.map_margin
+        self.map_offset_y = (
+            self.dashboard_height - self.map_height - self.map_margin
         )
-        self.map_offset_x = self.camera_width + divider.shape[1]
-        combined = np.hstack((camera_panel, divider, map_panel))
-        return combined
+        x1 = self.map_offset_x
+        y1 = self.map_offset_y
+        x2 = x1 + self.map_width
+        y2 = y1 + self.map_height
+        self.map_rect = (x1, y1, x2, y2)
+        cv2.rectangle(
+            camera_panel,
+            (x1 - 3, y1 - 3),
+            (x2 + 3, y2 + 3),
+            (230, 233, 238),
+            2,
+        )
+        camera_panel[y1:y2, x1:x2] = map_panel
+        return camera_panel
 
     @staticmethod
     def resize_with_letterbox(image, target_width, target_height):
@@ -322,10 +353,16 @@ class PerceptionViewer:
         navigation_panel = getattr(self, "navigation_panel", None)
         if navigation_panel is None:
             return
-        map_x = x - self.map_offset_x
+        map_rect = getattr(self, "map_rect", None)
+        if map_rect is not None:
+            x1, y1, x2, y2 = map_rect
+            if not (x1 <= x < x2 and y1 <= y < y2):
+                return
+        map_x = x - getattr(self, "map_offset_x", 0)
+        map_y = y - getattr(self, "map_offset_y", 0)
         navigation_panel.handle_left_click(
             map_x,
-            y,
+            map_y,
             getattr(self, "last_vehicle_location", None),
         )
 
@@ -397,7 +434,7 @@ class PerceptionViewer:
         lane_detection,
         road_context,
     ):
-        """Ana kameraya kutuları ve şerit çizgilerini tek yerde çizer."""
+        """Ana kameraya sürüş için gerekli nesne kutularını tek yerde çizer."""
         drawn_boxes = 0
         for detection in vehicles:
             drawn_boxes += int(
@@ -408,7 +445,9 @@ class PerceptionViewer:
                 self._draw(frame, detection, (0, 165, 255), "SIGN")
             )
 
-        drawn_lanes = self._draw_lanes(frame, lane_detection)
+        drawn_lanes = 0
+        if getattr(self, "show_lane_overlay", False):
+            drawn_lanes = self._draw_lanes(frame, lane_detection)
         for detection in (road_context or {}).get("detections", []):
             category = str(detection.get("category", "")).strip().lower()
             if category in {"vehicle", "two_wheeler", "speed_sign"}:

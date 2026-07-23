@@ -293,6 +293,16 @@ class BehaviorPlanner:
         # kararlı kırmızıyı taşıyabilir. Aynı ışığın bu gecikmiş kırmızısını
         # tekrar kilitlemeyiz; aksi durumda araç kalkıp hemen yeniden durur.
         if self.green_override_active:
+            # Yeşil serbest bırakma yalnız o anki CARLA durumu yeşilken
+            # geçerlidir. Aynı ışık tekrar kırmızı/turuncu olduğunda eski
+            # kamera takibini bastırmaya devam etmek kırmızı ihlaline yol
+            # açardı; yetkili simülatör durumu bu kilidi derhal iptal eder.
+            if simulator_stop_light is not None:
+                self.green_override_active = False
+                self.released_light = None
+                self.simulator_green_hits = 0
+                return simulator_stop_light
+
             released_track_id = (self.released_light or {}).get("track_id")
             camera_track_id = (camera_light or {}).get("track_id")
             same_released_light = (

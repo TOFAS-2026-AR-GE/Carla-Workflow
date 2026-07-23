@@ -63,6 +63,38 @@ class SensorManager:
         if self.recording_enabled:
             self.sync = SensorSync(self.layout.sensor_names, max_frames=8)
 
+        use_surround_rgb = bool(
+            getattr(self.settings, "show_bev_panel", False)
+            or getattr(
+                self.settings,
+                "enable_multicamera_perception",
+                False,
+            )
+            or self.sensor_mode == "bev"
+        )
+        live_camera_names = None
+        if not use_surround_rgb:
+            primary_camera_name = getattr(
+                self.layout,
+                "primary_camera_name",
+                None,
+            )
+            if primary_camera_name is None:
+                for spec in active_specs:
+                    if (
+                        getattr(spec, "primary", False)
+                        or str(getattr(spec, "name", "")).startswith(
+                            "camera_"
+                        )
+                    ):
+                        primary_camera_name = spec.name
+                        break
+            live_camera_names = (
+                {primary_camera_name}
+                if primary_camera_name is not None
+                else set()
+            )
+
         self.actors = spawn_layout(
             world=world,
             vehicle=vehicle,
@@ -71,6 +103,7 @@ class SensorManager:
             camera_stream=self.camera_stream,
             radar_stream=self.radar_stream,
             live_stream=self.live_stream,
+            live_camera_names=live_camera_names,
             specs=active_specs,
         )
 

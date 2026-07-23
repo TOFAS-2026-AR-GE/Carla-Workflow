@@ -131,7 +131,14 @@ class EmergencyBrakeSupervisor:
         same_hazard = self.is_same_hazard(obstacle)
 
         if ordinary_hazard and new_observation:
-            self.hazard_count = self.hazard_count + 1 if same_hazard else 1
+            # Sayaç bir doğrulama penceresidir, olayın toplam süresi değildir.
+            # Doyurulmazsa kırmızı ışıkta beklenen yüzlerce kare, tehlike
+            # kalktıktan sonra da aynı sayıda kare tam freni kilitler.
+            self.hazard_count = (
+                min(self.confirmation_ticks, self.hazard_count + 1)
+                if same_hazard
+                else 1
+            )
             self.last_hazard = self.remember_hazard(obstacle)
         elif not ordinary_hazard and new_observation:
             self.hazard_count = max(0, self.hazard_count - 1)

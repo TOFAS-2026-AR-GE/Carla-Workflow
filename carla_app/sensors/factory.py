@@ -41,6 +41,7 @@ def start_sensor_listener(
     camera_stream,
     radar_stream,
     live_stream=None,
+    live_camera_names=None,
 ):
     """Sensör verisini kamera, radar veya kayıt akışına gönderir."""
     if spec.kind == "camera":
@@ -48,11 +49,18 @@ def start_sensor_listener(
         def camera_callback(image):
             if sync is not None:
                 sync.push(spec.name, image.frame, image)
-            if spec.primary or live_stream is not None:
+            send_to_live_stream = (
+                live_stream is not None
+                and (
+                    live_camera_names is None
+                    or spec.name in live_camera_names
+                )
+            )
+            if spec.primary or send_to_live_stream:
                 rgb_image = image_to_rgb(image)
                 if spec.primary:
                     camera_stream.push(image.frame, rgb_image)
-                if live_stream is not None:
+                if send_to_live_stream:
                     live_stream.push(spec.name, image.frame, rgb_image)
 
         actor.listen(camera_callback)
@@ -120,6 +128,7 @@ def spawn_layout(
     camera_stream,
     radar_stream,
     live_stream=None,
+    live_camera_names=None,
     specs=None,
 ):
     """Seçilen sensörleri oluşturur; hata olursa oluşturulanları temizler."""
@@ -137,6 +146,7 @@ def spawn_layout(
                 camera_stream,
                 radar_stream,
                 live_stream,
+                live_camera_names,
             )
             actors.append(actor)
             print(

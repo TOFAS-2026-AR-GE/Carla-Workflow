@@ -127,6 +127,7 @@ class CarlaApplication:
             navigation_render_every_n_frames=(
                 self.settings.navigation_render_every_n_frames
             ),
+            show_lane_overlay=self.settings.show_lane_overlay,
         )
         self.controller = VehicleController(
             self.dt,

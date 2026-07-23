@@ -183,6 +183,10 @@ class SensorManagerTests(unittest.TestCase):
         self.assertEqual(captured["specs"], layout.all_specs)
         self.assertIsNone(captured["sync"])
         self.assertIs(captured["live_stream"], manager.live_stream)
+        self.assertEqual(
+            captured["live_camera_names"],
+            {"camera_front_wide"},
+        )
 
     def test_full_sensor_mode_does_not_duplicate_lidar(self):
         settings = types.SimpleNamespace(
@@ -225,6 +229,10 @@ class SensorManagerTests(unittest.TestCase):
         self.assertEqual(captured["specs"], layout.all_specs)
         self.assertEqual(captured["specs"].count(lidar), 1)
         self.assertIsNotNone(captured["live_stream"])
+        self.assertEqual(
+            captured["live_camera_names"],
+            {"camera_front_wide"},
+        )
 
     def test_fresh_imu_and_gnss_are_added_to_vehicle_state(self):
         settings = types.SimpleNamespace(
@@ -313,6 +321,7 @@ class SensorManagerTests(unittest.TestCase):
         self.assertIsNone(captured["sync"])
         self.assertIs(captured["live_stream"], manager.live_stream)
         self.assertIsNotNone(manager.live_stream)
+        self.assertIsNone(captured["live_camera_names"])
 
     def test_record_mode_spawns_all_sensors_and_keeps_live_bev_stream(self):
         settings = types.SimpleNamespace(
@@ -371,6 +380,10 @@ class SensorManagerTests(unittest.TestCase):
         self.assertEqual(captured["specs"], layout.all_specs)
         self.assertIs(captured["live_stream"], manager.live_stream)
         self.assertIsNotNone(captured["sync"])
+        self.assertEqual(
+            captured["live_camera_names"],
+            {"camera_front_wide"},
+        )
         self.assertEqual(
             set(captured["sync"].sensor_names),
             set(layout.sensor_names),
@@ -491,6 +504,49 @@ class SensorManagerTests(unittest.TestCase):
         self.assertEqual(live_stream.items[0][0], "camera_rear_center")
         self.assertEqual(live_stream.items[0][1], 12)
         self.assertEqual(live_stream.items[0][2].tolist(), [[[30, 20, 10]]])
+
+    def test_control_mode_does_not_decode_unused_surround_camera(self):
+        class FakeActor:
+            def listen(self, callback):
+                self.callback = callback
+
+        class FakeLiveStream:
+            def __init__(self):
+                self.items = []
+
+            def push(self, sensor_name, frame_id, data):
+                self.items.append((sensor_name, frame_id, data))
+
+        actor = FakeActor()
+        live_stream = FakeLiveStream()
+        spec = types.SimpleNamespace(
+            kind="camera",
+            name="camera_rear_center",
+            primary=False,
+        )
+        start_sensor_listener(
+            actor,
+            spec,
+            sync=None,
+            camera_stream=None,
+            radar_stream=None,
+            live_stream=live_stream,
+            live_camera_names={"camera_front_wide"},
+        )
+        image = types.SimpleNamespace(
+            frame=12,
+            width=1,
+            height=1,
+            raw_data=bytes([10, 20, 30, 255]),
+        )
+
+        with patch(
+            "carla_app.sensors.factory.image_to_rgb"
+        ) as image_to_rgb:
+            actor.callback(image)
+
+        image_to_rgb.assert_not_called()
+        self.assertEqual(live_stream.items, [])
 
 
 if __name__ == "__main__":

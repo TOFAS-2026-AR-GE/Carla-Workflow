@@ -29,9 +29,25 @@ class SensorModeTests(unittest.TestCase):
         )
         self.assertEqual(
             (settings.dashboard_width, settings.dashboard_height),
-            (1500, 600),
+            (640, 640),
         )
+        self.assertFalse(settings.show_lane_overlay)
         self.assertEqual(settings.perception_latency_budget_ms, 80.0)
+
+    def test_dashboard_size_is_always_square(self):
+        environment = {
+            "DASHBOARD_SIZE": "900",
+            "DASHBOARD_WIDTH": "1500",
+            "DASHBOARD_HEIGHT": "600",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            settings = Settings()
+
+        self.assertEqual(settings.dashboard_size, 900)
+        self.assertEqual(
+            (settings.dashboard_width, settings.dashboard_height),
+            (900, 900),
+        )
 
     def test_bev_mode_does_not_enable_recording(self):
         environment = {

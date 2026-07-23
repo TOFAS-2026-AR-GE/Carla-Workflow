@@ -58,3 +58,64 @@ class PerformanceMonitor:
             self.values[name] = value
             return
         self.values[name] = previous + self.smoothing * (value - previous)
+
+
+class AdaptivePerceptionScheduler:
+    """Algılama yetişemediğinde kare aralığını sınırlı biçimde ayarlar."""
+
+    def __init__(
+        self,
+        frame_budget_ms,
+        initial_period=1,
+        maximum_period=3,
+        evaluation_frames=40,
+    ):
+        self.frame_budget_ms = max(1.0, float(frame_budget_ms))
+        self.period = max(1, int(initial_period))
+        self.maximum_period = max(self.period, int(maximum_period))
+        self.evaluation_frames = max(10, int(evaluation_frames))
+        self.frames_since_evaluation = 0
+        self.previous_submitted = 0
+        self.previous_dropped = 0
+        self.stable_windows = 0
+
+    def update(self, inference_ms, worker_diagnostics):
+        """Yeni öneri oluşursa periyodu, aksi halde ``None`` döndürür."""
+        self.frames_since_evaluation += 1
+        if self.frames_since_evaluation < self.evaluation_frames:
+            return None
+        self.frames_since_evaluation = 0
+
+        submitted = int(worker_diagnostics.get("submitted", 0))
+        dropped = int(worker_diagnostics.get("dropped", 0))
+        submitted_delta = max(0, submitted - self.previous_submitted)
+        dropped_delta = max(0, dropped - self.previous_dropped)
+        self.previous_submitted = submitted
+        self.previous_dropped = dropped
+
+        drop_ratio = dropped_delta / max(1, submitted_delta)
+        inference_ms = max(0.0, float(inference_ms))
+        available_inference_ms = (
+            self.frame_budget_ms * self.period * 0.90
+        )
+        overloaded = (
+            drop_ratio >= 0.12
+            or inference_ms > available_inference_ms
+        )
+
+        if overloaded and self.period < self.maximum_period:
+            self.period += 1
+            self.stable_windows = 0
+            return self.period
+
+        next_faster_period = max(1, self.period - 1)
+        faster_budget_ms = (
+            self.frame_budget_ms * next_faster_period * 0.65
+        )
+        stable = drop_ratio == 0.0 and inference_ms <= faster_budget_ms
+        self.stable_windows = self.stable_windows + 1 if stable else 0
+        if self.period > 1 and self.stable_windows >= 3:
+            self.period -= 1
+            self.stable_windows = 0
+            return self.period
+        return None

@@ -29,7 +29,7 @@ class PurePursuitController:
         self.lookahead_speed_gain_s = 0.65
 
         # Direksiyonun tek çevrimde sıçramasını önleyen konfor değerleri.
-        self.steering_filter_ratio = 0.45
+        self.steering_filter_ratio = 0.42
         self.previous_steer = 0.0
         self.last_info = self.empty_info()
 
@@ -192,10 +192,15 @@ class PurePursuitController:
 
     def smooth_steering(self, desired_steer, speed_mps):
         """Alçak geçiren filtre ve değişim sınırını birlikte uygular."""
-        filtered = self.previous_steer + self.steering_filter_ratio * (
+        filter_ratio = clamp(
+            self.steering_filter_ratio - 0.008 * speed_mps,
+            0.26,
+            self.steering_filter_ratio,
+        )
+        filtered = self.previous_steer + filter_ratio * (
             desired_steer - self.previous_steer
         )
-        maximum_rate = clamp(0.90 - 0.020 * speed_mps, 0.45, 0.90)
+        maximum_rate = clamp(0.78 - 0.018 * speed_mps, 0.38, 0.78)
         maximum_change = maximum_rate * self.dt
         change = clamp(
             filtered - self.previous_steer,

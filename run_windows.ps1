@@ -68,12 +68,9 @@ if (-not $env:LANE_DEVICE) { $env:LANE_DEVICE = "auto" }
 if (-not $env:ENABLE_FP16_INFERENCE) {
     $env:ENABLE_FP16_INFERENCE = "true"
 }
-$env:CAMERA_WAIT_TIMEOUT_MS = "10"
-$env:PERCEPTION_EVERY_N_FRAMES = "1"
-$env:VEHICLE_IMAGE_SIZE = "640"
 $env:ENABLE_SIGN_DETECTION = "false"
 $env:PYTHONUNBUFFERED = "1"
 
-Write-Host "[RUN] Windows | RTX 5070 profili | mode=$SensorMode"
+Write-Host "[RUN] Windows | dinamik donanim profili | mode=$SensorMode"
 & conda run --no-capture-output -n $EnvironmentName python -u main.py
 exit $LASTEXITCODE

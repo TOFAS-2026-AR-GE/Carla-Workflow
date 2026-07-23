@@ -1,7 +1,13 @@
 import unittest
 
-from carla_app.core.performance import PerformanceMonitor
+from carla_app.core.performance import (
+    AdaptivePerceptionScheduler,
+    PerformanceMonitor,
+)
 from carla_app.perception.device import is_cuda_device
+from carla_app.perception.performance_profile import (
+    choose_performance_profile,
+)
 
 
 class DeviceSelectionTests(unittest.TestCase):
@@ -10,6 +16,35 @@ class DeviceSelectionTests(unittest.TestCase):
         self.assertTrue(is_cuda_device("cuda"))
         self.assertTrue(is_cuda_device("cuda:1"))
         self.assertFalse(is_cuda_device("cpu"))
+
+    def test_32_gb_gpu_uses_every_frame_cuda_ultra_profile(self):
+        profile = choose_performance_profile(
+            True,
+            total_vram_mb=32_000,
+            free_vram_mb=25_000,
+        )
+
+        self.assertEqual(profile.name, "cuda-ultra")
+        self.assertEqual(profile.perception_every_n_frames, 1)
+        self.assertEqual(profile.vehicle_image_size, 640)
+
+    def test_4_gb_gpu_uses_low_vram_profile(self):
+        profile = choose_performance_profile(
+            True,
+            total_vram_mb=4_000,
+            free_vram_mb=1_500,
+        )
+
+        self.assertEqual(profile.name, "cuda-low-vram")
+        self.assertEqual(profile.perception_every_n_frames, 2)
+        self.assertEqual(profile.vehicle_image_size, 512)
+
+    def test_cpu_profile_reduces_inference_load(self):
+        profile = choose_performance_profile(False)
+
+        self.assertEqual(profile.name, "cpu")
+        self.assertEqual(profile.perception_every_n_frames, 2)
+        self.assertEqual(profile.vehicle_image_size, 416)
 
 
 class PerformanceMonitorTests(unittest.TestCase):
@@ -32,6 +67,46 @@ class PerformanceMonitorTests(unittest.TestCase):
         self.assertIn("infer=25.0ms", summary)
         self.assertIn("drop=3", summary)
         self.assertIn("budget_over=100%", summary)
+
+    def test_scheduler_reduces_load_when_inference_drops_frames(self):
+        scheduler = AdaptivePerceptionScheduler(
+            frame_budget_ms=50.0,
+            initial_period=1,
+            maximum_period=3,
+            evaluation_frames=10,
+        )
+
+        change = None
+        for _ in range(10):
+            change = scheduler.update(
+                inference_ms=70.0,
+                worker_diagnostics={"submitted": 20, "dropped": 5},
+            )
+
+        self.assertEqual(change, 2)
+
+    def test_scheduler_returns_to_every_frame_after_stable_windows(self):
+        scheduler = AdaptivePerceptionScheduler(
+            frame_budget_ms=50.0,
+            initial_period=2,
+            maximum_period=3,
+            evaluation_frames=10,
+        )
+
+        change = None
+        submitted = 0
+        for _window in range(3):
+            for _ in range(10):
+                submitted += 1
+                change = scheduler.update(
+                    inference_ms=20.0,
+                    worker_diagnostics={
+                        "submitted": submitted,
+                        "dropped": 0,
+                    },
+                )
+
+        self.assertEqual(change, 1)
 
 
 if __name__ == "__main__":

@@ -440,7 +440,7 @@ class PurePursuitMPCController:
 
     def steering_rate_limit(self, speed_mps):
         """Hız arttıkça direksiyon değişimini daha sakin hale getirir."""
-        return clamp(0.90 - 0.020 * speed_mps, 0.45, 0.90)
+        return clamp(0.78 - 0.018 * speed_mps, 0.38, 0.78)
 
     def limit_steering_change(self, desired_steer, speed_mps):
         """MPC'nin ilk komutuna son bir fiziksel değişim sınırı uygular."""

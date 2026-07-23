@@ -5,6 +5,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from carla_app.perception.performance_profile import (
+    detect_performance_profile,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -90,8 +94,8 @@ class DrivingParameters:
         self.mpc_minimum_speed_mps = 1.0
         self.mpc_lateral_error_weight = 8.0
         self.mpc_heading_error_weight = 5.0
-        self.mpc_steering_weight = 0.25
-        self.mpc_steering_rate_weight = 1.80
+        self.mpc_steering_weight = 0.35
+        self.mpc_steering_rate_weight = 2.80
         self.mpc_solver_tolerance = 1e-5
         self.mpc_maximum_iterations = 60
         self.mpc_time_budget_ms = 30.0
@@ -118,17 +122,42 @@ class Settings:
         self.fixed_delta_seconds = float(
             os.getenv("FIXED_DELTA_SECONDS", "0.05")
         )
+        self.performance_profile_mode = os.getenv(
+            "PERFORMANCE_PROFILE",
+            "auto",
+        ).strip().lower()
+        if self.performance_profile_mode not in {"auto", "manual"}:
+            raise ValueError("PERFORMANCE_PROFILE auto veya manual olmali.")
+        self.performance_profile = detect_performance_profile()
+        automatic_profile = self.performance_profile_mode == "auto"
+
         self.save_every_n_frames = max(
             1,
             int(os.getenv("SAVE_EVERY_N_FRAMES", "5")),
         )
         self.perception_every_n_frames = max(
             1,
-            int(os.getenv("PERCEPTION_EVERY_N_FRAMES", "2")),
+            (
+                self.performance_profile.perception_every_n_frames
+                if automatic_profile
+                else int(os.getenv("PERCEPTION_EVERY_N_FRAMES", "2"))
+            ),
+        )
+        self.maximum_perception_period = max(
+            self.perception_every_n_frames,
+            (
+                self.performance_profile.maximum_perception_period
+                if automatic_profile
+                else int(os.getenv("MAXIMUM_PERCEPTION_PERIOD", "3"))
+            ),
         )
         self.camera_wait_timeout_ms = max(
             0.0,
-            float(os.getenv("CAMERA_WAIT_TIMEOUT_MS", "10")),
+            (
+                self.performance_profile.camera_wait_timeout_ms
+                if automatic_profile
+                else float(os.getenv("CAMERA_WAIT_TIMEOUT_MS", "10"))
+            ),
         )
         self.output_folder = _path(os.getenv("OUTPUT_FOLDER", "data/runs"))
 
@@ -153,7 +182,13 @@ class Settings:
         )
         self.navigation_render_every_n_frames = max(
             1,
-            int(os.getenv("NAVIGATION_RENDER_EVERY_N_FRAMES", "2")),
+            (
+                self.performance_profile.navigation_render_every_n_frames
+                if automatic_profile
+                else int(
+                    os.getenv("NAVIGATION_RENDER_EVERY_N_FRAMES", "2")
+                )
+            ),
         )
 
         self.vehicle_model = _path(
@@ -198,7 +233,11 @@ class Settings:
         self.sign_classifier_confidence = float(
             os.getenv("SIGN_CLASSIFIER_CONFIDENCE", "0.50")
         )
-        self.vehicle_image_size = int(os.getenv("VEHICLE_IMAGE_SIZE", "640"))
+        self.vehicle_image_size = (
+            self.performance_profile.vehicle_image_size
+            if automatic_profile
+            else int(os.getenv("VEHICLE_IMAGE_SIZE", "640"))
+        )
         self.sign_detector_image_size = int(
             os.getenv("SIGN_DETECTOR_IMAGE_SIZE", "512")
         )

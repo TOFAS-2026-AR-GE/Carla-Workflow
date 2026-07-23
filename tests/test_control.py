@@ -218,6 +218,47 @@ class SpeedPlannerTests(unittest.TestCase):
         self.assertGreater(info["curvature_1pm"], 0.05)
         self.assertLess(target, 70.0 / 3.6)
 
+    def test_closer_curve_has_lower_distance_based_speed_envelope(self):
+        far_planner = CurvatureSpeedPlanner(dt=0.05)
+        close_planner = CurvatureSpeedPlanner(dt=0.05)
+
+        _, far = far_planner.run_step(
+            approaching_curve_state(curve_start_m=65)
+        )
+        _, close = close_planner.run_step(
+            approaching_curve_state(curve_start_m=30)
+        )
+
+        self.assertGreater(far["curve_distance_m"], close["curve_distance_m"])
+        self.assertGreater(
+            far["desired_speed_mps"],
+            close["desired_speed_mps"],
+        )
+
+    def test_far_curve_target_change_respects_comfort_deceleration_rate(self):
+        planner = CurvatureSpeedPlanner(dt=0.05)
+        previous = planner.previous_target_speed_mps
+
+        target, info = planner.run_step(
+            approaching_curve_state(curve_start_m=65)
+        )
+
+        maximum_change = planner.maximum_speed_decrease_mps2 * planner.dt
+        self.assertLessEqual(previous - target, maximum_change + 1e-9)
+        self.assertGreater(info["curve_distance_m"], planner.curve_entry_margin_m)
+
+    def test_curve_exit_acceleration_is_rate_limited(self):
+        planner = CurvatureSpeedPlanner(dt=0.05)
+        curve = curved_state(radius_m=8.0, speed_mps=5.0)
+        for _ in range(300):
+            planner.run_step(curve)
+        previous = planner.previous_target_speed_mps
+
+        target, _ = planner.run_step(straight_state(speed_mps=5.0))
+
+        maximum_change = planner.maximum_speed_increase_mps2 * planner.dt
+        self.assertLessEqual(target - previous, maximum_change + 1e-9)
+
     def test_curve_radius_and_entry_speed_matrix_respects_lateral_limit(self):
         for radius_m in (5.0, 8.0, 12.0, 20.0, 40.0, 100.0):
             for speed_mps in (2.0, 5.0, 10.0, 15.0, 70.0 / 3.6):

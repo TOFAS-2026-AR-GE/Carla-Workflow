@@ -19,6 +19,7 @@ from carla_app.controller.vehicle.pure_pursuit_mpc_controller import (
     PurePursuitMPCController,
 )
 from carla_app.controller.vehicle.safety_supervisor import EmergencyBrakeSupervisor
+from carla_app.controller.vehicle.speed_planner import CurvatureSpeedPlanner
 
 
 def point(x, y=0.0):
@@ -485,6 +486,91 @@ class PurePursuitMPCClosedLoopTests(unittest.TestCase):
 
         self.assertGreaterEqual(active_ticks, 170)
         self.assertLess(sum(errors[-60:]) / 60, 0.08)
+
+
+class ComfortCurveClosedLoopTests(unittest.TestCase):
+    def test_straight_curve_exit_profile_is_comfortable_and_stable(self):
+        dt = 0.05
+        radius_m = 20.0
+        curve_start_m = 50.0
+        curve_length_m = math.pi * radius_m * 0.5
+        path = []
+        for distance_m in range(180):
+            travelled = float(distance_m)
+            if travelled < curve_start_m:
+                x = travelled
+                y = 0.0
+            elif travelled < curve_start_m + curve_length_m:
+                angle = (travelled - curve_start_m) / radius_m
+                x = curve_start_m + radius_m * math.sin(angle)
+                y = radius_m * (1.0 - math.cos(angle))
+            else:
+                x = curve_start_m + radius_m
+                y = (
+                    radius_m
+                    + travelled
+                    - curve_start_m
+                    - curve_length_m
+                )
+            path.append(point(x, y))
+
+        speed_planner = CurvatureSpeedPlanner(dt, cruise_speed_kmh=45.0)
+        idm = IDMSpeedPlanner(dt)
+        pid = LongitudinalPIDController(dt)
+        travelled = 0.0
+        speed = 45.0 / 3.6
+        previous_acceleration = 0.0
+        maximum_jerk = 0.0
+        maximum_curve_lateral_acceleration = 0.0
+        curve_entry_speed = None
+
+        for _tick in range(1200):
+            index = min(int(travelled), len(path) - 5)
+            state = {
+                "speed_mps": speed,
+                "location": path[index],
+                "reference_path": path[index:],
+            }
+            speed_cap, _plan = speed_planner.run_step(state)
+            reference, idm_info = idm.run_step(state, None, speed_cap)
+            throttle, brake, _pid_info = pid.run_step(
+                state,
+                None,
+                reference,
+                idm_info["idm_acceleration_mps2"],
+            )
+            self.assertFalse(throttle > 0.0 and brake > 0.0)
+
+            acceleration = 3.0 * throttle - 5.0 * brake
+            if speed > 0.02:
+                acceleration -= 0.12
+            jerk = abs(acceleration - previous_acceleration) / dt
+            maximum_jerk = max(maximum_jerk, jerk)
+            previous_acceleration = acceleration
+            speed = max(0.0, speed + acceleration * dt)
+            travelled += speed * dt
+
+            if curve_entry_speed is None and travelled >= curve_start_m:
+                curve_entry_speed = speed
+            if (
+                curve_start_m
+                <= travelled
+                <= curve_start_m + curve_length_m
+            ):
+                maximum_curve_lateral_acceleration = max(
+                    maximum_curve_lateral_acceleration,
+                    speed**2 / radius_m,
+                )
+            if travelled >= 120.0:
+                break
+
+        self.assertIsNotNone(curve_entry_speed)
+        self.assertLess(maximum_curve_lateral_acceleration, 2.0)
+        self.assertLessEqual(
+            maximum_jerk,
+            pid.braking_jerk_mps3 + 1e-9,
+        )
+        self.assertGreater(speed, curve_entry_speed)
 
 
 if __name__ == "__main__":

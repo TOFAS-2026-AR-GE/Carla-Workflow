@@ -22,16 +22,19 @@ class LongitudinalPIDController:
         self.derivative_filter_ratio = 0.20
 
         # Konfor sınırları.
-        self.maximum_acceleration_mps2 = 1.8
+        self.maximum_acceleration_mps2 = 1.5
         self.maximum_deceleration_mps2 = 3.5
-        self.acceleration_jerk_mps3 = 1.4
+        self.acceleration_jerk_mps3 = 1.0
+        # Normal yol planı 1.8 m/s² ile yavaşlar. Ön araç aniden frenlerse
+        # güvenli takip mesafesini korumak için pedal katmanında daha hızlı
+        # fren basıncı kurulmasına izin verilir.
         self.braking_jerk_mps3 = 3.6
 
         # CARLA gaz ve fren dönüşüm değerleri.
         self.throttle_acceleration_mps2 = 3.0
         self.brake_deceleration_mps2 = 5.0
         self.rolling_resistance_acceleration_mps2 = 0.12
-        self.maximum_throttle = 0.75
+        self.maximum_throttle = 0.65
         self.maximum_brake = 0.75
         self.breakaway_throttle = 0.18
         self.overspeed_throttle_deadband_mps = 0.15

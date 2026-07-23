@@ -17,9 +17,11 @@ class CurvatureSpeedPlanner:
     def __init__(self, dt=0.05, cruise_speed_kmh=70.0):
         self.dt = float(dt)
         self.cruise_speed_mps = max(10.0, float(cruise_speed_kmh)) / 3.6
-        self.maximum_lateral_acceleration_mps2 = 2.0
-        self.maximum_speed_increase_mps2 = 1.5
-        self.maximum_speed_decrease_mps2 = 3.0
+        self.maximum_lateral_acceleration_mps2 = 1.8
+        self.comfortable_curve_deceleration_mps2 = 1.8
+        self.curve_entry_margin_m = 8.0
+        self.maximum_speed_increase_mps2 = 1.2
+        self.maximum_speed_decrease_mps2 = 2.2
         self.recovery_confirmation_ticks = max(2, int(round(0.15 / self.dt)))
         self.recovery_release_confirmation_ticks = max(
             2,
@@ -33,11 +35,13 @@ class CurvatureSpeedPlanner:
     def run_step(self, state, lateral_info=None, speed_limit_kmh=None):
         """Viraj ve şerit hatasından bu çevrimin hedef hızını seçer."""
         road_speed_mps = self.select_road_speed(speed_limit_kmh)
-        curvature = self.calculate_preview_curvature(
+        curve_profile = self.calculate_curve_profile(
             state.get("reference_path", []),
             state.get("speed_mps", 0.0),
+            road_speed_mps,
         )
-        curve_speed = self.calculate_curve_speed(curvature, road_speed_mps)
+        curvature = curve_profile["curvature_1pm"]
+        curve_speed = curve_profile["target_speed_mps"]
         desired_speed = clamp(
             curve_speed,
             0.0,
@@ -86,9 +90,14 @@ class CurvatureSpeedPlanner:
 
         previous_target_speed = self.previous_target_speed_mps
         target_speed = self.limit_speed_change(desired_speed)
-        # Konfor amaçlı hedef-hız slew limiti, fiziksel viraj sınırının önüne
-        # geçemez. Pedal katmanı gerçek yavaşlamayı kendi jerk sınırıyla yapar.
-        target_speed = min(target_speed, curve_speed)
+        # Araç virajın içindeyse fiziksel yanal ivme sınırı geciktirilemez.
+        # Uzaktaki virajlarda ise mesafeye bağlı fren zarfı ve bu slew limiti
+        # birlikte çalışarak hedef hızın aniden düşmesini önler.
+        if curve_profile["distance_m"] <= self.curve_entry_margin_m:
+            target_speed = min(
+                target_speed,
+                curve_profile["local_curve_speed_mps"],
+            )
         self.previous_target_speed_mps = target_speed
         speed_reason = "cruise"
         if speed_limit_kmh is not None:
@@ -97,14 +106,37 @@ class CurvatureSpeedPlanner:
             speed_reason = "curve"
         if recovery_speed is not None and recovery_speed <= desired_speed:
             speed_reason = "lane_recovery"
-        predicted_yaw_rate = target_speed * curvature
-        predicted_lateral_acceleration = target_speed**2 * curvature
+        curve_distance = curve_profile["distance_m"]
+        predicted_curve_entry_speed = math.sqrt(
+            max(
+                0.0,
+                target_speed**2
+                - 2.0
+                * self.comfortable_curve_deceleration_mps2
+                * max(0.0, curve_distance - self.curve_entry_margin_m),
+            )
+        )
+        predicted_curve_entry_speed = min(
+            predicted_curve_entry_speed,
+            target_speed,
+        )
+        predicted_yaw_rate = predicted_curve_entry_speed * curvature
+        predicted_lateral_acceleration = (
+            predicted_curve_entry_speed**2 * curvature
+        )
         planned_longitudinal_acceleration = (
             target_speed - previous_target_speed
         ) / self.dt
         return target_speed, {
             "curvature_1pm": float(curvature),
             "curve_speed_mps": float(curve_speed),
+            "local_curve_speed_mps": float(
+                curve_profile["local_curve_speed_mps"]
+            ),
+            "curve_distance_m": float(curve_distance),
+            "predicted_curve_entry_speed_mps": float(
+                predicted_curve_entry_speed
+            ),
             "road_speed_mps": float(road_speed_mps),
             "speed_limit_kmh": speed_limit_kmh,
             "desired_speed_mps": float(desired_speed),
@@ -121,6 +153,93 @@ class CurvatureSpeedPlanner:
                 planned_longitudinal_acceleration
             ),
         }
+
+    def calculate_curve_profile(self, path, speed_mps, road_speed_mps):
+        """Rota boyunca viraj hızlarını geriye doğru fren zarfına dönüştürür."""
+        samples = self.sample_preview_curvatures(path, speed_mps)
+        if not samples:
+            return {
+                "target_speed_mps": float(road_speed_mps),
+                "local_curve_speed_mps": float(road_speed_mps),
+                "curvature_1pm": 0.0,
+                "distance_m": 0.0,
+            }
+
+        best_target = float(road_speed_mps)
+        best_local_speed = float(road_speed_mps)
+        best_curvature = 0.0
+        best_distance = 0.0
+        for distance_m, curvature in samples:
+            local_speed = self.calculate_curve_speed(
+                curvature,
+                road_speed_mps,
+            )
+            braking_distance = max(
+                0.0,
+                distance_m - self.curve_entry_margin_m,
+            )
+            allowed_now = math.sqrt(
+                local_speed**2
+                + 2.0
+                * self.comfortable_curve_deceleration_mps2
+                * braking_distance
+            )
+            allowed_now = min(float(road_speed_mps), allowed_now)
+            if allowed_now < best_target:
+                best_target = allowed_now
+                best_local_speed = local_speed
+                best_curvature = curvature
+                best_distance = distance_m
+
+        return {
+            "target_speed_mps": float(best_target),
+            "local_curve_speed_mps": float(best_local_speed),
+            "curvature_1pm": float(best_curvature),
+            "distance_m": float(best_distance),
+        }
+
+    def sample_preview_curvatures(self, path, speed_mps=0.0):
+        """Öndeki rota boyunca mesafe ve yumuşatılmış eğrilik örnekleri üretir."""
+        if len(path) < 5:
+            return []
+
+        preview_distance_m = clamp(
+            float(speed_mps) * 4.5 + 20.0,
+            45.0,
+            110.0,
+        )
+        distances = [0.0]
+        preview = [path[0]]
+        for point in path[1:]:
+            previous = preview[-1]
+            distance = distances[-1] + math.hypot(
+                float(point.x) - float(previous.x),
+                float(point.y) - float(previous.y),
+            )
+            preview.append(point)
+            distances.append(distance)
+            if distance >= preview_distance_m:
+                break
+
+        raw = []
+        for middle_index in range(2, len(preview) - 2):
+            curvature = abs(
+                self.three_point_curvature(
+                    preview[middle_index - 2],
+                    preview[middle_index],
+                    preview[middle_index + 2],
+                )
+            )
+            raw.append(0.0 if curvature >= 0.50 else curvature)
+
+        samples = []
+        for index, curvature in enumerate(raw):
+            start = max(0, index - 2)
+            end = min(len(raw), index + 3)
+            window = sorted(raw[start:end])
+            smoothed = window[len(window) // 2]
+            samples.append((distances[index + 2], smoothed))
+        return samples
 
     def select_road_speed(self, speed_limit_kmh):
         """Tabela varsa tabela hızını, yoksa varsayılan 70 km/sa hedefini seçer."""
@@ -177,43 +296,10 @@ class CurvatureSpeedPlanner:
 
     def calculate_preview_curvature(self, path, speed_mps=0.0):
         """Hıza göre ilerideki yolun güvenilir eğrilik değerini hesaplar."""
-        if len(path) < 5:
+        samples = self.sample_preview_curvatures(path, speed_mps)
+        if not samples:
             return 0.0
-
-        # Hız arttıkça daha uzağı tara. Yüksek hızda kısa bakış mesafesi
-        # virajı geç gösterebilir; üç saniyelik yol daha güvenlidir.
-        preview_distance_m = clamp(float(speed_mps) * 3.0, 35.0, 75.0)
-        preview = [path[0]]
-        travelled_m = 0.0
-        for point in path[1:]:
-            previous = preview[-1]
-            travelled_m += math.hypot(point.x - previous.x, point.y - previous.y)
-            preview.append(point)
-            if travelled_m >= preview_distance_m:
-                break
-        curvatures = []
-        # Dört noktalık aralık, bir metrelik yol noktalarının tek başına
-        # yanlış viraj üretmesini azaltır.
-        for middle_index in range(2, len(preview) - 2):
-            curvature = abs(
-                self.three_point_curvature(
-                    preview[middle_index - 2],
-                    preview[middle_index],
-                    preview[middle_index + 2],
-                )
-            )
-            if curvature < 0.50:
-                curvatures.append(curvature)
-
-        if not curvatures:
-            return 0.0
-
-        # Yüzde 90 değeri, yüksek hızda bakış ufkunun son 5-6 metresinde başlayan
-        # virajı fren mesafesi kapanmadan yakalar; tek bir bozuk harita noktası
-        # ise bütün hedef hızı belirleyemez.
-        curvatures.sort()
-        index = int(round(0.90 * (len(curvatures) - 1)))
-        return curvatures[index]
+        return max(curvature for _distance, curvature in samples)
 
     def three_point_curvature(self, first, middle, last):
         side_a = math.hypot(middle.x - first.x, middle.y - first.y)

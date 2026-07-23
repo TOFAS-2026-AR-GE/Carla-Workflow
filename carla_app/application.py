@@ -8,7 +8,10 @@ from carla_app.config import DrivingParameters, Settings
 from carla_app.controller.vehicle.lead_vehicle import LeadVehicleTracker
 from carla_app.controller.vehicle.vehicle_controller import VehicleController
 from carla_app.core.client import CarlaSession
-from carla_app.core.performance import PerformanceMonitor
+from carla_app.core.performance import (
+    AdaptivePerceptionScheduler,
+    PerformanceMonitor,
+)
 from carla_app.core.route_manager import PersistentRouteManager
 from carla_app.core.scenario import load_scenario
 from carla_app.core.spectator import update_spectator
@@ -84,7 +87,7 @@ class CarlaApplication:
         self.route_manager = PersistentRouteManager(
             self.world.get_map(),
             spacing_m=1.0,
-            horizon_m=80.0,
+            horizon_m=110.0,
             recovery_distance_m=8.0,
             recovery_ticks=max(10, int(round(1.0 / self.dt))),
         )
@@ -152,8 +155,21 @@ class CarlaApplication:
             int(self.settings.perception_every_n_frames),
         )
         self.performance = PerformanceMonitor(self.dt * 1000.0)
+        self.perception_scheduler = AdaptivePerceptionScheduler(
+            frame_budget_ms=self.dt * 1000.0,
+            initial_period=self.perception_period,
+            maximum_period=self.settings.maximum_perception_period,
+        )
 
         print("[INFO] Haritada sol tık: hedef seç | ONAYLA: rotayı başlat")
+        profile = self.settings.performance_profile
+        print(
+            f"[INFO] Performans profili: {profile.name} | "
+            f"VRAM={profile.free_vram_mb:.0f}/"
+            f"{profile.total_vram_mb:.0f} MB | "
+            f"YOLO={self.settings.vehicle_image_size}px | "
+            f"algilama={self.perception_period} karede bir"
+        )
         print("[INFO] Q, ESC veya pencerenin X düğmesi ile çıkış.")
         print(
             "[INFO] Kontrol: Pure Pursuit warm-start + MPC direksiyon + "
@@ -342,13 +358,24 @@ class CarlaApplication:
         )
         viewer_ms = (time.perf_counter() - viewer_started_at) * 1000.0
         process_ms = (time.perf_counter() - process_started_at) * 1000.0
+        worker_diagnostics = self.worker.get_diagnostics()
         self.performance.update(
             process_ms=process_ms,
             viewer_ms=viewer_ms,
             camera_wait_ms=self.sensors.last_camera_wait_ms,
             perception_result=perception_result,
-            worker_diagnostics=self.worker.get_diagnostics(),
+            worker_diagnostics=worker_diagnostics,
         )
+        new_period = self.perception_scheduler.update(
+            inference_ms=self.performance.values.get("inference_ms", 0.0),
+            worker_diagnostics=worker_diagnostics,
+        )
+        if new_period is not None and new_period != self.perception_period:
+            self.perception_period = new_period
+            print(
+                "[PERFORMANCE] Algilama araligi "
+                f"{self.perception_period} karede bir olarak ayarlandi."
+            )
         return keep_running
 
     def shutdown(self):
@@ -472,6 +499,7 @@ class CarlaApplication:
                 message += f" idm_gap={float(desired_gap):.1f}m"
         if speed_reason in {"curve", "lane_recovery"}:
             curvature = float(speed_plan.get("curvature_1pm", 0.0))
+            curve_distance = float(speed_plan.get("curve_distance_m", 0.0))
             yaw_rate = float(speed_plan.get("predicted_yaw_rate_radps", 0.0))
             lateral_acceleration = float(
                 speed_plan.get("predicted_lateral_acceleration_mps2", 0.0)
@@ -481,6 +509,7 @@ class CarlaApplication:
             )
             message += (
                 f" curve_k={curvature:.4f}/m"
+                f" curve_at={curve_distance:.1f}m"
                 f" yaw_rate={yaw_rate:.2f}rad/s"
                 f" lat_a={lateral_acceleration:.2f}m/s2"
                 f" long_a={longitudinal_acceleration:+.2f}m/s2"

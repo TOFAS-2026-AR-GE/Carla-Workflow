@@ -203,6 +203,24 @@ kullanırken model yükleme işlemi uygulamayı kapatmaz. UFLD yükleme veya can
 inference sırasında sonradan CUDA bellek hatası oluşursa model otomatik olarak
 FP32 CPU moduna alınır.
 
+`PERFORMANCE_PROFILE=auto` bilgisayarı açılışta sınıflandırır. 20 GB ve üzeri
+VRAM'i boş olan güçlü kartlarda YOLO her karede 640 piksel çalışır. 4 GB
+sınıfında 512 piksel ve iki karede bir inference seçilerek CARLA'ya bellek
+payı bırakılır. CUDA yoksa daha hafif CPU profili kullanılır. Çalışma sırasında
+inference süresi veya atılan kare oranı yükselirse algılama aralığı en fazla
+üç kareye çıkar; yük düzelince üç kararlı ölçüm penceresinden sonra tekrar
+hızlanır.
+
+Elle sabit değer vermek için:
+
+```dotenv
+PERFORMANCE_PROFILE=manual
+PERCEPTION_EVERY_N_FRAMES=1
+MAXIMUM_PERCEPTION_PERIOD=2
+VEHICLE_IMAGE_SIZE=640
+CAMERA_WAIT_TIMEOUT_MS=10
+```
+
 Düşük VRAM'li bir sistemde iki modeli de baştan CPU'da açmak için:
 
 ```bash
@@ -453,11 +471,14 @@ geçersiz çözüm durumunda araç Pure Pursuit ile güvenli biçimde devam eder
 
 ### Hedef hız
 
-Hız planlayıcı yaklaşık üç saniyelik yolu inceler. Tabela yoksa düz yol hedefi
-70 km/s, geçerli tabela varsa düz yol hedefi tabeladaki değerdir. Viraj
-eğriliğine göre rahat yanal ivmeyle alınabilecek hız hesaplanır ve viraj planı
-23 km/s altına inmez. Daha düşük bir hız tabelası, kırmızı ışık, yaya, sensör
-hatası veya acil fren güvenlik gereği 23 km/s sınırının önüne geçebilir.
+Hız planlayıcı hıza göre 45–110 metre ilerideki rotayı tarar. Tabela yoksa düz
+yol hedefi 70 km/sa, geçerli tabela varsa düz yol hedefi tabeladaki değerdir.
+Her rota bölümü için eğrilikten rahat viraj hızı hesaplanır. Bu hız,
+1.8 m/s² konforlu yavaşlama ve sekiz metrelik giriş payıyla geriye taşınarak
+aracın o anda uyması gereken hız zarfına çevrilir. Böylece araç hedef hızı
+virajın başında birden kesmek yerine viraja yaklaşırken düşürür. Viraj çıkışında
+hedef hız en fazla 1.2 m/s² hızlanma eğimiyle yükselir. Çok dar virajlarda
+fiziksel yanal ivme sınırı için 23 km/sa altına inilebilir.
 
 ### Gaz, fren ve ön araç takibi
 
@@ -468,7 +489,7 @@ IDM'ye karşı çalışmaz. Temel ayarlar:
 - Duruş boşluğu: `2.0 m`
 - Zaman aralığı: `1.5 s`
 - IDM rahat hızlanması: `1.5 m/s²`
-- PID en yüksek hızlanması: `1.8 m/s²`
+- PID en yüksek hızlanması: `1.5 m/s²`
 - En yüksek normal yavaşlama: `3.5 m/s²`
 - PID katsayıları: `Kp=0.55`, `Ki=0.10`, `Kd=0.08`
 

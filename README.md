@@ -112,7 +112,10 @@ olarak çalıştırılır. Ağırlık yaklaşık 735 MB'dir ve Git deposuna ekle
 Kontrol çıktısında `OK CUDA` ve ekran kartı adı görünmelidir. CPU-only PyTorch
 500–800 ms algılama gecikmesine yol açabilir. RTX 5070 üzerinde birleşik model
 640 piksel sıcak inference ölçümünde tek kamerada yaklaşık 33 ms, yedi kameralı
-BEV paketinde tüm algı zinciriyle yaklaşık 85 ms çalışmıştır.
+BEV paketinde tüm algı zinciriyle yaklaşık 85 ms çalışmıştır. Bu nedenle
+varsayılan `control` ve `record` modları model çıkarımını yalnız ön kamerada
+yapar; yedi-kamera çıkarımı yalnız `bev` modunda açılır. Canlı hedef uçtan uca
+algılama bütçesi `PERCEPTION_LATENCY_BUDGET_MS=80` değeridir.
 
 ## Normal çalıştırma
 
@@ -167,19 +170,24 @@ hesaplanır.
 Pencere boyutu ve navigasyon hızı `.env` üzerinden ayarlanabilir:
 
 ```dotenv
-DASHBOARD_WIDTH=1580
-DASHBOARD_HEIGHT=780
+DASHBOARD_WIDTH=1920
+DASHBOARD_HEIGHT=700
 NAVIGATION_SPEED_KMH=45
 NAVIGATION_ARRIVAL_DISTANCE_M=2.5
-NAVIGATION_RENDER_EVERY_N_FRAMES=2
+NAVIGATION_RENDER_EVERY_N_FRAMES=4
 ```
 
-UFLD modeli mevcut kamera panelinde şeritleri canlı çizer. Seyrek satır
-ankrajları güven ağırlıklı ve aykırı-nokta dayanımlı ikinci derece `x(y)`
-eğrisine dönüştürülür, yalnız gözlenen görüntü aralığında yoğun örneklenir ve
-ardışık inference sonuçları yumuşatılır. Ego şeridinin iki sınırı geçerli ve
-birbirini kesmiyorsa araları saydam yeşil koridor olarak gösterilir. Ham model
-noktaları, işlenmiş eğriler veya bu sonuçlardan türetilen hiçbir değer
+UFLD modeli mevcut kamera panelinde şeritleri canlı çizer. Modelin eğitimindeki
+1640×590, 150° FOV ve araç-koordinatında `(x=1.5, z=2.4)` ön kamera geometrisi
+üretimde de korunur; model girişi 800×288 RGB/ImageNet'tir. 101. no-lane sınıfı
+ile satır seçimi yapılır, yatay konum özgün UFLD softmax beklentisiyle çözülür.
+Normalize entropi/no-lane marjı tamamen kararsız satırları elerken komşu
+hücrelere yayılan geçerli tahmini korur. Dört şerit kimliğinin ham satır
+ankrajları ayrı renkli noktalarla, güven ağırlıklı ve aykırı-nokta dayanımlı
+ikinci derece `x(y)` eğrileri aynı renkli çizgilerle gösterilir. Kamera paneli
+en-boy oranını bozmadan letterbox ile ölçeklenir. Ego şeridinin iki sınırı
+geçerli ve birbirini kesmiyorsa araları saydam yeşil koridor olarak gösterilir.
+Ham model noktaları, işlenmiş eğriler veya bunlardan türetilen hiçbir değer
 direksiyon, gaz ya da fren hesabına verilmez; aracın referansı navigasyon
 waypoint rotası olarak kalır.
 
@@ -245,13 +253,15 @@ Durum satırındaki performans alanları:
 - `view`: OpenCV panel süresi,
 - `infer`: algılama işçisinin model süresi,
 - `q`: inference başlamadan önce kuyrukta bekleme,
+- `e2e`: kuyruğa girişten model sonucunun tamamlanmasına kadar geçen süre,
 - `drop`: daha yeni kare geldiği için bilinçli atılan eski inference işleri,
-- `budget_over`: 50 ms simülasyon kare bütçesini aşan kare yüzdesi.
+- `budget_over`: 50 ms simülasyon kare bütçesini aşan kare yüzdesi,
+- `latency_over`: yeni algılama sonuçlarının 80 ms hedefini aşma yüzdesi.
 
 `q` ve `drop` sürekli büyüyorsa model hızı kamera hızının gerisindedir.
 Öncelikle `VEHICLE_IMAGE_SIZE` düşürülmeli veya
 `PERCEPTION_EVERY_N_FRAMES=2` kullanılmalıdır. Navigasyon haritası varsayılan
-olarak iki simülasyon karesinde bir, kamera paneli ise her kare çizilir.
+olarak dört simülasyon karesinde bir, kamera paneli ise her kare çizilir.
 
 ## Sensör yerleşimini görme
 
@@ -284,9 +294,9 @@ Bu ekran ROS veya RViz kullanmaz.
 
 | Mod | Açılan sensör | Davranış |
 |---|---:|---|
-| `control` | 15 | Tam çevresel sensör paketi ve BEV doğrulaması çalışır. Diske kayıt yapılmaz; varsayılan mod budur. |
-| `bev` | 15 | `control` ile aynı tam algılama ve doğrulama omurgasını kullanır. Açıkça BEV odaklı çalıştırma seçeneğidir. |
-| `record` | 15 | Aynı tam algılama ve BEV doğrulamasına ek olarak senkron sensör paketlerini `data/runs/` altına kaydeder. |
+| `control` | 15 | Ön-kamera YOLO+UFLD ve görselsiz BEV doğrulaması çalışır. OpenCV'de BEV paneli yoktur; varsayılan düşük-gecikme modudur. |
+| `bev` | 15 | Yedi-kamera YOLO, IPM ve OpenCV BEV panelini açan mühendislik görünümüdür. |
+| `record` | 15 | `control` çıkarım kapsamına ek olarak senkron sensör paketlerini `data/runs/` altına kaydeder. |
 
 Toplam 15 gerçek CARLA sensörünün dağılımı:
 
@@ -304,10 +314,12 @@ tamamen kaldırılmıştır.
 
 ## Her modda BEV doğrulaması
 
-BEV ve tam sensör doğrulaması bu sürümde `control`, `bev` ve `record`
-modlarının tamamında aktiftir. Mod seçimi artık güvenlik/algılama sensörlerini
-azaltmaz; yalnız çalıştırma niyetini ve kayıt davranışını belirtir. Normal
-çalıştırma betikleri diske kayıt yapmayan `control` modunu seçer:
+BEV ve tam sensör canlılığı bu sürümde `control`, `bev` ve `record` modlarının
+tamamında aktiftir. Normal modda IPM görüntüsü ile BEV canvas çizilmez; füzyon,
+takip, occupancy, konumlandırma sağlığı ve güvenli lead recovery arka planda
+görselsiz çalışır. Ön kamera sonucu da `camera_results` içine taşındığı için
+kamera-radar-LiDAR çapraz doğrulaması korunur. Normal çalıştırma betikleri diske
+kayıt yapmayan `control` modunu seçer:
 
 ```dotenv
 SENSOR_MODE=control
@@ -320,10 +332,10 @@ kullanılabilir. Manuel çalıştırmadaki eşdeğer değer:
 SENSOR_MODE=bev
 ```
 
-Her modda OpenCV penceresinin sol yarısında ön kamera ve bbox'lar, sağ
-yarısında ise ego merkezli kuş bakışı görünüm bulunur. Sağ üstteki
-`SURUS / DEBUG` switch'ine tıklanarak iki ekran arasında geçilir. Aynı geçiş
-klavyedeki `B` tuşuyla da yapılabilir.
+`control` ve `record` modunda OpenCV penceresinde yalnız en-boy oranı korunmuş
+ön kamera/UFLD paneli ile navigasyon paneli bulunur. BEV inset'i oluşturulmaz.
+`bev` modunda kuş bakışı inset'i ve `SURUS / DEBUG` switch'i eklenir; aynı
+geçiş klavyedeki `B` tuşuyla da yapılabilir.
 
 `SURUS` modu sürücüye yönelik sade görselleştirmedir:
 
@@ -411,14 +423,15 @@ sensörün en yeni geçerli verisini kullanır ve eski veriyi kendiliğinden ata
 Occupancy ve takip katmanı aynı sensör frame'ini ikinci kez kanıt saymaz;
 decay simülasyon süresine göre uygulanır. Takip association'ı covariance
 tabanlı Mahalanobis kapısı ve global atama kullanır.
-IPM, füzyon, takip ve occupancy ayrı bir iş parçacığında çalışır. Kuyrukta
-yalnızca en yeni iş tutulur. Bu sayede yavaş bir çevre kamerası veya ağır bir
-BEV karesi direksiyon ve fren akışını durdurmaz.
+Füzyon, takip ve occupancy ayrı bir iş parçacığında çalışır. `bev` modunda IPM
+ve render da aynı işçiye eklenir. Kuyrukta yalnızca en yeni iş tutulur. Bu
+sayede yavaş bir çevre kamerası veya ağır bir BEV karesi direksiyon ve fren
+akışını durdurmaz.
 
 Sensörlerin yatay açıları ön, sağ, arka ve sol yönlerde 10 metre test
 noktalarıyla doğrulanmıştır. Çevre kameraları bu dört yönü boşluk bırakmadan
-ve örtüşmeli görmektedir. Çalışan kontrol davranışını değiştirmemek için ana ön
-kamera ve radar yerleşimi korunmuştur.
+ve örtüşmeli görmektedir. Ön kamera, kullanılan CARLA UFLD checkpoint'inin
+eğitim geometrisine eşitlenmiştir; radar yerleşimi korunmuştur.
 
 ## Kontrol dosyaları
 
@@ -532,12 +545,13 @@ ENABLE_SIGN_DETECTION=false
 ENABLE_LANE_DETECTION=true
 LANE_MODEL=models/lane/ufld_carla_best.pth
 LANE_DEVICE=auto
-LANE_CONFIDENCE=0.30
+LANE_CONFIDENCE=0.15
 LANE_MINIMUM_POINTS=3
 ENABLE_LIDAR_FUSION=true
 ENABLE_DATA_RECORDING=false
 SENSOR_MODE=control
 BEV_UPDATE_EVERY_N_FRAMES=2
+PERCEPTION_LATENCY_BUDGET_MS=80
 CAMERA_INFERENCE_BATCH_SIZE=4
 
 STATUS_PERIOD_SECONDS=2.0
@@ -561,12 +575,16 @@ MAXIMUM_SPEED_KMH=70
   Pure Pursuit/MPC rotasını değiştirmez.
 - `ENABLE_LIDAR_FUSION=true`: zaman uyumlu LiDAR noktalarıyla kamera mesafesini doğrular.
 - `SENSOR_MODE=control`: kayıt yapmadan 7 kamera, 5 radar, LiDAR, GNSS ve
-  IMU'nun tamamını; BEV doğrulamasıyla birlikte açar.
+  IMU'nun tamamını açar; model çıkarımını yalnız ön kamerada, BEV
+  doğrulamasını görselsiz çalıştırır.
 - `CAMERA_INFERENCE_BATCH_SIZE=4`: yalnız `PERFORMANCE_PROFILE=manual` iken
-  geçerlidir. `auto`, düşük VRAM'de kameraları tek tek; 32 GB sınıfı GPU'da
-  yedi kamerayı birlikte işler.
+  ve `SENSOR_MODE=bev` seçiliyken geçerlidir. `control`/`record` her donanımda
+  tek ön kamera çıkarımı yapar.
 - `BEV_UPDATE_EVERY_N_FRAMES=2`: 20 Hz simülasyonda en fazla
-  10 Hz kuş bakışı üretir; kontrol döngüsünün frekansını değiştirmez.
+  10 Hz doğrulama sahnesi üretir; `bev` modunda ayrıca kuş bakışını çizer.
+- `PERCEPTION_LATENCY_BUDGET_MS=80`: yalnız yeni tamamlanan sonuçların kuyruk
+  dahil uçtan uca gecikme hedefidir; aynı eski sonuç her simülasyon karesinde
+  yeniden ortalamaya katılmaz.
 - `ENABLE_DATA_RECORDING=false`: eski kurulumlarla uyumluluk için tutulur.
   `true` yapılırsa `SENSOR_MODE` değerinden bağımsız olarak kayıt modu seçilir.
 - `MAX_RUNTIME_SECONDS=0`: kullanıcı kapatana kadar çalışır.

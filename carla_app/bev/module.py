@@ -28,6 +28,7 @@ class BevModule:
         fixed_delta_seconds=0.05,
         update_every_n_frames=2,
         asynchronous=False,
+        render_output=True,
     ):
         self.layout = layout
         self.update_every_n_frames = max(1, int(update_every_n_frames))
@@ -51,6 +52,7 @@ class BevModule:
         )
         self.renderer = BevRenderer(grid=self.grid)
         self.validator = BevValidationLayer()
+        self.render_output = bool(render_output)
 
         self.asynchronous = bool(asynchronous)
         self.work_queue = queue.Queue(maxsize=1)
@@ -92,16 +94,20 @@ class BevModule:
             current_frame_id,
         )
         scene["driving_state"] = dict(driving_state or {})
-        camera_results = self.camera_results_for_ipm(
-            sensor_snapshot,
-            perception_result,
-            current_frame_id,
-        )
-        ipm_image, coverage, ipm_cameras = self.camera_ipm.build_mosaic(
-            camera_results,
-            motion_compensator=self.motion,
-            current_frame_id=current_frame_id,
-        )
+        ipm_image = None
+        coverage = None
+        ipm_cameras = []
+        if self.render_output:
+            camera_results = self.camera_results_for_ipm(
+                sensor_snapshot,
+                perception_result,
+                current_frame_id,
+            )
+            ipm_image, coverage, ipm_cameras = self.camera_ipm.build_mosaic(
+                camera_results,
+                motion_compensator=self.motion,
+                current_frame_id=current_frame_id,
+            )
 
         object_lidar_points = self.object_lidar_points(
             scene["lidar_points"],
@@ -137,11 +143,13 @@ class BevModule:
         scene["fused_objects"] = fused_objects
         scene["tracks"] = tracks
         scene["occupancy"] = occupancy
-        image = self.renderer.render(
-            scene,
-            current_frame_id,
-            display_mode=display_mode,
-        )
+        image = None
+        if self.render_output:
+            image = self.renderer.render(
+                scene,
+                current_frame_id,
+                display_mode=display_mode,
+            )
         with self.lock:
             self.latest_scene = scene
         return image

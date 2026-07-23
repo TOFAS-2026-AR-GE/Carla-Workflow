@@ -228,10 +228,16 @@ def build_sensor_layout(
     camera_height,
     front_wide_fov,
     fixed_delta_seconds,
+    surround_camera_width=None,
+    surround_camera_height=None,
 ):
     """Araç boyutunu okuyup bütün sensörlerin yerleşimini oluşturur."""
     if fixed_delta_seconds <= 0.0:
         raise ValueError("Sensör zaman adımı sıfırdan büyük olmalı.")
+    if surround_camera_width is None:
+        surround_camera_width = camera_width
+    if surround_camera_height is None:
+        surround_camera_height = camera_height
 
     box = vehicle.bounding_box
     center = box.location
@@ -264,11 +270,11 @@ def build_sensor_layout(
     cameras = (
         make_camera(
             "camera_front_wide",
-            windshield_x,
-            center.y,
-            windshield_z,
+            1.5,
+            0.0,
+            2.4,
             yaw=0.0,
-            pitch=-4.0,
+            pitch=0.0,
             fov=front_wide_fov,
             width=camera_width,
             height=camera_height,
@@ -283,8 +289,8 @@ def build_sensor_layout(
             yaw=0.0,
             pitch=-2.0,
             fov=50.0,
-            width=camera_width,
-            height=camera_height,
+            width=surround_camera_width,
+            height=surround_camera_height,
             physical_sensor="2 MP HDR uzun menzil ön kamerası",
         ),
         make_camera(
@@ -295,8 +301,8 @@ def build_sensor_layout(
             yaw=-60.0,
             pitch=-4.0,
             fov=100.0,
-            width=camera_width,
-            height=camera_height,
+            width=surround_camera_width,
+            height=surround_camera_height,
             physical_sensor="2 MP HDR çevre görüş kamerası",
         ),
         make_camera(
@@ -307,8 +313,8 @@ def build_sensor_layout(
             yaw=60.0,
             pitch=-4.0,
             fov=100.0,
-            width=camera_width,
-            height=camera_height,
+            width=surround_camera_width,
+            height=surround_camera_height,
             physical_sensor="2 MP HDR çevre görüş kamerası",
         ),
         make_camera(
@@ -319,8 +325,8 @@ def build_sensor_layout(
             yaw=-120.0,
             pitch=-4.0,
             fov=100.0,
-            width=camera_width,
-            height=camera_height,
+            width=surround_camera_width,
+            height=surround_camera_height,
             physical_sensor="2 MP HDR çevre görüş kamerası",
         ),
         make_camera(
@@ -331,8 +337,8 @@ def build_sensor_layout(
             yaw=120.0,
             pitch=-4.0,
             fov=100.0,
-            width=camera_width,
-            height=camera_height,
+            width=surround_camera_width,
+            height=surround_camera_height,
             physical_sensor="2 MP HDR çevre görüş kamerası",
         ),
         make_camera(
@@ -343,8 +349,8 @@ def build_sensor_layout(
             yaw=180.0,
             pitch=-5.0,
             fov=110.0,
-            width=camera_width,
-            height=camera_height,
+            width=surround_camera_width,
+            height=surround_camera_height,
             physical_sensor="2 MP HDR arka görüş kamerası",
         ),
     )

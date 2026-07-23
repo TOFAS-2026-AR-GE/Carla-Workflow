@@ -55,9 +55,17 @@ def decode_ufld_logits(
     image_width,
     image_height,
     minimum_points=3,
-    minimum_confidence=0.30,
+    minimum_confidence=0.15,
 ):
-    """UFLD 101x56x4 logitslerini kaynak görüntü koordinatlarına çözer."""
+    """UFLD 101x56x4 logitslerini kaynak görüntü koordinatlarına çözer.
+
+    UFLD'nin 101. sınıfı ilgili satırda şerit bulunmadığını belirtir. Konum,
+    özgün UFLD uygulamasındaki softmax beklentisiyle; çizim güveni ise geçerli
+    100 hücre üzerindeki normalize entropi ve no-lane logit marjıyla hesaplanır.
+    Böylece olasılığı birkaç komşu hücreye yayılan doğru bir şerit, tek hücre
+    softmax olasılığı 0.30 altında diye kaybolmaz; tamamen düz/kararsız bir
+    dağılım da yanlış şerit olarak çizilmez.
+    """
     output = np.asarray(logits, dtype=np.float32)
     if output.ndim == 4:
         if output.shape[0] != 1:
@@ -71,25 +79,37 @@ def decode_ufld_logits(
         )
 
     valid_probabilities = _softmax(output[:-1], axis=0)
-    all_probabilities = _softmax(output, axis=0)
     grid_indices = np.arange(1, GRID_SIZE + 1, dtype=np.float32)[:, None, None]
     locations = np.sum(valid_probabilities * grid_indices, axis=0)
     selected_classes = np.argmax(output, axis=0)
     locations[selected_classes == GRID_SIZE] = 0.0
+    entropy = -np.sum(
+        valid_probabilities
+        * np.log(np.clip(valid_probabilities, 1e-8, 1.0)),
+        axis=0,
+    )
+    localization_confidences = 1.0 - entropy / np.log(float(GRID_SIZE))
+    logit_margin = np.max(output[:-1], axis=0) - output[-1]
+    logit_margin = np.clip(logit_margin, -30.0, 30.0)
+    presence_confidences = 1.0 / (1.0 + np.exp(-logit_margin))
+    structural_confidences = np.sqrt(
+        np.clip(localization_confidences, 0.0, 1.0)
+        * np.clip(presence_confidences, 0.0, 1.0)
+    )
 
     column_step = (MODEL_WIDTH - 1.0) / (GRID_SIZE - 1.0)
     lanes = []
     for lane_index in range(LANE_COUNT):
         points = []
         point_confidences = []
+        point_presence_confidences = []
         for row_index, anchor in enumerate(ROW_ANCHORS):
             location = float(locations[row_index, lane_index])
             if location <= 0.0:
                 continue
 
-            class_index = int(selected_classes[row_index, lane_index])
             confidence = float(
-                all_probabilities[class_index, row_index, lane_index]
+                structural_confidences[row_index, lane_index]
             )
             model_x = location * column_step - 1.0
             x = int(round(model_x * float(image_width) / MODEL_WIDTH))
@@ -101,6 +121,9 @@ def decode_ufld_logits(
                 ]
             )
             point_confidences.append(confidence)
+            point_presence_confidences.append(
+                float(presence_confidences[row_index, lane_index])
+            )
 
         lane_confidence = (
             float(np.mean(point_confidences)) if point_confidences else 0.0
@@ -114,6 +137,7 @@ def decode_ufld_logits(
                 "lane_index": lane_index,
                 "points": points,
                 "point_confidences": point_confidences,
+                "point_presence_confidences": point_presence_confidences,
                 "confidence": lane_confidence,
                 "detected": detected,
             }
@@ -367,7 +391,7 @@ class LaneDetector:
         model_path,
         device="auto",
         minimum_points=3,
-        minimum_confidence=0.30,
+        minimum_confidence=0.15,
         use_half=True,
     ):
         path = Path(model_path)
@@ -471,6 +495,7 @@ class LaneDetector:
         return {
             "available": True,
             "model": "ufld_resnet18_carla",
+            "decode": "ufld_softmax_expectation_entropy",
             "model_input_size": [MODEL_WIDTH, MODEL_HEIGHT],
             "image_size": [int(width), int(height)],
             "lanes": lanes,

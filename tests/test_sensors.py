@@ -102,13 +102,25 @@ class SensorManagerTests(unittest.TestCase):
         ):
             sensor_layout = layout_module.build_sensor_layout(
                 vehicle=vehicle,
-                camera_width=800,
-                camera_height=600,
-                front_wide_fov=90.0,
+                camera_width=1640,
+                camera_height=590,
+                front_wide_fov=150.0,
                 fixed_delta_seconds=0.05,
+                surround_camera_width=640,
+                surround_camera_height=360,
             )
 
         geometry = sensor_layout.front_radar_geometry
+        primary_camera = sensor_layout.cameras[0]
+        surround_camera = sensor_layout.cameras[1]
+        self.assertEqual(primary_camera.attributes["image_size_x"], "1640")
+        self.assertEqual(primary_camera.attributes["image_size_y"], "590")
+        self.assertEqual(primary_camera.attributes["fov"], "150.0")
+        self.assertAlmostEqual(primary_camera.transform.location.x, 1.5)
+        self.assertAlmostEqual(primary_camera.transform.location.z, 2.4)
+        self.assertAlmostEqual(primary_camera.transform.rotation.pitch, 0.0)
+        self.assertEqual(surround_camera.attributes["image_size_x"], "640")
+        self.assertEqual(surround_camera.attributes["image_size_y"], "360")
         self.assertGreaterEqual(geometry["height_above_ground_m"], 0.85)
         self.assertAlmostEqual(geometry["pitch_deg"], 2.0)
         self.assertEqual(sensor_layout.front_radar.attributes["vertical_fov"], "6.0")

@@ -39,7 +39,7 @@ def choose_performance_profile(
             vehicle_image_size=416,
             camera_inference_batch_size=1,
             camera_wait_timeout_ms=6.0,
-            navigation_render_every_n_frames=3,
+            navigation_render_every_n_frames=4,
         )
 
     if total_vram_mb >= 20_000.0 and free_vram_mb >= 8_000.0:
@@ -53,7 +53,7 @@ def choose_performance_profile(
             vehicle_image_size=640,
             camera_inference_batch_size=7,
             camera_wait_timeout_ms=6.0,
-            navigation_render_every_n_frames=2,
+            navigation_render_every_n_frames=4,
         )
 
     if total_vram_mb >= 8_000.0 and free_vram_mb >= 3_000.0:
@@ -67,7 +67,7 @@ def choose_performance_profile(
             vehicle_image_size=640,
             camera_inference_batch_size=4,
             camera_wait_timeout_ms=8.0,
-            navigation_render_every_n_frames=2,
+            navigation_render_every_n_frames=4,
         )
 
     if total_vram_mb >= 5_000.0 and free_vram_mb >= 1_800.0:
@@ -81,7 +81,7 @@ def choose_performance_profile(
             vehicle_image_size=576,
             camera_inference_batch_size=2,
             camera_wait_timeout_ms=8.0,
-            navigation_render_every_n_frames=2,
+            navigation_render_every_n_frames=4,
         )
 
     return PerformanceProfile(
@@ -94,7 +94,7 @@ def choose_performance_profile(
         vehicle_image_size=512,
         camera_inference_batch_size=1,
         camera_wait_timeout_ms=6.0,
-        navigation_render_every_n_frames=2,
+        navigation_render_every_n_frames=4,
     )
 
 

@@ -56,7 +56,7 @@ class PerceptionSystem:
 
         self._last_errors = {}
 
-    def detect(self, frame_id, rgb_image):
+    def detect(self, frame_id, rgb_image, camera_name=None):
         start = time.perf_counter()
         errors = {}
 
@@ -76,7 +76,7 @@ class PerceptionSystem:
         signs.extend(model_signs)
         lane_detection = self._detect_lane_safely(rgb_image, errors)
 
-        return {
+        result = {
             "frame_id": int(frame_id),
             "image": rgb_image,
             "vehicles": vehicles,
@@ -86,6 +86,20 @@ class PerceptionSystem:
             "errors": errors,
             "elapsed_ms": (time.perf_counter() - start) * 1000.0,
         }
+        if camera_name:
+            result["camera_results"] = {
+                str(camera_name): {
+                    "camera_name": str(camera_name),
+                    "frame_id": int(frame_id),
+                    "image": rgb_image,
+                    "vehicles": vehicles,
+                    "signs": signs,
+                    "objects": objects,
+                    "lane_detection": lane_detection,
+                    "errors": dict(errors),
+                }
+            }
+        return result
 
     def detect_cameras(self, camera_packet, primary_camera_name):
         """BEV modunda mevcut bütün kamera görüntülerini birlikte işler."""

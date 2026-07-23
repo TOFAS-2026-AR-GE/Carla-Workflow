@@ -1065,6 +1065,7 @@ class BevRendererTests(unittest.TestCase):
                     "detected": True,
                     "lane_index": 1,
                     "points": [[120, 230], [140, 160], [150, 100]],
+                    "raw_points": [[121, 229], [149, 101]],
                 }
             ]
         }
@@ -1089,6 +1090,7 @@ class BevRendererTests(unittest.TestCase):
             patch("carla_app.visualization.viewer.cv2.rectangle") as rectangle,
             patch("carla_app.visualization.viewer.cv2.putText") as put_text,
             patch("carla_app.visualization.viewer.cv2.polylines") as polylines,
+            patch("carla_app.visualization.viewer.cv2.circle") as circle,
         ):
             counts = viewer.draw_perception_overlay(
                 frame,
@@ -1102,6 +1104,7 @@ class BevRendererTests(unittest.TestCase):
         self.assertEqual(rectangle.call_count, 3)
         self.assertEqual(put_text.call_count, 4)
         self.assertEqual(polylines.call_count, 2)
+        self.assertEqual(circle.call_count, 4)
 
     def test_opencv_overlay_fills_only_valid_ego_lane_corridor(self):
         frame = np.zeros((240, 320, 3), dtype=np.uint8)
@@ -1168,6 +1171,44 @@ class BevRendererTests(unittest.TestCase):
 
         self.assertEqual(image.shape, (240, 320, 3))
         self.assertEqual(image.dtype, np.uint8)
+
+    def test_validation_only_module_skips_ipm_and_renderer(self):
+        layout = make_layout()
+        module = BevModule(
+            layout,
+            width=320,
+            height=240,
+            render_output=False,
+        )
+        state = {
+            "location": SimpleNamespace(x=0.0, y=0.0),
+            "yaw": 0.0,
+            "reference_path": [SimpleNamespace(x=10.0, y=0.0)],
+        }
+
+        with (
+            patch.object(module.camera_ipm, "build_mosaic") as build_mosaic,
+            patch.object(module.renderer, "render") as render,
+        ):
+            image = module.render({}, None, state, current_frame_id=12)
+
+        self.assertIsNone(image)
+        build_mosaic.assert_not_called()
+        render.assert_not_called()
+        self.assertIsNotNone(module.get_latest_scene())
+        self.assertIsNone(module.get_latest_scene()["ipm_image"])
+
+    def test_camera_letterbox_preserves_model_aspect_ratio(self):
+        image = np.full((590, 1640, 3), 255, dtype=np.uint8)
+
+        panel = PerceptionViewer.resize_with_letterbox(image, 1000, 600)
+
+        non_background = np.any(panel != np.array([8, 11, 15]), axis=2)
+        rows = np.flatnonzero(np.any(non_background, axis=1))
+        columns = np.flatnonzero(np.any(non_background, axis=0))
+        self.assertEqual(panel.shape, (600, 1000, 3))
+        self.assertEqual((columns[0], columns[-1]), (0, 999))
+        self.assertAlmostEqual(len(rows) / 1000.0, 590.0 / 1640.0, delta=0.002)
 
     def test_viewer_combines_equal_camera_and_bev_panels(self):
         viewer = PerceptionViewer.__new__(PerceptionViewer)

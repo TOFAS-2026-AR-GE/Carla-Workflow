@@ -25,11 +25,12 @@ class PerceptionWorker:
         )
         self.thread.start()
 
-    def submit(self, frame_id, rgb_image):
+    def submit(self, frame_id, rgb_image, camera_name=None):
         item = {
             "kind": "single",
             "frame_id": int(frame_id),
             "image": rgb_image,
+            "camera_name": camera_name,
             "submitted_at": time.perf_counter(),
         }
         self.submit_item(item)
@@ -111,6 +112,7 @@ class PerceptionWorker:
                     result = self.system.detect(
                         item["frame_id"],
                         item["image"],
+                        camera_name=item.get("camera_name"),
                     )
                 result["queue_delay_ms"] = (
                     started_at - submitted_at

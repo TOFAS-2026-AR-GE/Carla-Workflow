@@ -96,8 +96,34 @@ class PerformanceMonitorTests(unittest.TestCase):
 
         self.assertIn("loop=60.0ms", summary)
         self.assertIn("infer=25.0ms", summary)
+        self.assertIn("e2e=37.0ms", summary)
         self.assertIn("drop=3", summary)
         self.assertIn("budget_over=100%", summary)
+
+    def test_reused_latest_result_does_not_distort_latency_average(self):
+        monitor = PerformanceMonitor(
+            frame_budget_ms=50.0,
+            smoothing=1.0,
+            latency_budget_ms=80.0,
+        )
+        slow_result = {
+            "elapsed_ms": 90.0,
+            "queue_delay_ms": 10.0,
+            "worker_total_ms": 100.0,
+        }
+        diagnostics = {"dropped": 0, "processed": 1}
+        monitor.update(20.0, 4.0, 0.0, slow_result, diagnostics)
+
+        reused_result = {
+            "elapsed_ms": 5.0,
+            "queue_delay_ms": 0.0,
+            "worker_total_ms": 5.0,
+        }
+        monitor.update(20.0, 4.0, 0.0, reused_result, diagnostics)
+
+        self.assertEqual(monitor.values["end_to_end_ms"], 100.0)
+        self.assertEqual(monitor.total_results, 1)
+        self.assertEqual(monitor.over_latency_results, 1)
 
     def test_scheduler_reduces_load_when_inference_drops_frames(self):
         scheduler = AdaptivePerceptionScheduler(

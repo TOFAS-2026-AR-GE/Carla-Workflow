@@ -4,12 +4,24 @@
 class PerformanceMonitor:
     """Kare bütçesi, görüntüleme ve algılama kuyruğu gecikmesini özetler."""
 
-    def __init__(self, frame_budget_ms, smoothing=0.12):
+    def __init__(
+        self,
+        frame_budget_ms,
+        smoothing=0.12,
+        latency_budget_ms=80.0,
+    ):
         self.frame_budget_ms = max(1.0, float(frame_budget_ms))
+        self.latency_budget_ms = max(
+            self.frame_budget_ms,
+            float(latency_budget_ms),
+        )
         self.smoothing = min(1.0, max(0.01, float(smoothing)))
         self.values = {}
         self.over_budget_frames = 0
         self.total_frames = 0
+        self.over_latency_results = 0
+        self.total_results = 0
+        self.last_processed_count = -1
 
     def update(
         self,
@@ -27,28 +39,48 @@ class PerformanceMonitor:
         self._ema("process_ms", process_ms)
         self._ema("viewer_ms", viewer_ms)
         self._ema("camera_wait_ms", camera_wait_ms)
-        self._ema(
-            "inference_ms",
-            float(perception_result.get("elapsed_ms", 0.0)),
-        )
-        self._ema(
-            "queue_ms",
-            float(perception_result.get("queue_delay_ms", 0.0)),
-        )
+        processed_count = int(worker_diagnostics.get("processed", 0))
+        if (
+            perception_result
+            and processed_count != self.last_processed_count
+        ):
+            inference_ms = float(perception_result.get("elapsed_ms", 0.0))
+            queue_ms = float(perception_result.get("queue_delay_ms", 0.0))
+            end_to_end_ms = float(
+                perception_result.get(
+                    "worker_total_ms",
+                    inference_ms + queue_ms,
+                )
+            )
+            self._ema("inference_ms", inference_ms)
+            self._ema("queue_ms", queue_ms)
+            self._ema("end_to_end_ms", end_to_end_ms)
+            self.total_results += 1
+            if end_to_end_ms > self.latency_budget_ms:
+                self.over_latency_results += 1
+            self.last_processed_count = processed_count
+
         self.values["dropped"] = int(worker_diagnostics.get("dropped", 0))
-        self.values["processed"] = int(worker_diagnostics.get("processed", 0))
+        self.values["processed"] = processed_count
 
     def summary(self):
         if self.total_frames == 0:
             return ""
         budget_ratio = 100.0 * self.over_budget_frames / self.total_frames
+        latency_ratio = (
+            100.0 * self.over_latency_results / self.total_results
+            if self.total_results
+            else 0.0
+        )
         return (
             f" loop={self.values.get('process_ms', 0.0):.1f}ms"
             f" view={self.values.get('viewer_ms', 0.0):.1f}ms"
             f" infer={self.values.get('inference_ms', 0.0):.1f}ms"
             f" q={self.values.get('queue_ms', 0.0):.1f}ms"
+            f" e2e={self.values.get('end_to_end_ms', 0.0):.1f}ms"
             f" drop={int(self.values.get('dropped', 0))}"
             f" budget_over={budget_ratio:.0f}%"
+            f" latency_over={latency_ratio:.0f}%"
         )
 
     def _ema(self, name, value):

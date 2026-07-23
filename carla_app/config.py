@@ -161,16 +161,46 @@ class Settings:
         )
         self.output_folder = _path(os.getenv("OUTPUT_FOLDER", "data/runs"))
 
-        self.camera_width = int(os.getenv("CAMERA_WIDTH", "800"))
-        self.camera_height = int(os.getenv("CAMERA_HEIGHT", "600"))
-        self.camera_fov = float(os.getenv("CAMERA_FOV", "90"))
+        # ``ufld_carla_best.pth`` 1640x590 ve 150 derece ön kamera ile
+        # eğitildi. Birincil kameranın varsayılan geometrisi bu nedenle modelin
+        # veri üretim geometrisini birebir izler. Çevre kameraları daha düşük
+        # çözünürlükte kalır; böylece model doğruluğu için gerekli ön görüntü
+        # korunurken yedi kameranın CARLA render/aktarımı gereksiz büyümez.
+        self.camera_width = max(
+            320,
+            int(os.getenv("CAMERA_WIDTH", "1640")),
+        )
+        self.camera_height = max(
+            180,
+            int(os.getenv("CAMERA_HEIGHT", "590")),
+        )
+        self.camera_fov = min(
+            179.0,
+            max(1.0, float(os.getenv("CAMERA_FOV", "150"))),
+        )
+        self.surround_camera_width = max(
+            320,
+            int(os.getenv("SURROUND_CAMERA_WIDTH", "640")),
+        )
+        self.surround_camera_height = max(
+            180,
+            int(os.getenv("SURROUND_CAMERA_HEIGHT", "360")),
+        )
+        self.bev_width = max(
+            320,
+            int(os.getenv("BEV_WIDTH", "800")),
+        )
+        self.bev_height = max(
+            240,
+            int(os.getenv("BEV_HEIGHT", "600")),
+        )
         self.dashboard_width = max(
             1100,
-            int(os.getenv("DASHBOARD_WIDTH", "1580")),
+            int(os.getenv("DASHBOARD_WIDTH", "1920")),
         )
         self.dashboard_height = max(
             650,
-            int(os.getenv("DASHBOARD_HEIGHT", "780")),
+            int(os.getenv("DASHBOARD_HEIGHT", "700")),
         )
         self.navigation_speed_kmh = max(
             10.0,
@@ -254,7 +284,7 @@ class Settings:
         )
         self.lane_confidence = min(
             1.0,
-            max(0.0, float(os.getenv("LANE_CONFIDENCE", "0.30"))),
+            max(0.0, float(os.getenv("LANE_CONFIDENCE", "0.15"))),
         )
         self.lane_minimum_points = max(
             3,
@@ -284,12 +314,26 @@ class Settings:
 
         self.sensor_mode = requested_sensor_mode
         # Üç mod da aynı canlı sensör ve BEV doğrulama omurgasını kullanır.
-        # Mod yalnızca kayıt davranışını ve çalıştırma amacını değiştirir.
+        # Ağır yedi-kamera YOLO/IPM ve BEV çizimi yalnız açıkça istenen ``bev``
+        # modunda çalışır. Normal control/record modunda doğrulama; ön kamera,
+        # radar, LiDAR, GNSS ve IMU kanıtıyla görselsiz devam eder.
         self.enable_bev = True
         self.enable_data_recording = self.sensor_mode == "record"
+        self.show_bev_panel = _boolean(
+            "SHOW_BEV_PANEL",
+            self.sensor_mode == "bev",
+        )
+        self.enable_multicamera_perception = _boolean(
+            "ENABLE_MULTICAMERA_PERCEPTION",
+            self.sensor_mode == "bev",
+        )
         self.bev_update_every_n_frames = max(
             1,
             int(os.getenv("BEV_UPDATE_EVERY_N_FRAMES", "2")),
+        )
+        self.perception_latency_budget_ms = max(
+            20.0,
+            float(os.getenv("PERCEPTION_LATENCY_BUDGET_MS", "80")),
         )
         self.status_period_seconds = max(
             0.2,

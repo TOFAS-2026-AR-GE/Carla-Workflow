@@ -113,9 +113,9 @@ class LiveCarlaLaneGroundTruthTests(unittest.TestCase):
 
         host = os.getenv("HOST", "127.0.0.1")
         port = int(os.getenv("PORT", "2000"))
-        image_width = int(os.getenv("CAMERA_WIDTH", "800"))
-        image_height = int(os.getenv("CAMERA_HEIGHT", "600"))
-        camera_fov = float(os.getenv("CAMERA_FOV", "90"))
+        image_width = int(os.getenv("CAMERA_WIDTH", "1640"))
+        image_height = int(os.getenv("CAMERA_HEIGHT", "590"))
+        camera_fov = float(os.getenv("CAMERA_FOV", "150"))
         sample_count = int(os.getenv("LANE_GT_SAMPLE_COUNT", "30"))
         model_path = Path(
             os.getenv(
@@ -147,8 +147,8 @@ class LiveCarlaLaneGroundTruthTests(unittest.TestCase):
         camera = world.spawn_actor(
             blueprint,
             carla.Transform(
-                carla.Location(x=0.8, z=1.55),
-                carla.Rotation(pitch=-4.0),
+                carla.Location(x=1.5, z=2.4),
+                carla.Rotation(pitch=0.0),
             ),
             attach_to=ego,
             attachment_type=carla.AttachmentType.Rigid,
@@ -168,7 +168,7 @@ class LiveCarlaLaneGroundTruthTests(unittest.TestCase):
             model_path,
             device=os.getenv("LANE_DEVICE", "auto"),
             minimum_points=int(os.getenv("LANE_MINIMUM_POINTS", "3")),
-            minimum_confidence=float(os.getenv("LANE_CONFIDENCE", "0.30")),
+            minimum_confidence=float(os.getenv("LANE_CONFIDENCE", "0.15")),
         )
         metrics = []
         try:

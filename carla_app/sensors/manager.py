@@ -47,6 +47,16 @@ class SensorManager:
             camera_height=self.settings.camera_height,
             front_wide_fov=self.settings.camera_fov,
             fixed_delta_seconds=fixed_delta_seconds,
+            surround_camera_width=getattr(
+                self.settings,
+                "surround_camera_width",
+                self.settings.camera_width,
+            ),
+            surround_camera_height=getattr(
+                self.settings,
+                "surround_camera_height",
+                self.settings.camera_height,
+            ),
         )
 
         active_specs = self.layout.all_specs

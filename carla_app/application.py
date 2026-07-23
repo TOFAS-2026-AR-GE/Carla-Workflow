@@ -107,13 +107,14 @@ class CarlaApplication:
         if self.settings.enable_bev:
             self.bev_module = BevModule(
                 self.sensors.layout,
-                width=self.settings.camera_width,
-                height=self.settings.camera_height,
+                width=self.settings.bev_width,
+                height=self.settings.bev_height,
                 fixed_delta_seconds=self.dt,
                 update_every_n_frames=(
                     self.settings.bev_update_every_n_frames
                 ),
                 asynchronous=True,
+                render_output=self.settings.show_bev_panel,
             )
 
         perception = PerceptionSystem(self.settings)
@@ -154,7 +155,10 @@ class CarlaApplication:
             1,
             int(self.settings.perception_every_n_frames),
         )
-        self.performance = PerformanceMonitor(self.dt * 1000.0)
+        self.performance = PerformanceMonitor(
+            self.dt * 1000.0,
+            latency_budget_ms=self.settings.perception_latency_budget_ms,
+        )
         self.perception_scheduler = AdaptivePerceptionScheduler(
             frame_budget_ms=self.dt * 1000.0,
             initial_period=self.perception_period,
@@ -176,6 +180,20 @@ class CarlaApplication:
             "IDM hız referansı + PID gaz-fren + bağımsız acil fren"
         )
         print(f"[INFO] Sensör modu: {self.settings.sensor_mode}")
+        perception_scope = (
+            "7 kamera"
+            if self.settings.enable_multicamera_perception
+            else "yalniz model-egitim geometrisindeki on kamera"
+        )
+        print(
+            f"[INFO] Algilama kapsami: {perception_scope} | "
+            f"hedef gecikme <= "
+            f"{self.settings.perception_latency_budget_ms:.0f} ms"
+        )
+        print(
+            "[INFO] OpenCV BEV paneli: "
+            f"{'acik' if self.settings.show_bev_panel else 'kapali'}"
+        )
 
     def run_main_loop(self):
         """CARLA dünyasını kare kare ilerletir."""
@@ -215,9 +233,9 @@ class CarlaApplication:
             and camera_frame_id % self.perception_period == 0
         )
         if new_perception_frame:
-            if self.settings.enable_bev:
+            primary_name = self.sensors.layout.primary_camera_name
+            if self.settings.enable_multicamera_perception:
                 camera_packet = self.sensors.get_bev_camera_packet(frame_id)
-                primary_name = self.sensors.layout.primary_camera_name
                 camera_packet[primary_name] = {
                     "frame_id": int(camera_frame_id),
                     "age_frames": int(frame_id) - int(camera_frame_id),
@@ -225,7 +243,11 @@ class CarlaApplication:
                 }
                 self.worker.submit_cameras(camera_packet, primary_name)
             else:
-                self.worker.submit(camera_frame_id, rgb_image)
+                self.worker.submit(
+                    camera_frame_id,
+                    rgb_image,
+                    camera_name=primary_name,
+                )
 
         perception_result = self.worker.get_latest()
         radar_frame_id, radar_points = self.sensors.get_radar("radar_front_long")
@@ -349,7 +371,8 @@ class CarlaApplication:
                 driving_state=control_info,
                 display_mode=self.viewer.bev_mode,
             )
-            bev_image = self.bev_module.get_latest()
+            if self.settings.show_bev_panel:
+                bev_image = self.bev_module.get_latest()
 
         viewer_started_at = time.perf_counter()
         keep_running = self.viewer.show(

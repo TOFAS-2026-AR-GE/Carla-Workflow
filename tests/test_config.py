@@ -13,6 +13,22 @@ from carla_app.config import Settings
 
 
 class SensorModeTests(unittest.TestCase):
+    def test_control_mode_uses_low_latency_front_camera_without_bev_panel(self):
+        environment = {
+            "SENSOR_MODE": "control",
+            "ENABLE_DATA_RECORDING": "false",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            settings = Settings()
+
+        self.assertFalse(settings.show_bev_panel)
+        self.assertFalse(settings.enable_multicamera_perception)
+        self.assertEqual(
+            (settings.camera_width, settings.camera_height, settings.camera_fov),
+            (1640, 590, 150.0),
+        )
+        self.assertEqual(settings.perception_latency_budget_ms, 80.0)
+
     def test_bev_mode_does_not_enable_recording(self):
         environment = {
             "SENSOR_MODE": "bev",
@@ -24,6 +40,8 @@ class SensorModeTests(unittest.TestCase):
         self.assertEqual(settings.sensor_mode, "bev")
         self.assertTrue(settings.enable_bev)
         self.assertFalse(settings.enable_data_recording)
+        self.assertTrue(settings.show_bev_panel)
+        self.assertTrue(settings.enable_multicamera_perception)
 
     def test_bev_validation_is_enabled_in_every_sensor_mode(self):
         for mode in ("control", "bev", "record"):

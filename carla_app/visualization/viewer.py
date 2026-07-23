@@ -14,8 +14,8 @@ class PerceptionViewer:
         carla_map=None,
         navigation=None,
         window_name="CARLA Akilli Surus",
-        dashboard_width=1580,
-        dashboard_height=780,
+        dashboard_width=1920,
+        dashboard_height=700,
         navigation_render_every_n_frames=2,
     ):
         self.window_name = window_name
@@ -24,7 +24,7 @@ class PerceptionViewer:
         self.bev_button_rect = None
         self.dashboard_width = max(1100, int(dashboard_width))
         self.dashboard_height = max(650, int(dashboard_height))
-        self.map_width = min(600, max(430, self.dashboard_width // 3))
+        self.map_width = min(520, max(430, self.dashboard_width // 4))
         self.camera_width = self.dashboard_width - self.map_width - 4
         self.map_offset_x = self.camera_width + 4
         self.last_vehicle_location = None
@@ -102,7 +102,10 @@ class PerceptionViewer:
             f"Signs {len(signs)} | Lag {lag} | {elapsed_ms:.1f} ms"
         )
         if lane_detection.get("available"):
-            header += f" | Lanes {lane_detection.get('detected_count', 0)}"
+            header += (
+                f" | UFLD {lane_detection.get('detected_count', 0)}/4 "
+                f"{float(lane_detection.get('elapsed_ms', 0.0)):.1f} ms"
+            )
         lead_light = road_context.get("lead_traffic_light")
         if lead_light is not None:
             header += f" | Lead {lead_light.get('color', '?')}"
@@ -175,17 +178,10 @@ class PerceptionViewer:
             self.draw_bev_switch(combined)
             return combined
 
-        source_height, source_width = perception_frame.shape[:2]
-        interpolation = (
-            cv2.INTER_AREA
-            if source_width > self.camera_width
-            or source_height > self.dashboard_height
-            else cv2.INTER_LINEAR
-        )
-        camera_panel = cv2.resize(
+        camera_panel = self.resize_with_letterbox(
             perception_frame,
-            (self.camera_width, self.dashboard_height),
-            interpolation=interpolation,
+            self.camera_width,
+            self.dashboard_height,
         )
 
         if bev_image is not None:
@@ -232,6 +228,42 @@ class PerceptionViewer:
         self.map_offset_x = self.camera_width + divider.shape[1]
         combined = np.hstack((camera_panel, divider, map_panel))
         return combined
+
+    @staticmethod
+    def resize_with_letterbox(image, target_width, target_height):
+        """Kamera geometrisini bozmadan görüntüyü hedef panele yerleştirir."""
+        source_height, source_width = image.shape[:2]
+        if source_height <= 0 or source_width <= 0:
+            raise ValueError("Kamera paneli icin bos goruntu verilemez.")
+
+        scale = min(
+            float(target_width) / float(source_width),
+            float(target_height) / float(source_height),
+        )
+        resized_width = max(1, int(round(source_width * scale)))
+        resized_height = max(1, int(round(source_height * scale)))
+        interpolation = (
+            cv2.INTER_AREA
+            if scale < 1.0
+            else cv2.INTER_LINEAR
+        )
+        resized = cv2.resize(
+            image,
+            (resized_width, resized_height),
+            interpolation=interpolation,
+        )
+        canvas = np.full(
+            (int(target_height), int(target_width), 3),
+            (8, 11, 15),
+            dtype=np.uint8,
+        )
+        offset_x = (int(target_width) - resized_width) // 2
+        offset_y = (int(target_height) - resized_height) // 2
+        canvas[
+            offset_y : offset_y + resized_height,
+            offset_x : offset_x + resized_width,
+        ] = resized
+        return canvas
 
     def draw_bev_switch(self, frame):
         """BEV panelinin sağ üstüne iki konumlu tıklanabilir switch çizer."""
@@ -404,17 +436,39 @@ class PerceptionViewer:
             if lane.get("detected") and len(lane.get("points", [])) >= 2
         ]
         PerceptionViewer._draw_ego_lane_corridor(frame, lanes)
+        # BGR renkleri modelin yayımlandığı CARLA UFLD uygulamasındaki dört
+        # lane kimliğiyle aynıdır: kırmızı, yeşil, mavi ve sarı.
         colors = (
-            (40, 120, 255),
-            (60, 255, 100),
-            (255, 150, 40),
-            (40, 230, 255),
+            (0, 0, 255),
+            (0, 255, 0),
+            (255, 0, 0),
+            (0, 255, 255),
         )
         drawn = 0
         for lane in lanes:
             points = np.asarray(lane["points"], dtype=np.int32).reshape(-1, 1, 2)
             lane_index = int(lane.get("lane_index", 0))
             color = colors[lane_index % len(colors)]
+            for raw_point in lane.get("raw_points", []):
+                if len(raw_point) != 2:
+                    continue
+                point = (int(raw_point[0]), int(raw_point[1]))
+                cv2.circle(
+                    frame,
+                    point,
+                    4,
+                    (10, 12, 15),
+                    -1,
+                    cv2.LINE_AA,
+                )
+                cv2.circle(
+                    frame,
+                    point,
+                    2,
+                    color,
+                    -1,
+                    cv2.LINE_AA,
+                )
             cv2.polylines(
                 frame,
                 [points],

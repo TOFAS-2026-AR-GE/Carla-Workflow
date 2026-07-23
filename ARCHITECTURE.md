@@ -19,7 +19,7 @@ main.py
       -> perception/ YOLO + UFLD + zamansal yol bağlamı
       -> bev/        sürekli kuş bakışı doğrulama ve lead recovery
       -> controller/ davranış, direksiyon, hız, gaz-fren ve acil fren
-      -> visualization/ OpenCV kamera ve BEV görünümü
+      -> visualization/ OpenCV kamera/UFLD ve isteğe bağlı BEV görünümü
 ```
 
 Her simülasyon karesinin sahibi `CarlaApplication.process_frame()` metodudur.
@@ -31,8 +31,8 @@ kontrol komutunu üretir ve araca uygular.
 | Akış | Sorumluluk | Kontrol döngüsünü bekletir mi? |
 |---|---|---|
 | Ana CARLA döngüsü | Araç durumu, karar, kontrol ve ekran | Ana akıştır |
-| `PerceptionWorker` | YOLO, isteğe bağlı ONNX ve UFLD çıkarımı | Hayır; yalnız en yeni kareyi tutar |
-| BEV işçisi | IPM, füzyon, takip, occupancy ve çizim | Hayır; her modda açılır |
+| `PerceptionWorker` | Normal modda ön-kamera YOLO+UFLD; `bev` modunda yedi-kamera YOLO | Hayır; yalnız en yeni kareyi tutar |
+| BEV işçisi | Her modda füzyon/takip/occupancy; `bev` modunda ayrıca IPM ve çizim | Hayır; her modda açılır |
 
 Eski kamera işleri kuyrukta biriktirilmez. Böylece model yavaşladığında kontrol
 döngüsü eski kareleri sırayla işlemeye çalışmaz.
@@ -56,13 +56,14 @@ Bu ayrım önemlidir: algılama sonucu doğrudan gaz, fren veya direksiyon komut
 
 | Mod | Amaç | Çalışan omurga |
 |---|---|---|
-| `control` | Normal sürüş | 15 sensör ve BEV doğrulaması |
-| `bev` | Kuş bakışı odaklı sürüş | 15 sensör ve BEV doğrulaması |
-| `record` | Senkron veri toplama | Aynı omurga ve ek disk yazımı |
+| `control` | Normal sürüş | 15 sensör, ön-kamera çıkarımı ve görselsiz BEV doğrulaması |
+| `bev` | Kuş bakışı odaklı sürüş | 15 sensör, yedi-kamera çıkarımı, IPM ve BEV paneli |
+| `record` | Senkron veri toplama | `control` omurgası ve ek disk yazımı |
 
-Kamera çıkarımı donanıma göre parçalanır: düşük VRAM'de tek kamera/batch,
-yüksek VRAM'de birden çok kamera/batch kullanılır. Bu seçim sensör kapsamını
-değil yalnız çıkarımın GPU üzerindeki gruplanmasını değiştirir.
+Yedi kameranın tamamı her modda sensör/kalibrasyon kanıtı olarak canlıdır.
+Ancak normal modlarda model çıkarımı yalnız birincil kamerada yapılır; donanıma
+göre batch parçalama yalnız açıkça seçilen `bev` modunun yedi-kamera çıkarımını
+etkiler.
 
 UFLD ayrı bir sensör modu değildir. `ENABLE_LANE_DETECTION=true` olduğunda
 yalnız birincil ön kamerada çalışır ve her modda görsel sonuç üretebilir.

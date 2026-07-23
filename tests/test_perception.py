@@ -256,6 +256,26 @@ class LaneDetectorTests(unittest.TestCase):
         self.assertTrue(all(not lane["detected"] for lane in lanes))
         self.assertTrue(all(lane["confidence"] < 0.30 for lane in lanes))
 
+    def test_neighboring_grid_distribution_keeps_structurally_clear_lane(self):
+        logits = np.full((101, ROW_COUNT, LANE_COUNT), -12.0, dtype=np.float32)
+        logits[100, :, :] = 12.0
+        grid = np.arange(100, dtype=np.float32)
+        profile = 5.0 - 0.5 * np.square((grid - 49.0) / 3.0)
+        logits[:100, :, 1] = profile[:, None]
+        logits[100, :, 1] = 0.0
+
+        lanes = decode_ufld_logits(
+            logits,
+            image_width=1640,
+            image_height=590,
+            minimum_confidence=0.15,
+        )
+
+        self.assertTrue(lanes[1]["detected"])
+        self.assertEqual(len(lanes[1]["points"]), ROW_COUNT)
+        self.assertGreater(lanes[1]["confidence"], 0.15)
+        self.assertLess(lanes[1]["confidence"], 1.0)
+
     def test_checkpoint_wrapper_and_dataparallel_prefix_are_supported(self):
         state = {"module.pool.weight": object()}
         result = LaneDetector._state_dict_from_checkpoint(
@@ -486,6 +506,34 @@ class PerceptionSystemTests(unittest.TestCase):
             "lane_detection"
         ]
         self.assertEqual(rear_lane["reason"], "not_primary_camera")
+
+    def test_single_camera_result_keeps_primary_entry_for_bev_validation(self):
+        system = PerceptionSystem.__new__(PerceptionSystem)
+        system.vehicle_detector = types.SimpleNamespace(
+            detect_objects=lambda _image: [
+                {
+                    "type": "vehicle",
+                    "class_name": "vehicle",
+                    "confidence": 0.8,
+                    "bbox": (1, 2, 20, 30),
+                }
+            ]
+        )
+        system.sign_detector = None
+        system.lane_detector = None
+        system._last_errors = {}
+        image = np.zeros((40, 60, 3), dtype=np.uint8)
+
+        result = system.detect(
+            12,
+            image,
+            camera_name="camera_front_wide",
+        )
+
+        primary = result["camera_results"]["camera_front_wide"]
+        self.assertEqual(primary["frame_id"], 12)
+        self.assertIs(primary["image"], image)
+        self.assertEqual(len(primary["vehicles"]), 1)
 
 
 class FusionTests(unittest.TestCase):

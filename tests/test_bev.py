@@ -2,14 +2,17 @@ import sys
 import types
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
-if "cv2" not in sys.modules:
-    try:
-        import cv2  # noqa: F401
-    except ModuleNotFoundError:
-        cv2 = types.ModuleType("cv2")
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = types.ModuleType("cv2")
+    sys.modules["cv2"] = cv2
+
+if not hasattr(cv2, "resize"):
         cv2.LINE_AA = 16
         cv2.FONT_HERSHEY_SIMPLEX = 0
         cv2.INTER_AREA = 3
@@ -36,9 +39,12 @@ if "cv2" not in sys.modules:
 
         def resize(image, size, interpolation=None):
             width, height = size
+            source_height, source_width = image.shape[:2]
+            y_index = np.linspace(0, source_height - 1, height).astype(np.int64)
+            x_index = np.linspace(0, source_width - 1, width).astype(np.int64)
             if image.ndim == 2:
-                return np.zeros((height, width), dtype=image.dtype)
-            return np.zeros((height, width, image.shape[2]), dtype=image.dtype)
+                return image[y_index[:, None], x_index]
+            return image[y_index[:, None], x_index, :]
 
         cv2.resize = resize
 
@@ -68,7 +74,6 @@ if "cv2" not in sys.modules:
             return result
 
         cv2.addWeighted = add_weighted
-        sys.modules["cv2"] = cv2
 
 from carla_app.bev.association import group_associated_measurements
 from carla_app.bev.calibration import (
@@ -79,6 +84,7 @@ from carla_app.bev.calibration import (
 from carla_app.bev.camera_ipm import CameraIpm
 from carla_app.bev.coordinate import EgoMotionCompensator, MetricGrid
 from carla_app.bev.fusion import SensorFusion
+from carla_app.bev.localization import LocalizationHealth
 from carla_app.bev.module import BevModule
 from carla_app.bev.occupancy import OccupancyGrid
 from carla_app.bev.projector import BevProjector
@@ -118,6 +124,18 @@ def make_layout():
         transform=transform(z=1.8),
         attributes={"range": "80.0"},
     )
+    gnss = SimpleNamespace(
+        name="gnss_roof",
+        kind="gnss",
+        transform=transform(z=1.9),
+        attributes={},
+    )
+    imu = SimpleNamespace(
+        name="imu_cg",
+        kind="imu",
+        transform=transform(z=0.5),
+        attributes={},
+    )
     geometry = {
         "bounding_box_center_z_m": 0.75,
         "half_height_m": 0.75,
@@ -128,7 +146,9 @@ def make_layout():
         cameras=(camera,),
         radars=(radar,),
         lidar=lidar,
-        all_specs=(camera, radar, lidar),
+        gnss=gnss,
+        imu=imu,
+        all_specs=(camera, radar, lidar, gnss, imu),
         vehicle_geometry=geometry,
     )
 
@@ -157,11 +177,13 @@ def make_surround_layout():
         camera_spec("camera_rear_right", -0.5, 1.0, 1.1, 120.0, -4.0, 100.0),
         camera_spec("camera_rear_center", -2.4, 0.0, 1.0, 180.0, -5.0, 110.0),
     )
-    all_specs = cameras + (base.lidar,) + base.radars
+    all_specs = cameras + (base.lidar, base.gnss, base.imu) + base.radars
     return SimpleNamespace(
         cameras=cameras,
         radars=base.radars,
         lidar=base.lidar,
+        gnss=base.gnss,
+        imu=base.imu,
         all_specs=all_specs,
         vehicle_geometry=base.vehicle_geometry,
     )
@@ -242,6 +264,66 @@ class BevProjectorTests(unittest.TestCase):
         )
 
         self.assertEqual(detections, [])
+
+
+class LocalizationHealthTests(unittest.TestCase):
+    def test_fresh_gnss_and_imu_are_healthy(self):
+        health = LocalizationHealth(make_layout(), maximum_age_frames=2)
+        snapshot = {
+            "gnss_roof": {
+                "frame_id": 20,
+                "data": {
+                    "latitude": 41.015,
+                    "longitude": 28.979,
+                    "altitude": 42.0,
+                },
+            },
+            "imu_cg": {
+                "frame_id": 20,
+                "data": {
+                    "accelerometer": {"x": 0.1, "y": 1.2, "z": 9.81},
+                    "gyroscope": {"x": 0.0, "y": 0.0, "z": 0.08},
+                    "compass": 1.5,
+                },
+            },
+        }
+
+        result = health.evaluate(snapshot, current_frame_id=21)
+
+        self.assertEqual(result["status"], "HEALTHY")
+        self.assertEqual(result["available_sources"], 2)
+        self.assertAlmostEqual(
+            result["imu"]["lateral_acceleration_mps2"],
+            1.2,
+        )
+        self.assertAlmostEqual(result["imu"]["yaw_rate_radps"], 0.08)
+
+    def test_stale_gnss_and_invalid_imu_are_unavailable(self):
+        health = LocalizationHealth(make_layout(), maximum_age_frames=2)
+        snapshot = {
+            "gnss_roof": {
+                "frame_id": 10,
+                "data": {
+                    "latitude": 41.015,
+                    "longitude": 28.979,
+                    "altitude": 42.0,
+                },
+            },
+            "imu_cg": {
+                "frame_id": 20,
+                "data": {
+                    "accelerometer": {"x": 0.1, "y": float("nan"), "z": 9.81},
+                    "gyroscope": {"x": 0.0, "y": 0.0, "z": 0.08},
+                    "compass": 1.5,
+                },
+            },
+        }
+
+        result = health.evaluate(snapshot, current_frame_id=21)
+
+        self.assertEqual(result["status"], "UNAVAILABLE")
+        self.assertEqual(result["gnss"]["reason"], "stale")
+        self.assertEqual(result["imu"]["reason"], "invalid_values")
 
 
 class CalibrationTests(unittest.TestCase):
@@ -960,6 +1042,67 @@ class ValidationTests(unittest.TestCase):
 
 
 class BevRendererTests(unittest.TestCase):
+    def test_opencv_overlay_draws_objects_signs_context_and_lanes(self):
+        viewer = PerceptionViewer.__new__(PerceptionViewer)
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        vehicles = [
+            {
+                "bbox": [10, 20, 80, 100],
+                "class_name": "vehicle",
+                "confidence": 0.93,
+            }
+        ]
+        signs = [
+            {
+                "bbox": [100, 20, 130, 70],
+                "class_name": "traffic_sign_30",
+                "confidence": 0.88,
+            }
+        ]
+        lanes = {
+            "lanes": [
+                {
+                    "detected": True,
+                    "lane_index": 1,
+                    "points": [[120, 230], [140, 160], [150, 100]],
+                }
+            ]
+        }
+        road_context = {
+            "detections": [
+                {
+                    "bbox": [200, 25, 230, 75],
+                    "class_name": "traffic_light_red",
+                    "category": "traffic_light",
+                    "confidence": 0.91,
+                },
+                {
+                    "bbox": [10, 20, 80, 100],
+                    "class_name": "vehicle",
+                    "category": "vehicle",
+                    "confidence": 0.93,
+                },
+            ]
+        }
+
+        with (
+            patch("carla_app.visualization.viewer.cv2.rectangle") as rectangle,
+            patch("carla_app.visualization.viewer.cv2.putText") as put_text,
+            patch("carla_app.visualization.viewer.cv2.polylines") as polylines,
+        ):
+            counts = viewer.draw_perception_overlay(
+                frame,
+                vehicles,
+                signs,
+                lanes,
+                road_context,
+            )
+
+        self.assertEqual(counts, {"boxes": 3, "lanes": 1})
+        self.assertEqual(rectangle.call_count, 3)
+        self.assertEqual(put_text.call_count, 3)
+        polylines.assert_called_once()
+
     def test_module_returns_requested_bgr_canvas(self):
         layout = make_layout()
         module = BevModule(layout, width=320, height=240)

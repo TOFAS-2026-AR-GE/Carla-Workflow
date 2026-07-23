@@ -14,6 +14,7 @@ class PerformanceProfile:
     perception_every_n_frames: int
     maximum_perception_period: int
     vehicle_image_size: int
+    camera_inference_batch_size: int
     camera_wait_timeout_ms: float
     navigation_render_every_n_frames: int
 
@@ -36,6 +37,7 @@ def choose_performance_profile(
             perception_every_n_frames=2,
             maximum_perception_period=3,
             vehicle_image_size=416,
+            camera_inference_batch_size=1,
             camera_wait_timeout_ms=6.0,
             navigation_render_every_n_frames=3,
         )
@@ -49,6 +51,7 @@ def choose_performance_profile(
             perception_every_n_frames=1,
             maximum_perception_period=2,
             vehicle_image_size=640,
+            camera_inference_batch_size=7,
             camera_wait_timeout_ms=6.0,
             navigation_render_every_n_frames=2,
         )
@@ -62,6 +65,7 @@ def choose_performance_profile(
             perception_every_n_frames=1,
             maximum_perception_period=2,
             vehicle_image_size=640,
+            camera_inference_batch_size=4,
             camera_wait_timeout_ms=8.0,
             navigation_render_every_n_frames=2,
         )
@@ -75,6 +79,7 @@ def choose_performance_profile(
             perception_every_n_frames=1,
             maximum_perception_period=2,
             vehicle_image_size=576,
+            camera_inference_batch_size=2,
             camera_wait_timeout_ms=8.0,
             navigation_render_every_n_frames=2,
         )
@@ -87,6 +92,7 @@ def choose_performance_profile(
         perception_every_n_frames=2,
         maximum_perception_period=3,
         vehicle_image_size=512,
+        camera_inference_batch_size=1,
         camera_wait_timeout_ms=6.0,
         navigation_render_every_n_frames=2,
     )

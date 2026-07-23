@@ -127,7 +127,7 @@ class SensorManagerTests(unittest.TestCase):
             {"cameras", "lidars", "automotive_radars", "gnss", "imu", "total"},
         )
 
-    def test_live_control_spawns_only_primary_camera_and_front_radar(self):
+    def test_live_control_spawns_all_sensors_for_bev_validation(self):
         settings = types.SimpleNamespace(
             enable_data_recording=False,
             output_folder=None,
@@ -168,10 +168,11 @@ class SensorManagerTests(unittest.TestCase):
                 fixed_delta_seconds=0.05,
             )
 
-        self.assertEqual(captured["specs"], (camera, radar))
+        self.assertEqual(captured["specs"], layout.all_specs)
         self.assertIsNone(captured["sync"])
+        self.assertIs(captured["live_stream"], manager.live_stream)
 
-    def test_lidar_fusion_adds_roof_lidar_to_control_sensors(self):
+    def test_full_sensor_mode_does_not_duplicate_lidar(self):
         settings = types.SimpleNamespace(
             enable_data_recording=False,
             enable_lidar_fusion=True,
@@ -209,8 +210,50 @@ class SensorManagerTests(unittest.TestCase):
         ):
             manager.start(object(), object(), 0.05)
 
-        self.assertEqual(captured["specs"], (camera, radar, lidar))
+        self.assertEqual(captured["specs"], layout.all_specs)
+        self.assertEqual(captured["specs"].count(lidar), 1)
         self.assertIsNotNone(captured["live_stream"])
+
+    def test_fresh_imu_and_gnss_are_added_to_vehicle_state(self):
+        settings = types.SimpleNamespace(
+            enable_data_recording=False,
+            enable_bev=True,
+            sensor_mode="control",
+            camera_wait_timeout_ms=0.0,
+            output_folder=None,
+        )
+        manager = SensorManager(settings)
+        manager.layout = types.SimpleNamespace(
+            imu=types.SimpleNamespace(name="imu_cg"),
+            gnss=types.SimpleNamespace(name="gnss_roof"),
+        )
+        manager.live_stream.push(
+            "imu_cg",
+            20,
+            {
+                "accelerometer": {"x": 0.0, "y": 1.25, "z": 9.81},
+                "gyroscope": {"x": 0.0, "y": 0.0, "z": 0.18},
+                "compass": 0.5,
+            },
+        )
+        manager.live_stream.push(
+            "gnss_roof",
+            20,
+            {"latitude": 41.0, "longitude": 29.0, "altitude": 10.0},
+        )
+
+        state = manager.enrich_vehicle_state(
+            {"speed_mps": 8.0},
+            frame_id=21,
+        )
+
+        self.assertAlmostEqual(
+            state["imu_lateral_acceleration_mps2"],
+            1.25,
+        )
+        self.assertAlmostEqual(state["imu_yaw_rate_radps"], 0.18)
+        self.assertEqual(state["imu_frame_id"], 20)
+        self.assertEqual(state["gnss_frame_id"], 20)
 
     def test_bev_mode_spawns_all_sensors_without_recording(self):
         settings = types.SimpleNamespace(
@@ -258,6 +301,68 @@ class SensorManagerTests(unittest.TestCase):
         self.assertIsNone(captured["sync"])
         self.assertIs(captured["live_stream"], manager.live_stream)
         self.assertIsNotNone(manager.live_stream)
+
+    def test_record_mode_spawns_all_sensors_and_keeps_live_bev_stream(self):
+        settings = types.SimpleNamespace(
+            enable_data_recording=True,
+            enable_bev=True,
+            sensor_mode="record",
+            output_folder="unused",
+            camera_width=800,
+            camera_height=600,
+            camera_fov=90.0,
+        )
+        sensors = tuple(
+            types.SimpleNamespace(name=name)
+            for name in (
+                "camera_front_wide",
+                "radar_front_long",
+                "lidar_roof",
+                "gnss_roof",
+                "imu_cg",
+            )
+        )
+        layout = types.SimpleNamespace(
+            all_specs=sensors,
+            sensor_names=[sensor.name for sensor in sensors],
+            to_manifest=lambda _vehicle_type: {"sensors": len(sensors)},
+        )
+        captured = {}
+        writer = types.SimpleNamespace(write_manifest=lambda _manifest: None)
+
+        def fake_spawn_layout(**arguments):
+            captured.update(arguments)
+            return []
+
+        with patch(
+            "carla_app.sensors.manager.DatasetWriter",
+            return_value=writer,
+        ):
+            manager = SensorManager(settings)
+        with (
+            patch(
+                "carla_app.sensors.manager.build_sensor_layout",
+                return_value=layout,
+            ),
+            patch(
+                "carla_app.sensors.manager.spawn_layout",
+                side_effect=fake_spawn_layout,
+            ),
+            redirect_stdout(io.StringIO()),
+        ):
+            manager.start(
+                world=object(),
+                vehicle=types.SimpleNamespace(type_id="vehicle.test"),
+                fixed_delta_seconds=0.05,
+            )
+
+        self.assertEqual(captured["specs"], layout.all_specs)
+        self.assertIs(captured["live_stream"], manager.live_stream)
+        self.assertIsNotNone(captured["sync"])
+        self.assertEqual(
+            set(captured["sync"].sensor_names),
+            set(layout.sensor_names),
+        )
 
     def test_recording_packet_contains_only_real_sensor_groups(self):
         camera = types.SimpleNamespace(name="camera_front_wide")

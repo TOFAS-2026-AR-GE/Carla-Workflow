@@ -27,6 +27,7 @@ class DeviceSelectionTests(unittest.TestCase):
         self.assertEqual(profile.name, "cuda-ultra")
         self.assertEqual(profile.perception_every_n_frames, 1)
         self.assertEqual(profile.vehicle_image_size, 640)
+        self.assertEqual(profile.camera_inference_batch_size, 7)
 
     def test_4_gb_gpu_uses_low_vram_profile(self):
         profile = choose_performance_profile(
@@ -38,6 +39,7 @@ class DeviceSelectionTests(unittest.TestCase):
         self.assertEqual(profile.name, "cuda-low-vram")
         self.assertEqual(profile.perception_every_n_frames, 2)
         self.assertEqual(profile.vehicle_image_size, 512)
+        self.assertEqual(profile.camera_inference_batch_size, 1)
 
     def test_cpu_profile_reduces_inference_load(self):
         profile = choose_performance_profile(False)

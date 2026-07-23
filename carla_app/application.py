@@ -203,6 +203,7 @@ class CarlaApplication:
             self.vehicle,
             route_manager=self.route_manager,
         )
+        state = self.sensors.enrich_vehicle_state(state, frame_id)
         navigation_state = self.navigation.update(
             state["location"],
             state["speed_mps"],
@@ -287,10 +288,15 @@ class CarlaApplication:
         if bev_validation is not None:
             validation_status = bev_validation["status"]
             if validation_status != self.previous_bev_validation_status:
+                localization_status = bev_validation.get(
+                    "localization",
+                    {},
+                ).get("status", "UNAVAILABLE")
                 print(
                     f"[BEV-VALIDATION] frame={frame_id} "
                     f"status={validation_status} "
                     f"health={bev_validation['health']['status']} "
+                    f"localization={localization_status} "
                     f"lead={bev_validation['lead']['status']}"
                 )
                 self.previous_bev_validation_status = validation_status
@@ -585,6 +591,8 @@ class CarlaApplication:
             message += (
                 f" bev={bev_validation.get('status', 'UNAVAILABLE')}"
                 f" bev_lead={bev_validation.get('lead', {}).get('status', 'UNKNOWN')}"
+                f" localization="
+                f"{bev_validation.get('localization', {}).get('status', 'UNAVAILABLE')}"
             )
         bev_contribution = control_info.get("bev_contribution")
         if bev_contribution is not None and bev_contribution.get("applied"):

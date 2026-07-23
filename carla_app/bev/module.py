@@ -9,6 +9,7 @@ from carla_app.bev.calibration import CalibrationSet
 from carla_app.bev.camera_ipm import CameraIpm
 from carla_app.bev.coordinate import EgoMotionCompensator, MetricGrid
 from carla_app.bev.fusion import SensorFusion
+from carla_app.bev.localization import LocalizationHealth
 from carla_app.bev.occupancy import OccupancyGrid
 from carla_app.bev.projector import BevProjector
 from carla_app.bev.renderer import BevRenderer
@@ -40,6 +41,7 @@ class BevModule:
         )
         self.camera_ipm = CameraIpm(layout, self.calibrations, self.grid)
         self.fusion = SensorFusion()
+        self.localization = LocalizationHealth(layout)
         self.tracker = BevTracker(fixed_delta_seconds)
         self.occupancy = OccupancyGrid(
             forward_range_m=self.grid.forward_range_m,
@@ -83,6 +85,10 @@ class BevModule:
             sensor_snapshot,
             perception_result,
             vehicle_state,
+            current_frame_id,
+        )
+        scene["localization"] = self.localization.evaluate(
+            sensor_snapshot,
             current_frame_id,
         )
         scene["driving_state"] = dict(driving_state or {})

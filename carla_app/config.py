@@ -238,6 +238,14 @@ class Settings:
             if automatic_profile
             else int(os.getenv("VEHICLE_IMAGE_SIZE", "640"))
         )
+        self.camera_inference_batch_size = max(
+            1,
+            (
+                self.performance_profile.camera_inference_batch_size
+                if automatic_profile
+                else int(os.getenv("CAMERA_INFERENCE_BATCH_SIZE", "4"))
+            ),
+        )
         self.sign_detector_image_size = int(
             os.getenv("SIGN_DETECTOR_IMAGE_SIZE", "512")
         )
@@ -275,7 +283,9 @@ class Settings:
             )
 
         self.sensor_mode = requested_sensor_mode
-        self.enable_bev = self.sensor_mode == "bev"
+        # Üç mod da aynı canlı sensör ve BEV doğrulama omurgasını kullanır.
+        # Mod yalnızca kayıt davranışını ve çalıştırma amacını değiştirir.
+        self.enable_bev = True
         self.enable_data_recording = self.sensor_mode == "record"
         self.bev_update_every_n_frames = max(
             1,

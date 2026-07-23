@@ -15,9 +15,9 @@ bağımsız güvenlik katmanı son komutu sınırlar.
 main.py
   -> CarlaApplication
       -> core/       CARLA bağlantısı, ego araç, rota ve trafik
-      -> sensors/    kamera, radar ve LiDAR verisi
+      -> sensors/    7 kamera, 5 radar, LiDAR, GNSS ve IMU verisi
       -> perception/ YOLO + UFLD + zamansal yol bağlamı
-      -> bev/        isteğe bağlı kuş bakışı doğrulama ve lead recovery
+      -> bev/        sürekli kuş bakışı doğrulama ve lead recovery
       -> controller/ davranış, direksiyon, hız, gaz-fren ve acil fren
       -> visualization/ OpenCV kamera ve BEV görünümü
 ```
@@ -32,7 +32,7 @@ kontrol komutunu üretir ve araca uygular.
 |---|---|---|
 | Ana CARLA döngüsü | Araç durumu, karar, kontrol ve ekran | Ana akıştır |
 | `PerceptionWorker` | YOLO, isteğe bağlı ONNX ve UFLD çıkarımı | Hayır; yalnız en yeni kareyi tutar |
-| BEV işçisi | IPM, füzyon, takip, occupancy ve çizim | Hayır; yalnız BEV modunda açılır |
+| BEV işçisi | IPM, füzyon, takip, occupancy ve çizim | Hayır; her modda açılır |
 
 Eski kamera işleri kuyrukta biriktirilmez. Böylece model yavaşladığında kontrol
 döngüsü eski kareleri sırayla işlemeye çalışmaz.
@@ -42,7 +42,7 @@ döngüsü eski kareleri sırayla işlemeye çalışmaz.
 | Karar | Ana kaynak | İlgili modül |
 |---|---|---|
 | Direksiyon | CARLA harita rotası | `pure_pursuit_mpc_controller.py` |
-| Viraj hızı | Rota eğriliği ve şerit merkezleme hatası | `speed_planner.py` |
+| Viraj hızı | Rota eğriliği, şerit merkezleme hatası ve IMU kararlılığı | `speed_planner.py` |
 | Ön araç takibi | Kamera + radar, gerektiğinde BEV recovery | `lead_vehicle.py` |
 | Trafik kuralı | Zamansal doğrulanmış yol bağlamı | `road_context.py`, `behavior_planner.py` |
 | Gaz ve fren | IDM hız referansı + PID | `idm_speed_planner.py`, `longitudinal_pid_controller.py` |
@@ -54,11 +54,15 @@ Bu ayrım önemlidir: algılama sonucu doğrudan gaz, fren veya direksiyon komut
 
 ## Sensör modları
 
-| Mod | Amaç | Açılan ek iş |
+| Mod | Amaç | Çalışan omurga |
 |---|---|---|
-| `control` | En düşük gecikmeli normal sürüş | Ön kamera, radar ve LiDAR |
-| `bev` | Çok sensörlü kuş bakışı doğrulama | 15 sensör ve BEV işçisi |
-| `record` | Senkron veri toplama | 15 sensör ve disk yazımı |
+| `control` | Normal sürüş | 15 sensör ve BEV doğrulaması |
+| `bev` | Kuş bakışı odaklı sürüş | 15 sensör ve BEV doğrulaması |
+| `record` | Senkron veri toplama | Aynı omurga ve ek disk yazımı |
+
+Kamera çıkarımı donanıma göre parçalanır: düşük VRAM'de tek kamera/batch,
+yüksek VRAM'de birden çok kamera/batch kullanılır. Bu seçim sensör kapsamını
+değil yalnız çıkarımın GPU üzerindeki gruplanmasını değiştirir.
 
 UFLD ayrı bir sensör modu değildir. `ENABLE_LANE_DETECTION=true` olduğunda
 yalnız birincil ön kamerada çalışır ve her modda görsel sonuç üretebilir.

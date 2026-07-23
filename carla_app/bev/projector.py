@@ -338,8 +338,6 @@ class BevProjector:
     def build_sensor_status(self, sensor_snapshot, current_frame_id):
         status = {}
         for sensor in self.layout.all_specs:
-            if sensor.kind not in {"camera", "radar", "lidar"}:
-                continue
             entry = sensor_snapshot.get(sensor.name)
             frame_id = None if entry is None else entry.get("frame_id")
             age = None

@@ -59,6 +59,7 @@ class VehicleDetector:
         image_size,
         device,
         use_half=True,
+        camera_batch_size=4,
     ):
         self.model = YOLO(str(model_path), task="detect")
         self.confidence = float(confidence)
@@ -68,6 +69,7 @@ class VehicleDetector:
             minimum_free_memory_mb=768.0,
         )
         self.use_half = bool(use_half and is_cuda_device(self.device))
+        self.camera_batch_size = max(1, int(camera_batch_size))
 
         if not 0.0 < self.confidence <= 1.0:
             raise ValueError("VEHICLE_CONFIDENCE 0 ile 1 arasinda olmali.")
@@ -94,7 +96,7 @@ class VehicleDetector:
             f"[OK] Vehicle modeli: device={self.device}, "
             f"vehicle_classes={selected_names}, "
             f"traffic_classes={relevant_names}, conf={self.confidence:.2f}, "
-            f"fp16={self.use_half}"
+            f"fp16={self.use_half}, camera_batch={self.camera_batch_size}"
         )
         self._warmup_cuda()
 
@@ -132,8 +134,10 @@ class VehicleDetector:
         if not bgr_images:
             return detections_by_name
 
-        source = bgr_images[0] if len(bgr_images) == 1 else bgr_images
-        results = self._predict(source)
+        results = self._predict_camera_batches(
+            bgr_images,
+            self.vehicle_class_ids,
+        )
 
         for index, camera_name in enumerate(camera_names):
             detections = []
@@ -339,8 +343,7 @@ class VehicleDetector:
         if not bgr_images:
             return detections_by_name
 
-        source = bgr_images[0] if len(bgr_images) == 1 else bgr_images
-        results = self._predict(source, class_ids)
+        results = self._predict_camera_batches(bgr_images, class_ids)
         for index, camera_name in enumerate(camera_names):
             detections = []
             if results and index < len(results) and results[index].boxes is not None:
@@ -352,6 +355,20 @@ class VehicleDetector:
                 )
             detections_by_name[camera_name] = detections
         return detections_by_name
+
+    def _predict_camera_batches(self, bgr_images, class_ids):
+        """Kameraları VRAM profiline uygun küçük gruplarla işler."""
+        all_results = []
+        batch_size = max(
+            1,
+            int(getattr(self, "camera_batch_size", len(bgr_images) or 1)),
+        )
+        for start in range(0, len(bgr_images), batch_size):
+            batch = bgr_images[start : start + batch_size]
+            source = batch[0] if len(batch) == 1 else batch
+            results = self._predict(source, class_ids)
+            all_results.extend(list(results or []))
+        return all_results
 
     def _normalize_names(self, names):
         normalized = {}

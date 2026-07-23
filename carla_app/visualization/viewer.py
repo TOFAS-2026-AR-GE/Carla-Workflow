@@ -84,18 +84,14 @@ class PerceptionViewer:
             image = np.zeros((600, 800, 3), dtype=np.uint8)
 
         frame = np.ascontiguousarray(image[:, :, :3][:, :, ::-1])
-        for detection in vehicles:
-            self._draw(frame, detection, (0, 220, 0), "VEH")
-        for detection in signs:
-            self._draw(frame, detection, (0, 165, 255), "SIGN")
-        self._draw_lanes(frame, lane_detection)
         road_context = road_context or {}
-        for detection in road_context.get("detections", []):
-            category = detection.get("category")
-            if category in {"vehicle", "two_wheeler", "speed_sign"}:
-                continue
-            color = (0, 0, 255) if category == "traffic_light" else (255, 0, 255)
-            self._draw(frame, detection, color, category.upper())
+        self.draw_perception_overlay(
+            frame,
+            vehicles,
+            signs,
+            lane_detection,
+            road_context,
+        )
 
         lag = 0
         if current_frame_id is not None and result_frame_id is not None:
@@ -329,12 +325,22 @@ class PerceptionViewer:
         return key not in (27, ord("q"), ord("Q"))
 
     def _draw(self, frame, detection, color, prefix):
-        box = detection["bbox"]
-        x1 = int(box[0])
-        y1 = int(box[1])
-        x2 = int(box[2])
-        y2 = int(box[3])
-        confidence = float(detection.get("confidence", 0.0))
+        box = detection.get("bbox")
+        if box is None or len(box) != 4:
+            return False
+        try:
+            x1 = int(box[0])
+            y1 = int(box[1])
+            x2 = int(box[2])
+            y2 = int(box[3])
+        except (TypeError, ValueError):
+            return False
+        if x2 <= x1 or y2 <= y1:
+            return False
+        try:
+            confidence = float(detection.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
         class_name = str(detection.get("class_name", "unknown"))
         label = f"{prefix} {class_name} {confidence:.2f}"
 
@@ -349,11 +355,52 @@ class PerceptionViewer:
             2,
             cv2.LINE_AA,
         )
+        return True
+
+    def draw_perception_overlay(
+        self,
+        frame,
+        vehicles,
+        signs,
+        lane_detection,
+        road_context,
+    ):
+        """Ana kameraya kutuları ve şerit çizgilerini tek yerde çizer."""
+        drawn_boxes = 0
+        for detection in vehicles:
+            drawn_boxes += int(
+                self._draw(frame, detection, (0, 220, 0), "VEH")
+            )
+        for detection in signs:
+            drawn_boxes += int(
+                self._draw(frame, detection, (0, 165, 255), "SIGN")
+            )
+
+        drawn_lanes = self._draw_lanes(frame, lane_detection)
+        for detection in (road_context or {}).get("detections", []):
+            category = str(detection.get("category", "")).strip().lower()
+            if category in {"vehicle", "two_wheeler", "speed_sign"}:
+                continue
+            if not category:
+                continue
+            color = (
+                (0, 0, 255)
+                if category == "traffic_light"
+                else (255, 0, 255)
+            )
+            drawn_boxes += int(
+                self._draw(frame, detection, color, category.upper())
+            )
+        return {
+            "boxes": drawn_boxes,
+            "lanes": drawn_lanes,
+        }
 
     @staticmethod
     def _draw_lanes(frame, lane_detection):
         colors = ((0, 80, 255), (0, 220, 0), (255, 80, 0), (0, 220, 220))
-        for lane in lane_detection.get("lanes", []):
+        drawn = 0
+        for lane in (lane_detection or {}).get("lanes", []):
             if not lane.get("detected") or len(lane.get("points", [])) < 2:
                 continue
             points = np.asarray(lane["points"], dtype=np.int32).reshape(-1, 1, 2)
@@ -366,3 +413,5 @@ class PerceptionViewer:
                 3,
                 cv2.LINE_AA,
             )
+            drawn += 1
+        return drawn

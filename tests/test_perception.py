@@ -135,6 +135,34 @@ class VehicleDetectorTests(unittest.TestCase):
         self.assertEqual(detections["camera_front_wide"], [])
         self.assertEqual(detections["camera_rear_center"], [])
 
+    def test_low_vram_profile_processes_cameras_one_at_a_time(self):
+        captured = {"call_count": 0}
+
+        class FakeModel:
+            def predict(self, **_arguments):
+                captured["call_count"] += 1
+                return [types.SimpleNamespace(boxes=None)]
+
+        detector = VehicleDetector.__new__(VehicleDetector)
+        detector.model = FakeModel()
+        detector.confidence = 0.05
+        detector.image_size = 512
+        detector.device = "cpu"
+        detector.vehicle_class_ids = [0]
+        detector.camera_batch_size = 1
+        image = np.zeros((20, 30, 3), dtype=np.uint8)
+
+        detections = detector.detect_many(
+            {
+                "front": image,
+                "left": image,
+                "right": image,
+            }
+        )
+
+        self.assertEqual(captured["call_count"], 3)
+        self.assertEqual(set(detections), {"front", "left", "right"})
+
 
 class TrafficSignDetectorTests(unittest.TestCase):
     def test_detector_options_are_passed_openly_to_the_model(self):

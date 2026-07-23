@@ -15,7 +15,7 @@ from carla_app.sensors.writer import DatasetWriter
 
 
 class SensorManager:
-    """Seçilen moda göre kontrol, BEV veya kayıt sensörlerini çalıştırır."""
+    """Her modda tam sensör takımını canlı kontrol akışına bağlar."""
 
     def __init__(self, settings):
         self.settings = settings
@@ -34,11 +34,7 @@ class SensorManager:
 
         self.camera_stream = CameraStream(max_frames=8)
         self.radar_stream = RadarStream()
-        lidar_fusion = bool(getattr(settings, "enable_lidar_fusion", False))
-        if self.bev_enabled or lidar_fusion:
-            self.live_stream = LatestSensorStream()
-        else:
-            self.live_stream = None
+        self.live_stream = LatestSensorStream()
 
         if self.recording_enabled:
             self.writer = DatasetWriter(settings.output_folder)
@@ -53,15 +49,9 @@ class SensorManager:
             fixed_delta_seconds=fixed_delta_seconds,
         )
 
+        active_specs = self.layout.all_specs
         if self.recording_enabled:
-            active_specs = self.layout.all_specs
             self.sync = SensorSync(self.layout.sensor_names, max_frames=8)
-        elif self.bev_enabled:
-            active_specs = self.layout.all_specs
-        else:
-            active_specs = self.layout.control_specs
-            if getattr(self.settings, "enable_lidar_fusion", False):
-                active_specs = active_specs + (self.layout.lidar,)
 
         self.actors = spawn_layout(
             world=world,
@@ -77,15 +67,49 @@ class SensorManager:
         if self.recording_enabled:
             manifest = self.layout.to_manifest(vehicle.type_id)
             self.writer.write_manifest(manifest)
-            print(f"[OK] Veri kaydı sensörleri aktif: {len(active_specs)} sensör")
-        elif self.bev_enabled:
-            print(f"[OK] BEV sensörleri aktif: {len(active_specs)} sensör")
+            print(
+                "[OK] Tam sensör + BEV doğrulama + kayıt aktif: "
+                f"{len(active_specs)} sensör"
+            )
         else:
-            sensor_names = []
-            for spec in active_specs:
-                sensor_names.append(spec.name)
-            names = ", ".join(sensor_names)
-            print(f"[OK] Yalnızca kontrol sensörleri aktif: {names}")
+            print(
+                "[OK] Tam sensör + BEV doğrulama aktif: "
+                f"{len(active_specs)} sensör"
+            )
+
+    def enrich_vehicle_state(self, state, frame_id, max_age_frames=2):
+        """IMU ve GNSS ölçümlerini kontrol durumuna güvenli biçimde ekler."""
+        enriched = dict(state)
+        snapshot = self.get_bev_snapshot(frame_id, max_age_frames)
+        if self.layout is None:
+            return enriched
+
+        imu_entry = snapshot.get(self.layout.imu.name)
+        gnss_entry = snapshot.get(self.layout.gnss.name)
+        enriched["imu"] = None if imu_entry is None else imu_entry["data"]
+        enriched["gnss"] = None if gnss_entry is None else gnss_entry["data"]
+        enriched["imu_frame_id"] = (
+            None if imu_entry is None else int(imu_entry["frame_id"])
+        )
+        enriched["gnss_frame_id"] = (
+            None if gnss_entry is None else int(gnss_entry["frame_id"])
+        )
+
+        if imu_entry is not None:
+            imu = imu_entry["data"]
+            accelerometer = imu.get("accelerometer", {})
+            gyroscope = imu.get("gyroscope", {})
+            try:
+                enriched["imu_lateral_acceleration_mps2"] = float(
+                    accelerometer.get("y", 0.0)
+                )
+                enriched["imu_yaw_rate_radps"] = float(
+                    gyroscope.get("z", 0.0)
+                )
+            except (TypeError, ValueError):
+                enriched["imu_lateral_acceleration_mps2"] = None
+                enriched["imu_yaw_rate_radps"] = None
+        return enriched
 
     def get_rgb(self, frame_id):
         started_at = time.perf_counter()

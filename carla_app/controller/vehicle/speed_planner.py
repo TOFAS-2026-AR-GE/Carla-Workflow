@@ -22,6 +22,13 @@ class CurvatureSpeedPlanner:
         self.curve_entry_margin_m = 8.0
         self.maximum_speed_increase_mps2 = 1.2
         self.maximum_speed_decrease_mps2 = 2.2
+        self.imu_filter_ratio = 0.20
+        self.filtered_imu_lateral_acceleration_mps2 = None
+        self.imu_stability_ticks = 0
+        self.imu_stability_confirmation_ticks = max(
+            2,
+            int(round(0.15 / self.dt)),
+        )
         self.recovery_confirmation_ticks = max(2, int(round(0.15 / self.dt)))
         self.recovery_release_confirmation_ticks = max(
             2,
@@ -47,6 +54,9 @@ class CurvatureSpeedPlanner:
             0.0,
             road_speed_mps,
         )
+        imu_stability_speed = self.calculate_imu_stability_speed(state)
+        if imu_stability_speed is not None:
+            desired_speed = min(desired_speed, imu_stability_speed)
 
         requested_recovery_speed = self.calculate_lane_recovery_speed(
             state,
@@ -106,6 +116,11 @@ class CurvatureSpeedPlanner:
             speed_reason = "curve"
         if recovery_speed is not None and recovery_speed <= desired_speed:
             speed_reason = "lane_recovery"
+        if (
+            imu_stability_speed is not None
+            and imu_stability_speed <= desired_speed + 1e-9
+        ):
+            speed_reason = "imu_stability"
         curve_distance = curve_profile["distance_m"]
         predicted_curve_entry_speed = math.sqrt(
             max(
@@ -144,6 +159,11 @@ class CurvatureSpeedPlanner:
             "recovery_speed_mps": recovery_speed,
             "recovery_evidence_ticks": self.recovery_evidence_ticks,
             "recovery_release_ticks": self.recovery_release_ticks,
+            "imu_lateral_acceleration_mps2": (
+                self.filtered_imu_lateral_acceleration_mps2
+            ),
+            "imu_stability_speed_mps": imu_stability_speed,
+            "imu_stability_ticks": self.imu_stability_ticks,
             "speed_reason": speed_reason,
             "predicted_yaw_rate_radps": float(predicted_yaw_rate),
             "predicted_lateral_acceleration_mps2": float(
@@ -153,6 +173,70 @@ class CurvatureSpeedPlanner:
                 planned_longitudinal_acceleration
             ),
         }
+
+    def calculate_imu_stability_speed(self, state):
+        """IMU yanal ivmesi yüksek kalırsa mevcut hızı yumuşakça sınırlar."""
+        measurements = []
+        try:
+            lateral_acceleration = abs(
+                float(state.get("imu_lateral_acceleration_mps2"))
+            )
+            if math.isfinite(lateral_acceleration):
+                measurements.append(lateral_acceleration)
+        except (TypeError, ValueError):
+            pass
+
+        try:
+            yaw_rate = abs(float(state.get("imu_yaw_rate_radps")))
+            speed_mps = max(0.0, float(state.get("speed_mps", 0.0)))
+            yaw_lateral_acceleration = speed_mps * yaw_rate
+            if math.isfinite(yaw_lateral_acceleration):
+                measurements.append(yaw_lateral_acceleration)
+        except (TypeError, ValueError):
+            pass
+
+        if not measurements:
+            self.imu_stability_ticks = max(0, self.imu_stability_ticks - 1)
+            return None
+
+        measured = min(30.0, max(measurements))
+        if self.filtered_imu_lateral_acceleration_mps2 is None:
+            self.filtered_imu_lateral_acceleration_mps2 = measured
+        else:
+            self.filtered_imu_lateral_acceleration_mps2 += (
+                self.imu_filter_ratio
+                * (
+                    measured
+                    - self.filtered_imu_lateral_acceleration_mps2
+                )
+            )
+
+        activation_threshold = (
+            self.maximum_lateral_acceleration_mps2 * 1.15
+        )
+        if (
+            self.filtered_imu_lateral_acceleration_mps2
+            > activation_threshold
+        ):
+            self.imu_stability_ticks += 1
+        else:
+            self.imu_stability_ticks = max(0, self.imu_stability_ticks - 1)
+
+        if (
+            self.imu_stability_ticks
+            < self.imu_stability_confirmation_ticks
+        ):
+            return None
+
+        speed_mps = max(0.0, float(state.get("speed_mps", 0.0)))
+        ratio = math.sqrt(
+            self.maximum_lateral_acceleration_mps2
+            / max(
+                self.maximum_lateral_acceleration_mps2,
+                self.filtered_imu_lateral_acceleration_mps2,
+            )
+        )
+        return max(3.0, speed_mps * ratio)
 
     def calculate_curve_profile(self, path, speed_mps, road_speed_mps):
         """Rota boyunca viraj hızlarını geriye doğru fren zarfına dönüştürür."""

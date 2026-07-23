@@ -16,8 +16,7 @@ Kodda sınıflar ilişkili durumu, fonksiyonlar ise sınırlı ve açık işleri
 Her CARLA karesinde aşağıdaki sıra izlenir:
 
 1. `application.py` dünya karesini ilerletir ve araç durumunu okur.
-2. `sensors/manager.py` seçilen moda göre gerekli sensörlerin en güncel
-   verisini verir.
+2. `sensors/manager.py` her modda 15 sensörün en güncel verisini verir.
 3. `perception/system.py` YOLO nesnelerini işler; UFLD açıksa yalnız ön
    kamerada şeritleri görselleştirme/doğrulama amacıyla çıkarır.
 4. `perception/road_context.py` ham kutuları standart biçime çevirir, ardışık
@@ -30,9 +29,10 @@ Her CARLA karesinde aşağıdaki sıra izlenir:
    fren değerlerini hesaplar.
 8. Bağımsız güvenlik denetleyicisi kritik riski ve kontrol komutu sınırlarını
    son kez denetler; `application.py` komutu ego aracına uygular.
-9. BEV modu açıksa `bev/` sensör verilerini ego koordinatına taşır ve ana lead
-   kaybolduğunda yalnız taze, çok-sensörlü ve occupancy destekli bir track ile
-   güvenli lead recovery uygular. Mevcut ana lead'i hiçbir zaman silmez.
+9. `bev/` her modda sensör verilerini ego koordinatına taşır; GNSS/IMU
+   canlılığını doğrular ve ana lead kaybolduğunda yalnız taze, çok-sensörlü,
+   occupancy destekli bir track ile güvenli lead recovery uygular. Mevcut ana
+   lead'i hiçbir zaman silmez.
 10. Navigasyon paneli CARLA'nın açık olan haritasını otomatik çizer; onaylanan
     hedefe en kısa sürüş rotasını üretir ve varışta aracı durdurur.
 
@@ -277,9 +277,9 @@ Bu ekran ROS veya RViz kullanmaz.
 
 | Mod | Açılan sensör | Davranış |
 |---|---:|---|
-| `control` | 3 | `camera_front_wide`, `radar_front_long` ve mesafe desteği için `lidar_roof` açılır. Varsayılan mod budur. |
-| `bev` | 15 | Bütün sensörler açılır, yedi kamera tek YOLO modeliyle toplu işlenir ve OpenCV penceresi kamera + BEV olarak ikiye ayrılır. Diske kayıt yapılmaz. |
-| `record` | 15 | Bütün sensörlerin aynı karedeki paketi beklenir ve `data/runs/` altına kaydedilir. BEV açılmaz. |
+| `control` | 15 | Tam çevresel sensör paketi ve BEV doğrulaması çalışır. Diske kayıt yapılmaz; varsayılan mod budur. |
+| `bev` | 15 | `control` ile aynı tam algılama ve doğrulama omurgasını kullanır. Açıkça BEV odaklı çalıştırma seçeneğidir. |
+| `record` | 15 | Aynı tam algılama ve BEV doğrulamasına ek olarak senkron sensör paketlerini `data/runs/` altına kaydeder. |
 
 Toplam 15 gerçek CARLA sensörünün dağılımı:
 
@@ -295,24 +295,25 @@ CARLA'da gerçek ultrasonik sensör olmadığı için radar ile ultrasonik takli
 yapılmaz. Önceden bu amaçla kullanılan 12 kısa menzil radar bu branch'ten
 tamamen kaldırılmıştır.
 
-## İsteğe bağlı BEV modülü
+## Her modda BEV doğrulaması
 
-BEV bu sürümde projeye entegredir fakat varsayılan olarak kapalıdır. Normal
-çalıştırma betikleri `control` modunu seçer. Manuel `python main.py`
-çalıştırmasında `.env` içindeki değer şu şekilde kalmalıdır:
+BEV ve tam sensör doğrulaması bu sürümde `control`, `bev` ve `record`
+modlarının tamamında aktiftir. Mod seçimi artık güvenlik/algılama sensörlerini
+azaltmaz; yalnız çalıştırma niyetini ve kayıt davranışını belirtir. Normal
+çalıştırma betikleri diske kayıt yapmayan `control` modunu seçer:
 
 ```dotenv
 SENSOR_MODE=control
 ```
 
 Daha sonra betiklerde `-SensorMode bev` (Windows) veya `--bev` (Linux)
-kullanılabilir. Manuel çalıştırmada şu değer seçilir:
+kullanılabilir. Manuel çalıştırmadaki eşdeğer değer:
 
 ```dotenv
 SENSOR_MODE=bev
 ```
 
-BEV açıkken OpenCV penceresinin sol yarısında ön kamera ve bbox'lar, sağ
+Her modda OpenCV penceresinin sol yarısında ön kamera ve bbox'lar, sağ
 yarısında ise ego merkezli kuş bakışı görünüm bulunur. Sağ üstteki
 `SURUS / DEBUG` switch'ine tıklanarak iki ekran arasında geçilir. Aynı geçiş
 klavyedeki `B` tuşuyla da yapılabilir.
@@ -530,6 +531,7 @@ ENABLE_LIDAR_FUSION=true
 ENABLE_DATA_RECORDING=false
 SENSOR_MODE=control
 BEV_UPDATE_EVERY_N_FRAMES=2
+CAMERA_INFERENCE_BATCH_SIZE=4
 
 STATUS_PERIOD_SECONDS=2.0
 MAX_RUNTIME_SECONDS=0
@@ -550,8 +552,12 @@ MAXIMUM_SPEED_KMH=70
   piksel noktalarını ve güven değerlerini üretir. İlk aşamada sonuç yalnız
   OpenCV katmanı ve doğrulama içindir; Pure Pursuit/MPC rotasını değiştirmez.
 - `ENABLE_LIDAR_FUSION=true`: zaman uyumlu LiDAR noktalarıyla kamera mesafesini doğrular.
-- `SENSOR_MODE=control`: kontrol için kamera, radar ve LiDAR sensörlerini açar.
-- `BEV_UPDATE_EVERY_N_FRAMES=2`: BEV açıkken 20 Hz simülasyonda en fazla
+- `SENSOR_MODE=control`: kayıt yapmadan 7 kamera, 5 radar, LiDAR, GNSS ve
+  IMU'nun tamamını; BEV doğrulamasıyla birlikte açar.
+- `CAMERA_INFERENCE_BATCH_SIZE=4`: yalnız `PERFORMANCE_PROFILE=manual` iken
+  geçerlidir. `auto`, düşük VRAM'de kameraları tek tek; 32 GB sınıfı GPU'da
+  yedi kamerayı birlikte işler.
+- `BEV_UPDATE_EVERY_N_FRAMES=2`: 20 Hz simülasyonda en fazla
   10 Hz kuş bakışı üretir; kontrol döngüsünün frekansını değiştirmez.
 - `ENABLE_DATA_RECORDING=false`: eski kurulumlarla uyumluluk için tutulur.
   `true` yapılırsa `SENSOR_MODE` değerinden bağımsız olarak kayıt modu seçilir.

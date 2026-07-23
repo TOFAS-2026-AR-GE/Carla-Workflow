@@ -22,6 +22,7 @@ class PerceptionSystem:
             settings.vehicle_image_size,
             settings.vehicle_device,
             use_half=settings.enable_fp16_inference,
+            camera_batch_size=settings.camera_inference_batch_size,
         )
 
         self.sign_detector = None

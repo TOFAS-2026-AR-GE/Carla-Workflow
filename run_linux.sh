@@ -11,9 +11,9 @@ usage() {
     cat <<'EOF'
 Usage: bash run_linux.sh [options]
 
-  --control       Low-latency control mode (default)
-  --bev           Enable the full 15-sensor BEV mode
-  --record        Enable synchronized sensor recording
+  --control       Full-sensor BEV-validated control (default)
+  --bev           Full-sensor BEV-focused control
+  --record        Full-sensor control with synchronized recording
   --setup-only    Install and verify dependencies without starting the app
   --skip-install  Skip dependency installation and only verify/run
   --allow-cpu     Continue when CUDA is unavailable

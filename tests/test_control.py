@@ -259,6 +259,29 @@ class SpeedPlannerTests(unittest.TestCase):
         maximum_change = planner.maximum_speed_increase_mps2 * planner.dt
         self.assertLessEqual(target - previous, maximum_change + 1e-9)
 
+    def test_sustained_high_imu_lateral_acceleration_reduces_speed(self):
+        planner = CurvatureSpeedPlanner(dt=0.05)
+        state = straight_state(speed_mps=15.0)
+        state["imu_lateral_acceleration_mps2"] = 3.2
+        state["imu_yaw_rate_radps"] = 3.2 / 15.0
+
+        for _ in range(planner.imu_stability_confirmation_ticks):
+            _target, info = planner.run_step(state)
+
+        self.assertEqual(info["speed_reason"], "imu_stability")
+        self.assertLess(info["imu_stability_speed_mps"], 15.0)
+
+    def test_single_imu_spike_does_not_change_speed_reason(self):
+        planner = CurvatureSpeedPlanner(dt=0.05)
+        state = straight_state(speed_mps=15.0)
+        state["imu_lateral_acceleration_mps2"] = 4.0
+        state["imu_yaw_rate_radps"] = 0.0
+
+        _target, info = planner.run_step(state)
+
+        self.assertIsNone(info["imu_stability_speed_mps"])
+        self.assertEqual(info["speed_reason"], "cruise")
+
     def test_curve_radius_and_entry_speed_matrix_respects_lateral_limit(self):
         for radius_m in (5.0, 8.0, 12.0, 20.0, 40.0, 100.0):
             for speed_mps in (2.0, 5.0, 10.0, 15.0, 70.0 / 3.6):

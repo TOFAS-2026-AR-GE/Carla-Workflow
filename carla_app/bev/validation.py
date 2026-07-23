@@ -86,6 +86,13 @@ class BevValidationLayer:
             "safe_to_use": bool(safe_to_use),
             "scene_age_frames": scene_age,
             "health": health,
+            "localization": scene.get(
+                "localization",
+                {
+                    "status": "UNAVAILABLE",
+                    "available_sources": 0,
+                },
+            ),
             "lead": lead,
             "emergency": emergency,
             "unexpected_forward_obstacle": unexpected,
@@ -474,6 +481,10 @@ class BevValidationLayer:
                 "available_modalities": 0,
                 "stale_sensors": [],
                 "missing_sensors": [],
+            },
+            "localization": {
+                "status": "UNAVAILABLE",
+                "available_sources": 0,
             },
             "lead": {"status": lead_status, "reason": reason},
             "emergency": {"status": "UNAVAILABLE", "reason": reason},

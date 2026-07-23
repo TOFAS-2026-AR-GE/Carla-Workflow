@@ -25,6 +25,22 @@ class SensorModeTests(unittest.TestCase):
         self.assertTrue(settings.enable_bev)
         self.assertFalse(settings.enable_data_recording)
 
+    def test_bev_validation_is_enabled_in_every_sensor_mode(self):
+        for mode in ("control", "bev", "record"):
+            with self.subTest(mode=mode):
+                environment = {
+                    "SENSOR_MODE": mode,
+                    "ENABLE_DATA_RECORDING": "false",
+                }
+                with patch.dict(os.environ, environment, clear=False):
+                    settings = Settings()
+
+                self.assertTrue(settings.enable_bev)
+                self.assertEqual(
+                    settings.enable_data_recording,
+                    mode == "record",
+                )
+
     def test_old_recording_flag_still_selects_record_mode(self):
         environment = {
             "SENSOR_MODE": "control",
@@ -35,7 +51,7 @@ class SensorModeTests(unittest.TestCase):
 
         self.assertEqual(settings.sensor_mode, "record")
         self.assertTrue(settings.enable_data_recording)
-        self.assertFalse(settings.enable_bev)
+        self.assertTrue(settings.enable_bev)
 
     def test_unknown_sensor_mode_is_rejected(self):
         environment = {

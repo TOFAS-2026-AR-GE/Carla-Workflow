@@ -153,7 +153,7 @@ class CarlaApplication:
         )
         self.performance = PerformanceMonitor(self.dt * 1000.0)
 
-        print("[INFO] Haritada sağ tık: hedef seç | ONAYLA: rotayı başlat")
+        print("[INFO] Haritada sol tık: hedef seç | ONAYLA: rotayı başlat")
         print("[INFO] Q, ESC veya pencerenin X düğmesi ile çıkış.")
         print(
             "[INFO] Kontrol: Pure Pursuit warm-start + MPC direksiyon + "

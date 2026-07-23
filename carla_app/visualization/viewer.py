@@ -3,7 +3,7 @@
 import cv2
 import numpy as np
 
-from carla_app.visualization.map_renderer import MapRenderer
+from carla_app.visualization.navigation_panel import NavigationPanel
 
 
 class PerceptionViewer:
@@ -22,7 +22,6 @@ class PerceptionViewer:
         self.closed = False
         self.bev_mode = "driving"
         self.bev_button_rect = None
-        self.navigation = navigation
         self.dashboard_width = max(1100, int(dashboard_width))
         self.dashboard_height = max(650, int(dashboard_height))
         self.map_width = min(600, max(430, self.dashboard_width // 3))
@@ -30,18 +29,14 @@ class PerceptionViewer:
         self.map_offset_x = self.camera_width + 4
         self.last_vehicle_location = None
         self.last_navigation = {}
-        self.navigation_render_every_n_frames = max(
-            1,
-            int(navigation_render_every_n_frames),
-        )
-        self.cached_map_panel = None
-        self.cached_navigation_key = None
-        self.map_renderer = None
-        if carla_map is not None:
-            self.map_renderer = MapRenderer(
+        self.navigation_panel = None
+        if carla_map is not None and navigation is not None:
+            self.navigation_panel = NavigationPanel(
                 carla_map,
+                navigation,
                 width=self.map_width,
                 height=self.dashboard_height,
+                render_every_n_frames=navigation_render_every_n_frames,
             )
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(
@@ -154,23 +149,12 @@ class PerceptionViewer:
         self.last_vehicle_location = vehicle_state.get("location")
         self.last_navigation = navigation_state or {}
         map_panel = None
-        if self.map_renderer is not None:
-            navigation_key = self._navigation_key(self.last_navigation)
-            frame_number = int(current_frame_id or 0)
-            render_due = (
-                self.cached_map_panel is None
-                or navigation_key != self.cached_navigation_key
-                or frame_number % self.navigation_render_every_n_frames == 0
+        if self.navigation_panel is not None:
+            map_panel = self.navigation_panel.render(
+                self.last_navigation,
+                vehicle_state,
+                current_frame_id,
             )
-            if render_due:
-                self.cached_map_panel = self.map_renderer.render(
-                    self.last_navigation,
-                    self.last_vehicle_location,
-                    vehicle_state.get("yaw", 0.0),
-                    vehicle_state.get("speed_kmh", 0.0),
-                )
-                self.cached_navigation_key = navigation_key
-            map_panel = self.cached_map_panel
 
         display_frame = self.combine_panels(frame, bev_image, map_panel)
         cv2.imshow(self.window_name, display_frame)
@@ -297,17 +281,6 @@ class PerceptionViewer:
 
     def _mouse_callback(self, event, x, y, _flags, _parameter):
         """Harita hedefini, onayı ve BEV düğmesini aynı pencerede işler."""
-        if (
-            event == getattr(cv2, "EVENT_RBUTTONUP", 5)
-            and self.navigation is not None
-            and self.map_renderer is not None
-        ):
-            map_x = x - self.map_offset_x
-            world_point = self.map_renderer.screen_to_world(map_x, y)
-            if world_point is not None:
-                self.navigation.select_destination(*world_point)
-            return
-
         if event != cv2.EVENT_LBUTTONUP:
             return
 
@@ -318,16 +291,15 @@ class PerceptionViewer:
                 self.bev_mode = "driving" if x < middle else "debug"
                 return
 
-        if self.navigation is None or self.map_renderer is None:
+        navigation_panel = getattr(self, "navigation_panel", None)
+        if navigation_panel is None:
             return
         map_x = x - self.map_offset_x
-        if self.map_renderer.is_confirm_button(map_x, y):
-            if self.last_vehicle_location is not None:
-                self.navigation.confirm_destination(
-                    self.last_vehicle_location
-                )
-        elif self.map_renderer.is_cancel_button(map_x, y):
-            self.navigation.cancel_pending()
+        navigation_panel.handle_left_click(
+            map_x,
+            y,
+            getattr(self, "last_vehicle_location", None),
+        )
 
     def toggle_bev_mode(self):
         """Klavye için sürüş ve debug ekranı arasında geçiş yapar."""
@@ -355,21 +327,6 @@ class PerceptionViewer:
             self.toggle_bev_mode()
             return True
         return key not in (27, ord("q"), ord("Q"))
-
-    @staticmethod
-    def _navigation_key(navigation):
-        pending = navigation.get("pending_destination")
-        pending_key = None
-        if pending is not None:
-            pending_key = (
-                round(float(pending.x), 2),
-                round(float(pending.y), 2),
-            )
-        return (
-            navigation.get("status"),
-            pending_key,
-            id(navigation.get("route")),
-        )
 
     def _draw(self, frame, detection, color, prefix):
         box = detection["bbox"]

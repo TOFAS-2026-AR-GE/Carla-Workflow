@@ -9,7 +9,13 @@ if "carla" not in sys.modules:
 elif not hasattr(sys.modules["carla"], "LaneType"):
     sys.modules["carla"].LaneType = types.SimpleNamespace(Driving="Driving")
 
+if not hasattr(sys.modules["carla"], "Location"):
+    sys.modules["carla"].Location = lambda x=0.0, y=0.0, z=0.0: (
+        types.SimpleNamespace(x=float(x), y=float(y), z=float(z))
+    )
+
 from carla_app.core.route_manager import PersistentRouteManager
+from carla_app.navigation.system import NavigationSystem
 
 
 def location(x, y=0.0):
@@ -98,6 +104,45 @@ class PersistentRouteManagerTests(unittest.TestCase):
 
         manager.update(location(3.0, 9.0))
         self.assertEqual(len(carla_map.calls), 2)
+
+
+class NavigationSystemTests(unittest.TestCase):
+    def test_confirmed_destination_enables_motion_toward_selected_point(self):
+        class FakeRouteManager:
+            def __init__(self):
+                self.route = None
+
+            def set_planned_route(self, waypoints):
+                self.route = list(waypoints)
+
+            @staticmethod
+            def remaining_distance(_vehicle_location):
+                return 40.0
+
+        class FakePlanner:
+            @staticmethod
+            def trace_route(start, destination):
+                return [
+                    FakeWaypoint(start.x, start.y),
+                    FakeWaypoint(destination.x, destination.y),
+                ]
+
+        route_manager = FakeRouteManager()
+        navigation = NavigationSystem(FakeMap(), route_manager)
+        navigation.planner = FakePlanner()
+        vehicle_location = location(1.0, 2.0)
+
+        self.assertTrue(navigation.select_destination(25.0, -4.0))
+        self.assertEqual(navigation.status, "PENDING")
+        self.assertIsNone(route_manager.route)
+
+        self.assertTrue(navigation.confirm_destination(vehicle_location))
+        state = navigation.update(vehicle_location, speed_mps=0.0)
+
+        self.assertEqual(state["status"], "DRIVING")
+        self.assertTrue(state["drive_enabled"])
+        self.assertGreater(state["target_speed_mps"], 0.0)
+        self.assertIsNotNone(route_manager.route)
 
 
 if __name__ == "__main__":

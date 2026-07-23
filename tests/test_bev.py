@@ -84,6 +84,7 @@ from carla_app.bev.occupancy import OccupancyGrid
 from carla_app.bev.projector import BevProjector
 from carla_app.bev.renderer import BevRenderer
 from carla_app.bev.tracking import BevTracker
+from carla_app.visualization.navigation_panel import NavigationPanel
 from carla_app.visualization.viewer import PerceptionViewer
 
 
@@ -1008,6 +1009,138 @@ class BevRendererTests(unittest.TestCase):
             None,
         )
         self.assertEqual(viewer.bev_mode, "driving")
+
+    def test_left_click_selects_target_then_confirm_starts_route(self):
+        class FakeNavigation:
+            def __init__(self):
+                self.selected = []
+                self.confirmed_from = []
+
+            def select_destination(self, world_x, world_y):
+                self.selected.append((world_x, world_y))
+                return True
+
+            def confirm_destination(self, vehicle_location):
+                self.confirmed_from.append(vehicle_location)
+                return True
+
+            def cancel_pending(self):
+                raise AssertionError("İptal çağrılmamalı")
+
+        class FakeMapRenderer:
+            @staticmethod
+            def is_confirm_button(x, y):
+                return x == 200 and y == 700
+
+            @staticmethod
+            def is_cancel_button(x, y):
+                return x == 50 and y == 700
+
+            @staticmethod
+            def screen_to_world(x, y):
+                if x == 100 and y == 300:
+                    return 12.5, -8.0
+                return None
+
+        navigation = FakeNavigation()
+        panel = NavigationPanel(
+            None,
+            navigation,
+            width=500,
+            height=780,
+            renderer=FakeMapRenderer(),
+        )
+        vehicle_location = SimpleNamespace(x=1.0, y=2.0, z=0.0)
+        viewer = PerceptionViewer.__new__(PerceptionViewer)
+        viewer.bev_button_rect = None
+        viewer.navigation_panel = panel
+        viewer.map_offset_x = 500
+        viewer.last_vehicle_location = vehicle_location
+
+        viewer._mouse_callback(
+            cv2.EVENT_LBUTTONUP,
+            600,
+            300,
+            0,
+            None,
+        )
+        self.assertEqual(navigation.selected, [(12.5, -8.0)])
+        self.assertEqual(navigation.confirmed_from, [])
+
+        viewer._mouse_callback(
+            cv2.EVENT_LBUTTONUP,
+            700,
+            700,
+            0,
+            None,
+        )
+        self.assertEqual(navigation.confirmed_from, [vehicle_location])
+
+    def test_right_click_does_not_select_navigation_target(self):
+        class FakePanel:
+            def __init__(self):
+                self.clicks = []
+
+            def handle_left_click(self, x, y, vehicle_location):
+                self.clicks.append((x, y, vehicle_location))
+
+        panel = FakePanel()
+        viewer = PerceptionViewer.__new__(PerceptionViewer)
+        viewer.bev_button_rect = None
+        viewer.navigation_panel = panel
+        viewer.map_offset_x = 500
+        viewer.last_vehicle_location = SimpleNamespace(x=1.0, y=2.0)
+
+        viewer._mouse_callback(
+            getattr(cv2, "EVENT_RBUTTONUP", 5),
+            600,
+            300,
+            0,
+            None,
+        )
+
+        self.assertEqual(panel.clicks, [])
+
+    def test_navigation_cancel_button_does_not_select_map_point(self):
+        class FakeNavigation:
+            def __init__(self):
+                self.cancel_count = 0
+                self.select_count = 0
+
+            def cancel_pending(self):
+                self.cancel_count += 1
+
+            def select_destination(self, *_point):
+                self.select_count += 1
+                return True
+
+        class FakeMapRenderer:
+            @staticmethod
+            def is_confirm_button(_x, _y):
+                return False
+
+            @staticmethod
+            def is_cancel_button(x, y):
+                return x == 50 and y == 700
+
+            @staticmethod
+            def screen_to_world(_x, _y):
+                return 12.5, -8.0
+
+        navigation = FakeNavigation()
+        panel = NavigationPanel(
+            None,
+            navigation,
+            width=500,
+            height=780,
+            renderer=FakeMapRenderer(),
+        )
+
+        action = panel.handle_left_click(50, 700, None)
+
+        self.assertEqual(action, "cancelled")
+        self.assertEqual(navigation.cancel_count, 1)
+        self.assertEqual(navigation.select_count, 0)
 
     def test_renderer_keeps_debug_and_driving_views(self):
         renderer = BevRenderer(width=320, height=240)

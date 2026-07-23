@@ -28,7 +28,7 @@ class NavigationSystem:
         self.start_location = None
         self.full_route = ()
         self.status = "WAITING"
-        self.message = "Haritada sağ tık ile hedef seçin"
+        self.message = "Haritada sol tık ile hedef seçin"
         self.remaining_distance_m = None
         self.last_error = None
 
@@ -89,7 +89,7 @@ class NavigationSystem:
         self.pending_destination = None
         if self.status in {"PENDING", "ERROR"}:
             self.status = "WAITING"
-            self.message = "Haritada sağ tık ile hedef seçin"
+            self.message = "Haritada sol tık ile hedef seçin"
             self.last_error = None
 
     def update(self, vehicle_location, speed_mps):

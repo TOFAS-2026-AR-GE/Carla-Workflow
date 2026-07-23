@@ -57,6 +57,7 @@ Her CARLA karesinde aşağıdaki sıra izlenir:
 | `carla_app/controller/vehicle/` | Ön araç seçimi, direksiyon, hız, gaz-fren ve acil frendir. |
 | `carla_app/visualization/viewer.py` | Kamera, UFLD, BEV ve navigasyonu tek OpenCV penceresinde birleştirir. |
 | `carla_app/visualization/map_renderer.py` | CARLA yol ağını, rotayı, hedefi ve canlı ego konumunu çizer. |
+| `carla_app/visualization/navigation_panel.py` | Navigasyon çizim önbelleğini ve sol tık seçim/onay/iptal girişlerini yönetir. |
 | `carla_app/visualization/sensor_layout.py` | Sensör yerleşimini tarayıcı verisine dönüştürür. |
 | `carla_app/visualization/sensor_layout.html` | Araba şeklindeki sensör ekranıdır. |
 | `scripts/` | Kurulum kontrolü, model kopyalama ve sensör ekranı komutlarıdır. |
@@ -148,7 +149,7 @@ Uygulama açıldığında ego araç bulunduğu yerde frenle bekler. Açık olan 
 haritası (`Town03`, `Town05` gibi) ayrıca seçilmez; panel o anki
 `world.get_map()` verisinden otomatik üretilir.
 
-1. Navigasyon panelindeki bir yolun yakınına farenin **sağ tuşuyla** tıklayın.
+1. Navigasyon panelindeki bir yolun yakınına farenin **sol tuşuyla** tıklayın.
 2. Sarı `SECILI` işaretinin doğru sürüş şeridine oturduğunu kontrol edin.
 3. `ROTAYI ONAYLA` düğmesine sol tıklayın.
 4. Araç kırmızı rotayı izler; sarı ego işareti canlı konumla birlikte hareket
@@ -157,7 +158,7 @@ haritası (`Town03`, `Town05` gibi) ayrıca seçilmez; panel o anki
    durur.
 
 Onaylamadan önce `IPTAL` ile seçim kaldırılabilir. Sürüş sırasında başka bir
-nokta sağ tıkla seçilip onaylanırsa rota aracın güncel konumundan yeniden
+nokta sol tıkla seçilip onaylanırsa rota aracın güncel konumundan yeniden
 hesaplanır.
 
 Pencere boyutu ve navigasyon hızı `.env` üzerinden ayarlanabilir:

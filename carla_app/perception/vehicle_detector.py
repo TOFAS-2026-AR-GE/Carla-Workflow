@@ -5,8 +5,8 @@ from ultralytics import YOLO
 
 from carla_app.perception.device import (
     is_cuda_device,
-    move_model_to_cpu,
     recover_cuda_memory,
+    release_ultralytics_cuda,
     resolve_device,
 )
 
@@ -63,7 +63,10 @@ class VehicleDetector:
         self.model = YOLO(str(model_path), task="detect")
         self.confidence = float(confidence)
         self.image_size = int(image_size)
-        self.device = resolve_device(device)
+        self.device = resolve_device(
+            device,
+            minimum_free_memory_mb=768.0,
+        )
         self.use_half = bool(use_half and is_cuda_device(self.device))
 
         if not 0.0 < self.confidence <= 1.0:
@@ -248,7 +251,7 @@ class VehicleDetector:
             )
             self.device = "cpu"
             self.use_half = False
-            move_model_to_cpu(self.model)
+            release_ultralytics_cuda(self.model)
             return self._predict_on_device(bgr_image, "cpu", class_ids)
 
     def _predict_on_device(self, bgr_image, device, class_ids=None):
@@ -264,9 +267,11 @@ class VehicleDetector:
             classes=class_ids,
             verbose=False,
             max_det=100,
-            half=bool(
-                getattr(self, "use_half", False)
+            quantize=(
+                16
+                if getattr(self, "use_half", False)
                 and is_cuda_device(device)
+                else None
             ),
         )
 

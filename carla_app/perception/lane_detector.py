@@ -10,7 +10,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from carla_app.perception.device import is_cuda_device, resolve_device
+from carla_app.perception.device import (
+    is_cuda_device,
+    recover_cuda_memory,
+    resolve_device,
+)
 
 MODEL_WIDTH = 800
 MODEL_HEIGHT = 288
@@ -135,7 +139,10 @@ class LaneDetector:
 
         from carla_app.perception.ufld_model import build_ufld_resnet18
 
-        requested_device = resolve_device(device)
+        requested_device = resolve_device(
+            device,
+            minimum_free_memory_mb=1100.0,
+        )
         if str(requested_device).isdigit():
             requested_device = f"cuda:{requested_device}"
         self.device = str(requested_device)
@@ -165,25 +172,18 @@ class LaneDetector:
             names = ", ".join(unexpected[:5])
             raise RuntimeError(f"UFLD checkpoint uyumsuz katmanlari: {names}")
 
-        self.model = model.to(self.device).eval()
+        self.model = model.eval()
         self.host_buffer = None
         self.host_buffer_shape = None
         if self.cuda_enabled:
-            self.model = self.model.to(memory_format=torch.channels_last)
-            if self.use_half:
-                self.model = self.model.half()
-            dtype = torch.float16 if self.use_half else torch.float32
-            self.mean = torch.tensor(
-                IMAGENET_MEAN,
-                device=self.device,
-                dtype=dtype,
-            ).view(1, 3, 1, 1)
-            self.std = torch.tensor(
-                IMAGENET_STD,
-                device=self.device,
-                dtype=dtype,
-            ).view(1, 3, 1, 1)
-            self._warmup_cuda(dtype)
+            try:
+                self._activate_cuda()
+            except Exception as error:
+                if not self._is_cuda_memory_error(error):
+                    raise
+                self._fallback_to_cpu(error)
+        else:
+            self.model = self.model.to("cpu").float()
         print(
             f"[OK] UFLD modeli: device={self.device}, "
             f"fp16={self.use_half}"
@@ -208,8 +208,16 @@ class LaneDetector:
     def detect(self, rgb_image):
         started_at = time.perf_counter()
         tensor = self._prepare_tensor(rgb_image)
-        with self.torch.inference_mode():
-            logits = self.model(tensor)
+        try:
+            with self.torch.inference_mode():
+                logits = self.model(tensor)
+        except Exception as error:
+            if not self.cuda_enabled or not self._is_cuda_memory_error(error):
+                raise
+            self._fallback_to_cpu(error)
+            tensor = self._prepare_tensor(rgb_image)
+            with self.torch.inference_mode():
+                logits = self.model(tensor)
         logits = logits.detach().float().cpu().numpy()
         height, width = rgb_image.shape[:2]
         lanes = decode_ufld_logits(
@@ -279,3 +287,54 @@ class LaneDetector:
         with self.torch.inference_mode():
             self.model(tensor)
         self.torch.cuda.synchronize()
+
+    def _activate_cuda(self):
+        """UFLD modelini CUDA'ya taşır ve ilk inference için hazırlar."""
+        self.model = self.model.to(self.device)
+        self.model = self.model.to(memory_format=self.torch.channels_last)
+        if self.use_half:
+            self.model = self.model.half()
+        dtype = (
+            self.torch.float16
+            if self.use_half
+            else self.torch.float32
+        )
+        self.mean = self.torch.tensor(
+            IMAGENET_MEAN,
+            device=self.device,
+            dtype=dtype,
+        ).view(1, 3, 1, 1)
+        self.std = self.torch.tensor(
+            IMAGENET_STD,
+            device=self.device,
+            dtype=dtype,
+        ).view(1, 3, 1, 1)
+        self._warmup_cuda(dtype)
+
+    def _fallback_to_cpu(self, error):
+        """CUDA belleği yetmediğinde uygulamayı kapatmadan UFLD'yi CPU'ya alır."""
+        print(
+            f"[WARN] UFLD CUDA bellegi yetersiz ({error}); "
+            "serit modeli CPU ile devam edecek."
+        )
+        self.device = "cpu"
+        self.cuda_enabled = False
+        self.use_half = False
+        self.host_buffer = None
+        self.host_buffer_shape = None
+        self.mean = None
+        self.std = None
+        self.model = self.model.to("cpu").float().eval()
+        recover_cuda_memory()
+
+    def _is_cuda_memory_error(self, error):
+        message = str(error).lower()
+        out_of_memory_type = getattr(
+            self.torch,
+            "OutOfMemoryError",
+            RuntimeError,
+        )
+        return isinstance(error, out_of_memory_type) or (
+            "out of memory" in message
+            or "cudaerrormemoryallocation" in message
+        )

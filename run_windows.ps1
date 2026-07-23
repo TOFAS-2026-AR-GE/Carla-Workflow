@@ -62,10 +62,12 @@ if ($SetupOnly) {
 }
 
 $env:SENSOR_MODE = $SensorMode
-$env:VEHICLE_DEVICE = "auto"
-$env:SIGN_DEVICE = "auto"
-$env:LANE_DEVICE = "auto"
-$env:ENABLE_FP16_INFERENCE = "true"
+if (-not $env:VEHICLE_DEVICE) { $env:VEHICLE_DEVICE = "auto" }
+if (-not $env:SIGN_DEVICE) { $env:SIGN_DEVICE = "auto" }
+if (-not $env:LANE_DEVICE) { $env:LANE_DEVICE = "auto" }
+if (-not $env:ENABLE_FP16_INFERENCE) {
+    $env:ENABLE_FP16_INFERENCE = "true"
+}
 $env:CAMERA_WAIT_TIMEOUT_MS = "10"
 $env:PERCEPTION_EVERY_N_FRAMES = "1"
 $env:VEHICLE_IMAGE_SIZE = "640"

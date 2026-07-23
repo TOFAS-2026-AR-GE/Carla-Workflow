@@ -7,8 +7,8 @@ from ultralytics import YOLO
 
 from carla_app.perception.device import (
     is_cuda_device,
-    move_model_to_cpu,
     recover_cuda_memory,
+    release_ultralytics_cuda,
     resolve_device,
 )
 
@@ -35,7 +35,10 @@ class TrafficSignDetector:
         self.classifier_confidence = classifier_confidence
         self.detector_image_size = detector_image_size
         self.classifier_image_size = classifier_image_size
-        self.device = resolve_device(device)
+        self.device = resolve_device(
+            device,
+            minimum_free_memory_mb=700.0,
+        )
         self.use_half = bool(use_half and is_cuda_device(self.device))
         print(
             f"[OK] Trafik levhasi modelleri: {self.device}, "
@@ -118,7 +121,9 @@ class TrafficSignDetector:
                 imgsz=self.detector_image_size,
                 device=self.device,
                 verbose=False,
-                half=bool(getattr(self, "use_half", False)),
+                quantize=(
+                    16 if getattr(self, "use_half", False) else None
+                ),
             )
         except (RuntimeError, ValueError) as error:
             if is_cuda_device(self.device):
@@ -131,7 +136,9 @@ class TrafficSignDetector:
                         imgsz=self.detector_image_size,
                         device=self.device,
                         verbose=False,
-                        half=bool(getattr(self, "use_half", False)),
+                        quantize=(
+                            16 if getattr(self, "use_half", False) else None
+                        ),
                     )
                 except (RuntimeError, ValueError) as retry_error:
                     error = retry_error
@@ -143,7 +150,7 @@ class TrafficSignDetector:
                 imgsz=self.detector_image_size,
                 device="cpu",
                 verbose=False,
-                half=False,
+                quantize=None,
             )
 
     def _predict_classifier(self, image):
@@ -154,7 +161,9 @@ class TrafficSignDetector:
                 imgsz=self.classifier_image_size,
                 device=self.device,
                 verbose=False,
-                half=bool(getattr(self, "use_half", False)),
+                quantize=(
+                    16 if getattr(self, "use_half", False) else None
+                ),
             )
         except (RuntimeError, ValueError) as error:
             if is_cuda_device(self.device):
@@ -165,7 +174,9 @@ class TrafficSignDetector:
                         imgsz=self.classifier_image_size,
                         device=self.device,
                         verbose=False,
-                        half=bool(getattr(self, "use_half", False)),
+                        quantize=(
+                            16 if getattr(self, "use_half", False) else None
+                        ),
                     )
                 except (RuntimeError, ValueError) as retry_error:
                     error = retry_error
@@ -175,7 +186,7 @@ class TrafficSignDetector:
                 imgsz=self.classifier_image_size,
                 device="cpu",
                 verbose=False,
-                half=False,
+                quantize=None,
             )
 
     def _switch_to_cpu(self, error):
@@ -189,8 +200,8 @@ class TrafficSignDetector:
         )
         self.device = "cpu"
         self.use_half = False
-        move_model_to_cpu(self.detector)
-        move_model_to_cpu(self.classifier)
+        release_ultralytics_cuda(self.detector)
+        release_ultralytics_cuda(self.classifier)
 
     def _warmup_cuda(self):
         """ONNX/TensorRT sağlayıcılarını canlı kare gelmeden hazırlar."""

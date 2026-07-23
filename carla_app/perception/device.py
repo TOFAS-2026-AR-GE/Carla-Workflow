@@ -1,5 +1,7 @@
 """Algılama modellerinin CPU veya ekran kartı seçimini yapar."""
 
+import gc
+
 
 def is_cuda_device(device):
     """Ultralytics ve PyTorch cihaz yazımlarının CUDA olup olmadığını söyler."""
@@ -34,11 +36,27 @@ def recover_cuda_memory():
     except ImportError:
         return
     if torch.cuda.is_available():
+        gc.collect()
         torch.cuda.empty_cache()
 
 
-def resolve_device(requested_device):
-    """CUDA yoksa güvenli biçimde CPU kullanımına döner."""
+def cuda_free_memory_mb():
+    """CUDA aygıtında diğer süreçler sonrası kalan yaklaşık belleği döndürür."""
+    try:
+        import torch
+    except ImportError:
+        return 0.0
+    if not torch.cuda.is_available():
+        return 0.0
+    try:
+        free_bytes, _total_bytes = torch.cuda.mem_get_info()
+    except (RuntimeError, AttributeError):
+        return 0.0
+    return float(free_bytes) / (1024.0 * 1024.0)
+
+
+def resolve_device(requested_device, minimum_free_memory_mb=0.0):
+    """CUDA yoksa veya yeterli boş VRAM kalmadıysa güvenli biçimde CPU seçer."""
     requested = str(requested_device).strip().lower() or "auto"
 
     if requested == "cpu":
@@ -53,9 +71,6 @@ def resolve_device(requested_device):
 
     cuda_available = bool(torch.cuda.is_available())
 
-    if requested == "auto":
-        return "0" if cuda_available else "cpu"
-
     wants_cuda = requested.isdigit() or requested.startswith("cuda")
     if wants_cuda and not cuda_available:
         print(
@@ -64,7 +79,21 @@ def resolve_device(requested_device):
         )
         return "cpu"
 
-    return str(requested_device).strip()
+    if requested == "auto":
+        requested = "0" if cuda_available else "cpu"
+        wants_cuda = cuda_available
+
+    if wants_cuda and minimum_free_memory_mb > 0.0:
+        free_memory_mb = cuda_free_memory_mb()
+        if 0.0 < free_memory_mb < float(minimum_free_memory_mb):
+            print(
+                f"[WARN] CUDA bos bellek {free_memory_mb:.0f} MB; "
+                f"gereken guvenli pay {float(minimum_free_memory_mb):.0f} MB. "
+                "Model CPU ile acilacak."
+            )
+            return "cpu"
+
+    return requested
 
 
 def move_model_to_cpu(model):
@@ -74,3 +103,13 @@ def move_model_to_cpu(model):
     except (AttributeError, RuntimeError, TypeError):
         # ONNX modelleri çalışacağı aygıtı tahmin çağrısında seçer.
         pass
+
+
+def release_ultralytics_cuda(model):
+    """Ultralytics predictor önbelleğini ve CUDA tensörlerini tamamen bırakır."""
+    try:
+        model.predictor = None
+    except AttributeError:
+        pass
+    move_model_to_cpu(model)
+    recover_cuda_memory()

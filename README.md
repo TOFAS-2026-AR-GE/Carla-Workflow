@@ -196,6 +196,23 @@ takılması oluşmaz. Geçici CUDA bellek baskısında önce bellek önbelleği
 temizlenerek CUDA aynı işlem için bir kez daha denenir; yalnız ikinci hata da
 başarısızsa güvenli CPU yedeğine geçilir.
 
+`auto` yalnız CUDA'nın varlığına değil, CARLA açıldıktan sonra gerçekten kalan
+VRAM miktarına da bakar. Böylece 4 GB sınıfı ekran kartlarında CARLA aynı GPU'yu
+kullanırken model yükleme işlemi uygulamayı kapatmaz. UFLD yükleme veya canlı
+inference sırasında sonradan CUDA bellek hatası oluşursa model otomatik olarak
+FP32 CPU moduna alınır.
+
+Düşük VRAM'li bir sistemde iki modeli de baştan CPU'da açmak için:
+
+```bash
+VEHICLE_DEVICE=cpu LANE_DEVICE=cpu \
+  bash run_linux.sh --skip-install
+```
+
+Komut satırından verilen cihaz seçimleri çalıştırma betiği tarafından artık
+ezilmez. Büyük RTX kartlarda herhangi bir seçenek vermeden `auto` kullanılmaya
+devam edilir.
+
 Durum satırındaki performans alanları:
 
 - `loop`: ana kare işleme süresi,

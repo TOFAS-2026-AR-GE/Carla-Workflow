@@ -4,7 +4,10 @@ from carla_app.core.performance import (
     AdaptivePerceptionScheduler,
     PerformanceMonitor,
 )
-from carla_app.perception.device import is_cuda_device
+from carla_app.perception.device import (
+    is_cuda_device,
+    ultralytics_precision_arguments,
+)
 from carla_app.perception.performance_profile import (
     choose_performance_profile,
 )
@@ -16,6 +19,32 @@ class DeviceSelectionTests(unittest.TestCase):
         self.assertTrue(is_cuda_device("cuda"))
         self.assertTrue(is_cuda_device("cuda:1"))
         self.assertFalse(is_cuda_device("cpu"))
+
+    def test_ultralytics_precision_argument_supports_old_and_new_8x_apis(self):
+        self.assertEqual(
+            ultralytics_precision_arguments(
+                True,
+                "cuda:0",
+                supported_options={"half"},
+            ),
+            {"half": True},
+        )
+        self.assertEqual(
+            ultralytics_precision_arguments(
+                True,
+                "cuda:0",
+                supported_options={"quantize"},
+            ),
+            {"quantize": 16},
+        )
+        self.assertEqual(
+            ultralytics_precision_arguments(
+                True,
+                "cpu",
+                supported_options={"quantize"},
+            ),
+            {"quantize": None},
+        )
 
     def test_32_gb_gpu_uses_every_frame_cuda_ultra_profile(self):
         profile = choose_performance_profile(

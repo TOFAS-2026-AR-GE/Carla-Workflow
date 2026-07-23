@@ -10,6 +10,7 @@ from carla_app.perception.device import (
     recover_cuda_memory,
     release_ultralytics_cuda,
     resolve_device,
+    ultralytics_precision_arguments,
 )
 
 
@@ -40,10 +41,7 @@ class TrafficSignDetector:
             minimum_free_memory_mb=700.0,
         )
         self.use_half = bool(use_half and is_cuda_device(self.device))
-        print(
-            f"[OK] Trafik levhasi modelleri: {self.device}, "
-            f"fp16={self.use_half}"
-        )
+        print(f"[OK] Trafik levhasi modelleri: {self.device}, fp16={self.use_half}")
         self._warmup_cuda()
 
     def detect(self, rgb_image):
@@ -114,80 +112,64 @@ class TrafficSignDetector:
     def _predict_detector(self, image):
         """Levha bulma modelini çalıştırır; gerekirse bir kez CPU'ya geçer."""
         try:
-            return self.detector.predict(
-                source=image,
-                conf=self.detector_confidence,
-                iou=self.detector_iou,
-                imgsz=self.detector_image_size,
-                device=self.device,
-                verbose=False,
-                quantize=(
-                    16 if getattr(self, "use_half", False) else None
-                ),
-            )
+            return self._predict_detector_on_device(image, self.device)
         except (RuntimeError, ValueError) as error:
+            last_error = error
             if is_cuda_device(self.device):
                 recover_cuda_memory()
                 try:
-                    return self.detector.predict(
-                        source=image,
-                        conf=self.detector_confidence,
-                        iou=self.detector_iou,
-                        imgsz=self.detector_image_size,
-                        device=self.device,
-                        verbose=False,
-                        quantize=(
-                            16 if getattr(self, "use_half", False) else None
-                        ),
+                    return self._predict_detector_on_device(
+                        image,
+                        self.device,
                     )
                 except (RuntimeError, ValueError) as retry_error:
-                    error = retry_error
-            self._switch_to_cpu(error)
-            return self.detector.predict(
-                source=image,
-                conf=self.detector_confidence,
-                iou=self.detector_iou,
-                imgsz=self.detector_image_size,
-                device="cpu",
-                verbose=False,
-                quantize=None,
-            )
+                    last_error = retry_error
+            self._switch_to_cpu(last_error)
+            return self._predict_detector_on_device(image, "cpu")
 
     def _predict_classifier(self, image):
         """Levha sınıflandırma modelini çalıştırır; gerekirse CPU'ya geçer."""
         try:
-            return self.classifier.predict(
-                source=image,
-                imgsz=self.classifier_image_size,
-                device=self.device,
-                verbose=False,
-                quantize=(
-                    16 if getattr(self, "use_half", False) else None
-                ),
-            )
+            return self._predict_classifier_on_device(image, self.device)
         except (RuntimeError, ValueError) as error:
+            last_error = error
             if is_cuda_device(self.device):
                 recover_cuda_memory()
                 try:
-                    return self.classifier.predict(
-                        source=image,
-                        imgsz=self.classifier_image_size,
-                        device=self.device,
-                        verbose=False,
-                        quantize=(
-                            16 if getattr(self, "use_half", False) else None
-                        ),
+                    return self._predict_classifier_on_device(
+                        image,
+                        self.device,
                     )
                 except (RuntimeError, ValueError) as retry_error:
-                    error = retry_error
-            self._switch_to_cpu(error)
-            return self.classifier.predict(
-                source=image,
-                imgsz=self.classifier_image_size,
-                device="cpu",
-                verbose=False,
-                quantize=None,
-            )
+                    last_error = retry_error
+            self._switch_to_cpu(last_error)
+            return self._predict_classifier_on_device(image, "cpu")
+
+    def _predict_detector_on_device(self, image, device):
+        return self.detector.predict(
+            source=image,
+            conf=self.detector_confidence,
+            iou=self.detector_iou,
+            imgsz=self.detector_image_size,
+            device=device,
+            verbose=False,
+            **ultralytics_precision_arguments(
+                getattr(self, "use_half", False),
+                device,
+            ),
+        )
+
+    def _predict_classifier_on_device(self, image, device):
+        return self.classifier.predict(
+            source=image,
+            imgsz=self.classifier_image_size,
+            device=device,
+            verbose=False,
+            **ultralytics_precision_arguments(
+                getattr(self, "use_half", False),
+                device,
+            ),
+        )
 
     def _switch_to_cpu(self, error):
         """İki levha modelini CPU'ya taşır."""
@@ -195,8 +177,7 @@ class TrafficSignDetector:
             raise error
 
         print(
-            f"[WARN] Sign GPU inference basarisiz ({error}); "
-            "CPU ile yeniden deneniyor."
+            f"[WARN] Sign GPU inference basarisiz ({error}); CPU ile yeniden deneniyor."
         )
         self.device = "cpu"
         self.use_half = False

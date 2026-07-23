@@ -7,6 +7,7 @@ from carla_app.visualization.sensor_layout import (
     build_web_view_data,
     render_web_view,
 )
+from scripts.sensor_layout_viewer import parse_arguments
 
 
 def sensor(name, kind, attributes):
@@ -80,6 +81,14 @@ class WebViewerTests(unittest.TestCase):
             output = Path(directory) / "layout.html"
             output.write_text(html, encoding="utf-8")
             self.assertGreater(output.stat().st_size, 10_000)
+
+    def test_default_output_uses_platform_temporary_directory(self):
+        arguments = parse_arguments([])
+
+        self.assertEqual(
+            arguments.output,
+            Path(tempfile.gettempdir()) / "carla_sensor_layout.html",
+        )
 
 
 if __name__ == "__main__":

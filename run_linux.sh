@@ -94,17 +94,37 @@ if ((SKIP_INSTALL == 0)); then
 
     "${PYTHON[@]}" -m pip install --upgrade pip
 
-    # Torch kurulu değilse veya RTX 50 mimarisini desteklemiyorsa yeniden kurar.
+    # Torch kurulu değilse veya RTX 50 mimarisini desteklemiyorsa uygun sürümü
+    # kurar. --allow-cpu seçildiğinde çalışan bir CPU kurulumu yeniden indirilmez.
     if ! "${PYTHON[@]}" "${CUDA_CHECK[@]}"; then
-        echo "[SETUP] RTX 50 serisi için CUDA 12.8 PyTorch kuruluyor."
+        if ((ALLOW_CPU == 1)); then
+            if "${PYTHON[@]}" -c "import torch, torchvision"; then
+                echo "[SETUP] Çalışan CPU PyTorch kurulumu korunuyor."
+            else
+                echo "[SETUP] CPU PyTorch kuruluyor."
+                "${PYTHON[@]}" -m pip install \
+                    torch \
+                    torchvision \
+                    --index-url https://download.pytorch.org/whl/cpu
+            fi
+        else
+            echo "[SETUP] RTX 50 serisi için CUDA 12.8 PyTorch kuruluyor."
 
-        "${PYTHON[@]}" -m pip install --force-reinstall \
-            torch \
-            torchvision \
-            --index-url https://download.pytorch.org/whl/cu128
+            "${PYTHON[@]}" -m pip install --force-reinstall \
+                torch \
+                torchvision \
+                --index-url https://download.pytorch.org/whl/cu128
+        fi
     fi
 
     "${PYTHON[@]}" -m pip install -r requirements.txt
+
+    if "${PYTHON[@]}" -c \
+        "from carla_app.config import Settings; raise SystemExit(0 if Settings().enable_lane_detection else 1)"
+    then
+        echo "[SETUP] Etkin UFLD şerit modeli doğrulanıyor."
+        "${PYTHON[@]}" scripts/download_lane_model.py
+    fi
 else
     echo "[SETUP] --skip-install seçildi; pip kurulumu atlanıyor."
 fi
@@ -120,8 +140,10 @@ fi
 
 if ((CUDA_READY == 1)); then
     echo "[OK] PyTorch CUDA ve RTX 50 mimarisi hazır."
+    DEFAULT_INFERENCE_DEVICE="auto"
 else
-    echo "[WARN] CUDA kullanılamıyor; CPU ile devam ediliyor."
+    echo "[WARN] CUDA kullanılamıyor; varsayılan inference cihazı CPU."
+    DEFAULT_INFERENCE_DEVICE="cpu"
 fi
 
 "${PYTHON[@]}" scripts/check_setup.py
@@ -132,9 +154,9 @@ if ((SETUP_ONLY == 1)); then
 fi
 
 export SENSOR_MODE="$SENSOR_PROFILE"
-export VEHICLE_DEVICE="${VEHICLE_DEVICE:-auto}"
-export SIGN_DEVICE="${SIGN_DEVICE:-auto}"
-export LANE_DEVICE="${LANE_DEVICE:-auto}"
+export VEHICLE_DEVICE="${VEHICLE_DEVICE:-$DEFAULT_INFERENCE_DEVICE}"
+export SIGN_DEVICE="${SIGN_DEVICE:-$DEFAULT_INFERENCE_DEVICE}"
+export LANE_DEVICE="${LANE_DEVICE:-$DEFAULT_INFERENCE_DEVICE}"
 export ENABLE_FP16_INFERENCE="${ENABLE_FP16_INFERENCE:-true}"
 export ENABLE_SIGN_DETECTION="false"
 export PYTHONUNBUFFERED="1"

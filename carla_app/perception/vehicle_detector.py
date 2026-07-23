@@ -8,6 +8,7 @@ from carla_app.perception.device import (
     recover_cuda_memory,
     release_ultralytics_cuda,
     resolve_device,
+    ultralytics_precision_arguments,
 )
 
 
@@ -239,6 +240,7 @@ class VehicleDetector:
             if self.device == "cpu":
                 raise
 
+            last_error = error
             recover_cuda_memory()
             try:
                 return self._predict_on_device(
@@ -246,11 +248,11 @@ class VehicleDetector:
                     self.device,
                     class_ids,
                 )
-            except (RuntimeError, ValueError):
-                pass
+            except (RuntimeError, ValueError) as retry_error:
+                last_error = retry_error
 
             print(
-                f"[WARN] Vehicle GPU inference basarisiz ({error}); "
+                f"[WARN] Vehicle GPU inference basarisiz ({last_error}); "
                 "CPU ile yeniden deneniyor."
             )
             self.device = "cpu"
@@ -271,11 +273,9 @@ class VehicleDetector:
             classes=class_ids,
             verbose=False,
             max_det=100,
-            quantize=(
-                16
-                if getattr(self, "use_half", False)
-                and is_cuda_device(device)
-                else None
+            **ultralytics_precision_arguments(
+                getattr(self, "use_half", False),
+                device,
             ),
         )
 

@@ -3,6 +3,7 @@
 
 import argparse
 import sys
+import tempfile
 import time
 import webbrowser
 from pathlib import Path
@@ -17,17 +18,15 @@ from carla_app.visualization.sensor_layout import (  # noqa: E402
 )
 
 
-def parse_arguments():
+def parse_arguments(arguments=None):
     """Komut satırından çıktı yolu ve bekleme süresini okur."""
     parser = argparse.ArgumentParser(
-        description=(
-            "Ego aracını ve sensörleri tarayıcıda üstten/yandan göster."
-        )
+        description=("Ego aracını ve sensörleri tarayıcıda üstten/yandan göster.")
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("/tmp/carla_sensor_layout.html"),
+        default=Path(tempfile.gettempdir()) / "carla_sensor_layout.html",
         help="Oluşturulacak HTML dosyası",
     )
     parser.add_argument(
@@ -41,7 +40,7 @@ def parse_arguments():
         action="store_true",
         help="HTML dosyasını oluştur ama tarayıcıyı otomatik açma",
     )
-    return parser.parse_args()
+    return parser.parse_args(arguments)
 
 
 def find_ego_vehicle(world, role_name):
@@ -134,10 +133,7 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(render_web_view(data), encoding="utf-8")
 
-    print(
-        f"[HAZIR] {active_count} aktif / "
-        f"{len(layout.all_specs)} toplam sensör"
-    )
+    print(f"[HAZIR] {active_count} aktif / {len(layout.all_specs)} toplam sensör")
     print(f"[DOSYA] {output}")
 
     if not args.no_browser:

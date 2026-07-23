@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "models" / "lane" / "ufld_carla_best.pth"
 REPOSITORY = "jkdxbns/autonomous-driving-carla"
 FILENAME = "ufld_carla_best.pth"
+REVISION = "7a103e327c539dd8c67c1ec8e4aac4eb4be9c9a5"
 EXPECTED_SHA256 = "c8880d9e2fb42615cca8f15faeb4ee4c88f22b8519ced94d2e5a827a1cc689ec"
 
 
@@ -20,14 +21,14 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def main():
+def main(arguments=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--force",
         action="store_true",
         help="Var olan dosyayı Hugging Face üzerinden yeniden indir.",
     )
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(arguments)
 
     if TARGET.is_file() and not arguments.force:
         if sha256(TARGET) == EXPECTED_SHA256:
@@ -46,6 +47,7 @@ def main():
     path = hf_hub_download(
         repo_id=REPOSITORY,
         filename=FILENAME,
+        revision=REVISION,
         local_dir=TARGET.parent,
         force_download=arguments.force,
     )

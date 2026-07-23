@@ -69,6 +69,9 @@ Her CARLA karesinde aşağıdaki sıra izlenir:
 Proje Python 3.12 ve `carla` adlı Conda ortamını kullanır. İşletim sistemine
 uygun betik ortam yoksa oluşturur, bağımlılıkları kurar, RTX 50 serisi için
 CUDA 12.8 destekli PyTorch'u doğrular ve kurulumu denetler.
+`ENABLE_LANE_DETECTION=true` ise UFLD ağırlığı da sabitlenmiş Hugging Face
+revizyonundan indirilip SHA256 ile doğrulanır; doğru dosya zaten varsa yeniden
+indirilmez.
 
 Windows (RTX 5070, PowerShell):
 
@@ -97,7 +100,7 @@ Araç modeli şu konumdadır:
 models/vehicle/carla_yolov8n_best.pt
 ```
 
-İsteğe bağlı CARLA UFLD şerit modelini indirmek için:
+İsteğe bağlı CARLA UFLD şerit modelini elle indirmek veya doğrulamak için:
 
 ```powershell
 conda run -n carla python scripts/download_lane_model.py

@@ -2,6 +2,8 @@
 
 import gc
 
+_ULTRALYTICS_PRECISION_KEYWORD = None
+
 
 def is_cuda_device(device):
     """Ultralytics ve PyTorch cihaz yazımlarının CUDA olup olmadığını söyler."""
@@ -30,7 +32,7 @@ def configure_torch_inference():
 
 
 def recover_cuda_memory():
-    """Geçici CUDA bellek baskısından sonra aynı cihazda bir kez daha denemeyi sağlar."""
+    """Geçici CUDA bellek baskısından sonra aynı cihazda yeniden denemeyi sağlar."""
     try:
         import torch
     except ImportError:
@@ -94,6 +96,40 @@ def resolve_device(requested_device, minimum_free_memory_mb=0.0):
             return "cpu"
 
     return requested
+
+
+def ultralytics_precision_arguments(
+    use_half,
+    device,
+    supported_options=None,
+):
+    """Kurulu Ultralytics sürümüne uygun FP16 tahmin argümanını döndürür.
+
+    Ultralytics 8.2 ``half`` kullanırken yeni 8.4 sürümleri bunu ``quantize``
+    altında birleştirdi. Projenin desteklediği bütün 8.x sürümlerinde uyarısız
+    ve geçerli çağrı üretmek için kurulu sürümün varsayılan seçenekleri bir kez
+    incelenir.
+    """
+    global _ULTRALYTICS_PRECISION_KEYWORD
+
+    if supported_options is None:
+        if _ULTRALYTICS_PRECISION_KEYWORD is None:
+            try:
+                from ultralytics.cfg import DEFAULT_CFG_DICT
+            except (ImportError, AttributeError):
+                _ULTRALYTICS_PRECISION_KEYWORD = "half"
+            else:
+                _ULTRALYTICS_PRECISION_KEYWORD = (
+                    "quantize" if "quantize" in DEFAULT_CFG_DICT else "half"
+                )
+        keyword = _ULTRALYTICS_PRECISION_KEYWORD
+    else:
+        keyword = "quantize" if "quantize" in supported_options else "half"
+
+    enabled = bool(use_half and is_cuda_device(device))
+    if keyword == "quantize":
+        return {"quantize": 16 if enabled else None}
+    return {"half": enabled}
 
 
 def move_model_to_cpu(model):

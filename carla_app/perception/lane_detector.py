@@ -24,6 +24,8 @@ LANE_COUNT = 4
 ROW_ANCHORS = np.linspace(115, 287, ROW_COUNT).astype(np.int32)
 IMAGENET_MEAN = np.asarray((0.485, 0.456, 0.406), dtype=np.float32)
 IMAGENET_STD = np.asarray((0.229, 0.224, 0.225), dtype=np.float32)
+CURVE_SAMPLE_STEP_PX = 4
+CURVE_MINIMUM_RESIDUAL_PX = 4.0
 
 
 def prepare_ufld_input(rgb_image):
@@ -120,6 +122,243 @@ def decode_ufld_logits(
     return lanes
 
 
+def fit_lane_curve(
+    points,
+    point_confidences,
+    image_width,
+    image_height,
+    sample_step_px=CURVE_SAMPLE_STEP_PX,
+):
+    """Seyrek UFLD noktalarına güven ağırlıklı dayanıklı x(y) eğrisi uydurur.
+
+    UFLD satır ankrajları doğal olarak seyrektir. Ham noktaları doğrudan
+    birleştirmek tek bir yanlış ızgara seçiminin ekranda keskin bir kırık
+    oluşturmasına yol açar. Burada yalnız gözlenen y aralığında ikinci derece
+    eğri uydurulur; medyan mutlak sapma ile aykırı noktalar iki kez elenir.
+    """
+    coordinates = np.asarray(points, dtype=np.float64)
+    confidences = np.asarray(point_confidences, dtype=np.float64)
+    if coordinates.ndim != 2 or coordinates.shape[1:] != (2,):
+        return None
+    if len(coordinates) < 3 or len(confidences) != len(coordinates):
+        return None
+
+    valid = (
+        np.all(np.isfinite(coordinates), axis=1)
+        & np.isfinite(confidences)
+        & (coordinates[:, 0] >= 0.0)
+        & (coordinates[:, 0] < float(image_width))
+        & (coordinates[:, 1] >= 0.0)
+        & (coordinates[:, 1] < float(image_height))
+    )
+    coordinates = coordinates[valid]
+    confidences = confidences[valid]
+    if len(coordinates) < 3:
+        return None
+
+    order = np.argsort(coordinates[:, 1])
+    coordinates = coordinates[order]
+    confidences = np.clip(confidences[order], 0.01, 1.0)
+    unique_y = np.unique(coordinates[:, 1])
+    if len(unique_y) < 3:
+        return None
+
+    merged_points = []
+    merged_confidences = []
+    for y_value in unique_y:
+        selection = coordinates[:, 1] == y_value
+        weights = confidences[selection]
+        merged_points.append(
+            [
+                float(np.average(coordinates[selection, 0], weights=weights)),
+                float(y_value),
+            ]
+        )
+        merged_confidences.append(float(np.max(weights)))
+
+    coordinates = np.asarray(merged_points, dtype=np.float64)
+    confidences = np.asarray(merged_confidences, dtype=np.float64)
+    center_y = float(np.mean(coordinates[:, 1]))
+    scale_y = max(1.0, float(np.ptp(coordinates[:, 1])) / 2.0)
+    normalized_y = (coordinates[:, 1] - center_y) / scale_y
+    inliers = np.ones(len(coordinates), dtype=bool)
+    coefficients = None
+
+    for _iteration in range(3):
+        if np.count_nonzero(inliers) < 3:
+            break
+        degree = min(2, np.count_nonzero(inliers) - 1)
+        coefficients = np.polyfit(
+            normalized_y[inliers],
+            coordinates[inliers, 0],
+            degree,
+            w=np.sqrt(confidences[inliers]),
+        )
+        fitted_x = np.polyval(coefficients, normalized_y)
+        residuals = np.abs(coordinates[:, 0] - fitted_x)
+        inlier_residuals = residuals[inliers]
+        median = float(np.median(inlier_residuals))
+        mad = float(np.median(np.abs(inlier_residuals - median)))
+        robust_sigma = 1.4826 * mad
+        residual_limit = max(
+            CURVE_MINIMUM_RESIDUAL_PX * float(image_width) / MODEL_WIDTH,
+            median + 2.5 * robust_sigma,
+        )
+        updated = residuals <= residual_limit
+        if np.count_nonzero(updated) < 3 or np.array_equal(updated, inliers):
+            break
+        inliers = updated
+
+    if coefficients is None or np.count_nonzero(inliers) < 3:
+        return None
+
+    degree = min(2, np.count_nonzero(inliers) - 1)
+    coefficients = np.polyfit(
+        normalized_y[inliers],
+        coordinates[inliers, 0],
+        degree,
+        w=np.sqrt(confidences[inliers]),
+    )
+    inlier_prediction = np.polyval(coefficients, normalized_y[inliers])
+    weighted_squared_error = np.average(
+        np.square(coordinates[inliers, 0] - inlier_prediction),
+        weights=confidences[inliers],
+    )
+
+    y_min = int(round(float(np.min(coordinates[inliers, 1]))))
+    y_max = int(round(float(np.max(coordinates[inliers, 1]))))
+    step = max(2, int(sample_step_px))
+    sample_y = np.arange(y_min, y_max + 1, step, dtype=np.float64)
+    if len(sample_y) == 0 or sample_y[-1] != y_max:
+        sample_y = np.append(sample_y, float(y_max))
+    sample_x = np.polyval(coefficients, (sample_y - center_y) / scale_y)
+    sample_x = np.clip(sample_x, 0.0, max(0.0, float(image_width) - 1.0))
+    dense_points = np.column_stack((sample_x, sample_y))
+
+    return {
+        "points": np.rint(dense_points).astype(np.int32).tolist(),
+        "inlier_count": int(np.count_nonzero(inliers)),
+        "rejected_count": int(len(coordinates) - np.count_nonzero(inliers)),
+        "fit_rms_px": float(np.sqrt(weighted_squared_error)),
+    }
+
+
+class LaneCurveTracker:
+    """Görsel şerit eğrilerini inference kareleri arasında yumuşatır."""
+
+    def __init__(self, smoothing=0.65, maximum_missing_frames=1):
+        self.smoothing = min(1.0, max(0.0, float(smoothing)))
+        self.maximum_missing_frames = max(0, int(maximum_missing_frames))
+        self.tracks = {}
+        self.image_size = None
+
+    def update(self, lanes, image_width, image_height):
+        """Ham lane sözlüklerini çizime hazır, yoğun ve kararlı hale getirir."""
+        image_size = (int(image_width), int(image_height))
+        if self.image_size != image_size:
+            self.tracks.clear()
+            self.image_size = image_size
+
+        processed = []
+        seen_indices = set()
+        for lane in lanes:
+            lane_index = int(lane.get("lane_index", len(processed)))
+            seen_indices.add(lane_index)
+            current = dict(lane)
+            current["raw_points"] = [
+                list(point) for point in lane.get("points", [])
+            ]
+            fitted = None
+            if lane.get("detected"):
+                fitted = fit_lane_curve(
+                    lane.get("points", []),
+                    lane.get("point_confidences", []),
+                    image_width,
+                    image_height,
+                )
+
+            if fitted is None:
+                held = self._held_lane(lane_index, current)
+                processed.append(held)
+                continue
+
+            dense_points = self._smooth_points(
+                lane_index,
+                fitted["points"],
+            )
+            current.update(fitted)
+            current["points"] = dense_points
+            current["detected"] = len(dense_points) >= 2
+            current["temporally_held"] = False
+            self.tracks[lane_index] = {
+                "points": [list(point) for point in dense_points],
+                "confidence": float(current.get("confidence", 0.0)),
+                "missing_frames": 0,
+                "fit_rms_px": float(current.get("fit_rms_px", 0.0)),
+            }
+            processed.append(current)
+
+        for lane_index in list(self.tracks):
+            if lane_index not in seen_indices:
+                self.tracks[lane_index]["missing_frames"] += 1
+                if (
+                    self.tracks[lane_index]["missing_frames"]
+                    > self.maximum_missing_frames
+                ):
+                    self.tracks.pop(lane_index, None)
+        return processed
+
+    def _smooth_points(self, lane_index, current_points):
+        previous = self.tracks.get(lane_index)
+        if previous is None:
+            return [list(point) for point in current_points]
+
+        old = np.asarray(previous["points"], dtype=np.float64)
+        current = np.asarray(current_points, dtype=np.float64)
+        if len(old) < 2 or len(current) < 2:
+            return [list(point) for point in current_points]
+        old_order = np.argsort(old[:, 1])
+        old = old[old_order]
+        previous_x = np.interp(
+            current[:, 1],
+            old[:, 1],
+            old[:, 0],
+            left=np.nan,
+            right=np.nan,
+        )
+        overlap = np.isfinite(previous_x)
+        current[overlap, 0] = (
+            self.smoothing * current[overlap, 0]
+            + (1.0 - self.smoothing) * previous_x[overlap]
+        )
+        return np.rint(current).astype(np.int32).tolist()
+
+    def _held_lane(self, lane_index, current):
+        previous = self.tracks.get(lane_index)
+        if previous is None:
+            current["detected"] = False
+            current["points"] = []
+            current["temporally_held"] = False
+            return current
+
+        previous["missing_frames"] += 1
+        if previous["missing_frames"] > self.maximum_missing_frames:
+            self.tracks.pop(lane_index, None)
+            current["detected"] = False
+            current["points"] = []
+            current["temporally_held"] = False
+            return current
+
+        current["points"] = [list(point) for point in previous["points"]]
+        current["confidence"] = float(previous["confidence"]) * 0.75
+        current["fit_rms_px"] = float(previous["fit_rms_px"])
+        current["detected"] = True
+        current["temporally_held"] = True
+        current["inlier_count"] = 0
+        current["rejected_count"] = 0
+        return current
+
+
 class LaneDetector:
     """Ön RGB kamerada UFLD çıkarımı yapar; kontrol komutu üretmez."""
 
@@ -151,6 +390,7 @@ class LaneDetector:
         self.minimum_points = max(3, int(minimum_points))
         self.minimum_confidence = float(minimum_confidence)
         self.torch = torch
+        self.curve_tracker = LaneCurveTracker()
 
         checkpoint = torch.load(path, map_location="cpu", weights_only=True)
         state_dict = self._state_dict_from_checkpoint(checkpoint)
@@ -220,13 +460,14 @@ class LaneDetector:
                 logits = self.model(tensor)
         logits = logits.detach().float().cpu().numpy()
         height, width = rgb_image.shape[:2]
-        lanes = decode_ufld_logits(
+        raw_lanes = decode_ufld_logits(
             logits,
             image_width=width,
             image_height=height,
             minimum_points=self.minimum_points,
             minimum_confidence=self.minimum_confidence,
         )
+        lanes = self.curve_tracker.update(raw_lanes, width, height)
         return {
             "available": True,
             "model": "ufld_resnet18_carla",

@@ -27,6 +27,9 @@ python scripts/download_lane_model.py
 
 Ardından `.env` içinde `ENABLE_LANE_DETECTION=true` yapılır. Şerit sonucu ilk
 aşamada yalnız görüntüleme/doğrulama içindir; direksiyon kontrolüne bağlanmaz.
+Branch içindeki `.env` bu görselleştirmeyi açık getirir. Yeni bir kurulumda
+uygulamayı başlatmadan önce yukarıdaki indirme komutuyla SHA256 doğrulanmış
+ağırlığın hazır olduğundan emin olun.
 
 Eksik modelleri başka bir proje kopyasından almak için:
 

@@ -171,10 +171,14 @@ NAVIGATION_ARRIVAL_DISTANCE_M=2.5
 NAVIGATION_RENDER_EVERY_N_FRAMES=2
 ```
 
-UFLD modeli mevcut kamera panelinde şeritleri canlı çizer. Bu aşamada aracın
-ana referans yolu navigasyon waypoint rotasıdır; görüntü tabanlı şerit
-merkezleme daha sonra güven sınırlarıyla bu referansa düzeltme olarak
-eklenmelidir.
+UFLD modeli mevcut kamera panelinde şeritleri canlı çizer. Seyrek satır
+ankrajları güven ağırlıklı ve aykırı-nokta dayanımlı ikinci derece `x(y)`
+eğrisine dönüştürülür, yalnız gözlenen görüntü aralığında yoğun örneklenir ve
+ardışık inference sonuçları yumuşatılır. Ego şeridinin iki sınırı geçerli ve
+birbirini kesmiyorsa araları saydam yeşil koridor olarak gösterilir. Ham model
+noktaları, işlenmiş eğriler veya bu sonuçlardan türetilen hiçbir değer
+direksiyon, gaz ya da fren hesabına verilmez; aracın referansı navigasyon
+waypoint rotası olarak kalır.
 
 ## CUDA ve canlı performans
 
@@ -522,7 +526,7 @@ PERCEPTION_EVERY_N_FRAMES=1
 CAMERA_WAIT_TIMEOUT_MS=10
 
 ENABLE_SIGN_DETECTION=false
-ENABLE_LANE_DETECTION=false
+ENABLE_LANE_DETECTION=true
 LANE_MODEL=models/lane/ufld_carla_best.pth
 LANE_DEVICE=auto
 LANE_CONFIDENCE=0.30
@@ -549,8 +553,9 @@ MAXIMUM_SPEED_KMH=70
   gecikmeyi artırır.
 - `ENABLE_LANE_DETECTION=true`: ResNet-18 tabanlı klasik UFLD'yi yalnız ön
   kamerada çalıştırır. 800×288 RGB/ImageNet girdisinden dört şerit adayını,
-  piksel noktalarını ve güven değerlerini üretir. İlk aşamada sonuç yalnız
-  OpenCV katmanı ve doğrulama içindir; Pure Pursuit/MPC rotasını değiştirmez.
+  piksel noktalarını ve güven değerlerini üretir. Noktalar dayanıklı eğri
+  uydurma ve kısa zamansal yumuşatma sonrasında yalnız OpenCV katmanına gider;
+  Pure Pursuit/MPC rotasını değiştirmez.
 - `ENABLE_LIDAR_FUSION=true`: zaman uyumlu LiDAR noktalarıyla kamera mesafesini doğrular.
 - `SENSOR_MODE=control`: kayıt yapmadan 7 kamera, 5 radar, LiDAR, GNSS ve
   IMU'nun tamamını; BEV doğrulamasıyla birlikte açar.
@@ -681,6 +686,21 @@ python -m compileall -q carla_app main.py scripts tests
 python -m unittest discover -s tests -v
 ```
 
+CARLA sunucusu, `ego_vehicle` rolündeki araç ve lane model dosyası hazırken
+gerçek model çizgisini yalnız test sürecinde CARLA harita sınırlarıyla
+karşılaştırmak için:
+
+```bash
+RUN_CARLA_LANE_GT=1 python -m unittest discover \
+  -s tests -p "test_lane_ground_truth.py" -v
+```
+
+Bu canlı test, ego şeridinin CARLA waypoint merkezinden `lane_width / 2` ile
+üretilen işaretli sol/sağ sınırlarını gerçek kamera kalibrasyonuyla görüntüye
+projekte eder. Şerit eşleme F1'ını, ortak düşey kapsamı, ortalama ve yüzde 95
+piksel hatasını denetler. Ground-truth modülleri `tests/` altında kalır ve
+normal uygulama tarafından içe aktarılmaz.
+
 Testler; direksiyon yönünü, direksiyon değişim sınırını, viraj hızını, şerit
 toparlamayı, ön araç takibini, iki metre duruşu, yeniden kalkışı, kamera-radar
 birleşimini, komşu şerit ve zemin reddini, eski sensör karesini, acil freni,
@@ -694,6 +714,10 @@ durma noktası hatası ölçümü için CARLA sunucusunun ayrıca çalıştırı
 
 Kontrol denklemlerinin temel kaynakları:
 
+- [UFLD satır-ankrajlı şerit algılama (ECCV 2020)](https://arxiv.org/abs/2004.11757)
+- [TuSimple şerit doğrulama protokolü](https://github.com/TuSimple/tusimple-benchmark/tree/master/doc/lane_detection)
+- [CARLA harita, waypoint ve lane-marking API'si](https://carla.readthedocs.io/en/latest/core_map/)
+- [Sürüş odaklı şerit algılama metrikleri](https://arxiv.org/abs/2203.16851)
 - [Pure Pursuit geometrik yol takibi](https://www.ri.cmu.edu/pub_files/pub4/coulter_r_craig_1992_1/coulter_r_craig_1992_1.pdf)
 - [Intelligent Driver Model (IDM)](https://mtreiber.de/MicroApplet/IDM.html)
 - [SciPy SLSQP optimizasyonu](https://docs.scipy.org/doc/scipy/reference/optimize.minimize-slsqp.html)

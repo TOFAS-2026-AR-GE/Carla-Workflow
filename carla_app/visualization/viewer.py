@@ -398,20 +398,101 @@ class PerceptionViewer:
 
     @staticmethod
     def _draw_lanes(frame, lane_detection):
-        colors = ((0, 80, 255), (0, 220, 0), (255, 80, 0), (0, 220, 220))
+        lanes = [
+            lane
+            for lane in (lane_detection or {}).get("lanes", [])
+            if lane.get("detected") and len(lane.get("points", [])) >= 2
+        ]
+        PerceptionViewer._draw_ego_lane_corridor(frame, lanes)
+        colors = (
+            (40, 120, 255),
+            (60, 255, 100),
+            (255, 150, 40),
+            (40, 230, 255),
+        )
         drawn = 0
-        for lane in (lane_detection or {}).get("lanes", []):
-            if not lane.get("detected") or len(lane.get("points", [])) < 2:
-                continue
+        for lane in lanes:
             points = np.asarray(lane["points"], dtype=np.int32).reshape(-1, 1, 2)
             lane_index = int(lane.get("lane_index", 0))
+            color = colors[lane_index % len(colors)]
             cv2.polylines(
                 frame,
                 [points],
                 False,
-                colors[lane_index % len(colors)],
+                (12, 15, 18),
+                7,
+                cv2.LINE_AA,
+            )
+            cv2.polylines(
+                frame,
+                [points],
+                False,
+                color,
                 3,
+                cv2.LINE_AA,
+            )
+            bottom = max(lane["points"], key=lambda point: point[1])
+            confidence = float(lane.get("confidence", 0.0))
+            hold_marker = "*" if lane.get("temporally_held") else ""
+            cv2.putText(
+                frame,
+                f"L{lane_index + 1}{hold_marker} {confidence:.2f}",
+                (int(bottom[0]) + 7, max(45, int(bottom[1]) - 7)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                color,
+                1,
                 cv2.LINE_AA,
             )
             drawn += 1
         return drawn
+
+    @staticmethod
+    def _draw_ego_lane_corridor(frame, lanes):
+        """UFLD'nin ego şeridi olan 1-2 sınırlarının arasını saydam doldurur."""
+        lanes_by_index = {
+            int(lane.get("lane_index", -1)): lane
+            for lane in lanes
+        }
+        left = lanes_by_index.get(1)
+        right = lanes_by_index.get(2)
+        if left is None or right is None:
+            return False
+
+        left_points = np.asarray(left["points"], dtype=np.float64)
+        right_points = np.asarray(right["points"], dtype=np.float64)
+        y_min = max(float(np.min(left_points[:, 1])), float(np.min(right_points[:, 1])))
+        y_max = min(float(np.max(left_points[:, 1])), float(np.max(right_points[:, 1])))
+        if y_max - y_min < max(20.0, 0.08 * frame.shape[0]):
+            return False
+
+        sample_y = np.arange(y_min, y_max + 1.0, 4.0)
+        left_order = np.argsort(left_points[:, 1])
+        right_order = np.argsort(right_points[:, 1])
+        left_x = np.interp(
+            sample_y,
+            left_points[left_order, 1],
+            left_points[left_order, 0],
+        )
+        right_x = np.interp(
+            sample_y,
+            right_points[right_order, 1],
+            right_points[right_order, 0],
+        )
+        lane_width = right_x - left_x
+        if np.count_nonzero(lane_width > 4.0) < 0.90 * len(lane_width):
+            return False
+
+        polygon = np.vstack(
+            (
+                np.column_stack((left_x, sample_y)),
+                np.column_stack((right_x[::-1], sample_y[::-1])),
+            )
+        )
+        polygon[:, 0] = np.clip(polygon[:, 0], 0, frame.shape[1] - 1)
+        polygon[:, 1] = np.clip(polygon[:, 1], 0, frame.shape[0] - 1)
+        polygon = np.rint(polygon).astype(np.int32).reshape(-1, 1, 2)
+        overlay = frame.copy()
+        cv2.fillPoly(overlay, [polygon], (60, 180, 90), lineType=cv2.LINE_AA)
+        cv2.addWeighted(overlay, 0.22, frame, 0.78, 0.0, dst=frame)
+        return True

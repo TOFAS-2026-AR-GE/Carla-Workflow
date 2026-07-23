@@ -47,7 +47,7 @@ döngüsü eski kareleri sırayla işlemeye çalışmaz.
 | Trafik kuralı | Zamansal doğrulanmış yol bağlamı | `road_context.py`, `behavior_planner.py` |
 | Gaz ve fren | IDM hız referansı + PID | `idm_speed_planner.py`, `longitudinal_pid_controller.py` |
 | Acil fren | Bağımsız yakın tehlike denetimi | `safety_supervisor.py` |
-| UFLD şeritleri | Ön RGB kamera | Yalnız `viewer.py`; kontrolcüye bağlı değildir |
+| UFLD şeritleri | Ön RGB kamera | Dayanıklı eğri + zamansal görsel filtre; yalnız `viewer.py`, kontrolcüye bağlı değildir |
 
 Bu ayrım önemlidir: algılama sonucu doğrudan gaz, fren veya direksiyon komutu
 üretmez. Önce standart yol bağlamına veya ön araç takibine dönüştürülür.
@@ -66,6 +66,8 @@ değil yalnız çıkarımın GPU üzerindeki gruplanmasını değiştirir.
 
 UFLD ayrı bir sensör modu değildir. `ENABLE_LANE_DETECTION=true` olduğunda
 yalnız birincil ön kamerada çalışır ve her modda görsel sonuç üretebilir.
+CARLA waypoint tabanlı şerit ground-truth projeksiyonu yalnız `tests/` altında
+bulunur; üretim algılama veya kontrol akışına yüklenmez.
 
 ## Nerede değişiklik yapılır?
 

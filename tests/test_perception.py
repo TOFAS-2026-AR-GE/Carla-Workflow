@@ -17,8 +17,10 @@ from carla_app.perception.fusion import fuse_detections_with_radar
 from carla_app.perception.lane_detector import (
     LANE_COUNT,
     ROW_COUNT,
+    LaneCurveTracker,
     LaneDetector,
     decode_ufld_logits,
+    fit_lane_curve,
     prepare_ufld_input,
 )
 from carla_app.perception.sign_detector import TrafficSignDetector
@@ -260,6 +262,81 @@ class LaneDetectorTests(unittest.TestCase):
             {"epoch": 12, "model_state_dict": state}
         )
         self.assertEqual(list(result), ["pool.weight"])
+
+    def test_robust_curve_fit_rejects_single_grid_outlier(self):
+        y_values = np.arange(120, 288, 4)
+        expected_x = 250.0 + 0.002 * np.square(y_values - 200.0)
+        points = np.column_stack((expected_x, y_values))
+        points[18, 0] += 120.0
+
+        result = fit_lane_curve(
+            points,
+            np.full(len(points), 0.95),
+            image_width=800,
+            image_height=600,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertGreaterEqual(result["rejected_count"], 1)
+        self.assertLess(result["fit_rms_px"], 1.0)
+        fitted = np.asarray(result["points"])
+        fitted_x = np.interp(y_values, fitted[:, 1], fitted[:, 0])
+        self.assertLess(float(np.mean(np.abs(fitted_x - expected_x))), 1.5)
+
+    def test_curve_fit_never_extrapolates_beyond_observed_rows(self):
+        points = [[200, 180], [205, 200], [212, 220], [222, 240]]
+
+        result = fit_lane_curve(
+            points,
+            [0.9, 0.9, 0.9, 0.9],
+            image_width=800,
+            image_height=600,
+        )
+
+        self.assertEqual(result["points"][0][1], 180)
+        self.assertEqual(result["points"][-1][1], 240)
+
+    def test_temporal_tracker_smooths_jitter_and_holds_one_miss(self):
+        tracker = LaneCurveTracker(smoothing=0.5, maximum_missing_frames=1)
+        y_values = np.arange(120, 288, 4)
+
+        def lane(x_offset, detected=True):
+            return {
+                "lane_index": 1,
+                "points": np.column_stack(
+                    (250.0 + x_offset + 0.05 * y_values, y_values)
+                ).tolist(),
+                "point_confidences": [0.95] * len(y_values),
+                "confidence": 0.95,
+                "detected": detected,
+            }
+
+        first = tracker.update([lane(0.0)], 800, 600)[0]
+        second = tracker.update([lane(20.0)], 800, 600)[0]
+        first_x = np.asarray(first["points"])[:, 0]
+        second_x = np.asarray(second["points"])[:, 0]
+        common_y = np.asarray(second["points"])[:, 1]
+        previous_x = np.interp(
+            common_y,
+            np.asarray(first["points"])[:, 1],
+            first_x,
+        )
+        self.assertAlmostEqual(
+            float(np.mean(second_x - previous_x)),
+            10.0,
+            delta=1.0,
+        )
+
+        missed = lane(0.0, detected=False)
+        missed["points"] = []
+        missed["point_confidences"] = []
+        held = tracker.update([missed], 800, 600)[0]
+        self.assertTrue(held["detected"])
+        self.assertTrue(held["temporally_held"])
+
+        released = tracker.update([missed], 800, 600)[0]
+        self.assertFalse(released["detected"])
+        self.assertFalse(released["temporally_held"])
 
 
 class PerceptionSystemTests(unittest.TestCase):

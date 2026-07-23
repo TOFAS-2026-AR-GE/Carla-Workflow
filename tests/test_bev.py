@@ -1100,8 +1100,60 @@ class BevRendererTests(unittest.TestCase):
 
         self.assertEqual(counts, {"boxes": 3, "lanes": 1})
         self.assertEqual(rectangle.call_count, 3)
-        self.assertEqual(put_text.call_count, 3)
-        polylines.assert_called_once()
+        self.assertEqual(put_text.call_count, 4)
+        self.assertEqual(polylines.call_count, 2)
+
+    def test_opencv_overlay_fills_only_valid_ego_lane_corridor(self):
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        y_values = list(range(80, 231, 4))
+        lanes = [
+            {
+                "lane_index": 1,
+                "detected": True,
+                "points": [[100 + y // 10, y] for y in y_values],
+            },
+            {
+                "lane_index": 2,
+                "detected": True,
+                "points": [[220 - y // 10, y] for y in y_values],
+            },
+        ]
+
+        with (
+            patch("carla_app.visualization.viewer.cv2.fillPoly") as fill_poly,
+            patch(
+                "carla_app.visualization.viewer.cv2.addWeighted"
+            ) as add_weighted,
+        ):
+            drawn = PerceptionViewer._draw_ego_lane_corridor(frame, lanes)
+
+        self.assertTrue(drawn)
+        fill_poly.assert_called_once()
+        add_weighted.assert_called_once()
+
+    def test_crossing_lane_curves_do_not_create_corridor_fill(self):
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        y_values = list(range(80, 231, 4))
+        lanes = [
+            {
+                "lane_index": 1,
+                "detected": True,
+                "points": [[100 + y, y] for y in y_values],
+            },
+            {
+                "lane_index": 2,
+                "detected": True,
+                "points": [[220 - y, y] for y in y_values],
+            },
+        ]
+
+        with patch(
+            "carla_app.visualization.viewer.cv2.fillPoly"
+        ) as fill_poly:
+            drawn = PerceptionViewer._draw_ego_lane_corridor(frame, lanes)
+
+        self.assertFalse(drawn)
+        fill_poly.assert_not_called()
 
     def test_module_returns_requested_bgr_canvas(self):
         layout = make_layout()

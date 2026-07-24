@@ -4,6 +4,8 @@ Girdi olarak araç durumunu ve takip edilen ön aracı alır. Çıktı olarak
 CARLA ``VehicleControl`` nesnesi ile anlaşılır tanı bilgilerini verir.
 """
 
+import math
+
 import carla
 
 from carla_app.config import DrivingParameters
@@ -17,6 +19,7 @@ from carla_app.controller.vehicle.pure_pursuit_mpc_controller import (
 )
 from carla_app.controller.vehicle.safety_supervisor import EmergencyBrakeSupervisor
 from carla_app.controller.vehicle.speed_planner import CurvatureSpeedPlanner
+from carla_app.controller.vehicle.uncertainty import ControlUncertaintyManager
 
 
 class VehicleController:
@@ -35,6 +38,7 @@ class VehicleController:
         self.idm = IDMSpeedPlanner(dt)
         self.longitudinal = LongitudinalPIDController(dt)
         self.safety = EmergencyBrakeSupervisor(self.parameters)
+        self.uncertainty = ControlUncertaintyManager(dt, self.parameters)
 
     def run_step(
         self,
@@ -45,6 +49,12 @@ class VehicleController:
         navigation_state=None,
     ):
         """Tek çevrim için direksiyon, gaz ve fren komutunu üretir."""
+        lead_vehicle, emergency_obstacle, uncertainty_info = self.uncertainty.apply(
+            state,
+            lead_vehicle,
+            emergency_obstacle,
+            road_context,
+        )
         steer = self.lateral.run_step(state)
         lateral_info = self.lateral.last_info
         target_speed, speed_plan = self.speed_planner.run_step(
@@ -69,6 +79,14 @@ class VehicleController:
             target_speed = min(target_speed, navigation_target)
         else:
             target_speed = 0.0
+
+        uncertainty_cap = float(uncertainty_info["speed_cap_mps"])
+        if math.isfinite(uncertainty_cap):
+            target_speed = min(target_speed, max(0.0, uncertainty_cap))
+            behavior["constraints"]["uncertainty_speed_mps"] = max(
+                0.0,
+                uncertainty_cap,
+            )
 
         # Tek bir ham radar noktası yalnızca acil frene gider. Normal takip,
         # kamera-radar takibini veya doğrulanmış radar kümesini kullanır.
@@ -163,6 +181,7 @@ class VehicleController:
             "behavior": behavior,
             "road_context": road_context or {},
             "navigation": navigation_state,
+            "uncertainty": uncertainty_info,
         }
         return control, info
 

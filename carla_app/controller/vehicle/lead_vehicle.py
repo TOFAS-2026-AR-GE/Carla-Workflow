@@ -48,6 +48,9 @@ class LeadVehicleTracker:
         camera_fov_deg,
         radar_height_m=1.0,
         radar_pitch_deg=2.0,
+        tracker_mahalanobis_gate=9.21,
+        tracker_process_noise=2.0,
+        tracker_measurement_std_m=1.5,
     ):
         self.dt = float(dt)
         self.image_width = int(image_width)
@@ -67,6 +70,9 @@ class LeadVehicleTracker:
         self.tracker = Tracker(
             gate_distance_m=5.0,
             max_misses=max(4, int(round(0.4 / self.dt))),
+            mahalanobis_gate=tracker_mahalanobis_gate,
+            process_noise=tracker_process_noise,
+            measurement_noise=tracker_measurement_std_m,
         )
         self.last_fusion_key = None
         self.filtered_relative_speed = {}
@@ -236,6 +242,14 @@ class LeadVehicleTracker:
                 ego_y=ego_location.y,
                 ego_yaw_deg=state["yaw"],
             )
+            # Kamera kutusu, radar açısı ve ölçüm yaşı tek covariance değerine
+            # indirgenir. Tracker bu değeri Mahalanobis kapısında kullanır.
+            position_std_m = (
+                0.45
+                + 0.015 * range_m
+                + 0.20 * max(0, age_frames)
+                + 0.10 * abs(int(radar_frame_id) - int(detection_frame_id))
+            )
             measurements.append(
                 {
                     "x": world_x,
@@ -245,6 +259,7 @@ class LeadVehicleTracker:
                     "bearing_deg": bearing_deg,
                     "relative_velocity_mps": detection.get("relative_velocity_mps"),
                     "measurement_frame_id": int(radar_frame_id),
+                    "position_std_m": float(position_std_m),
                 }
             )
 
@@ -283,6 +298,8 @@ class LeadVehicleTracker:
                     "source": "camera_radar_track",
                     "radar_points": None,
                     "measurement_frame_id": track.last_measurement_frame_id,
+                    "distance_std_m": max(0.35, 0.50 * track.position_std_m),
+                    "association_mahalanobis_sq": track.last_mahalanobis_sq,
                 }
             )
 
@@ -399,6 +416,7 @@ class LeadVehicleTracker:
                     "radar_points": len(cluster),
                     "bearing_deg": float(bearing_deg),
                     "measurement_frame_id": int(radar_frame_id),
+                    "distance_std_m": 0.35 + 0.01 * float(forward),
                 }
             )
 
@@ -476,6 +494,7 @@ class LeadVehicleTracker:
                     "source": "radar_emergency",
                     "radar_points": 1,
                     "bearing_deg": float(azimuth),
+                    "distance_std_m": 0.40 + 0.01 * float(forward),
                     "ttc_s": float(ttc),
                     "measurement_frame_id": (
                         int(radar_frame_id) if radar_frame_id is not None else None

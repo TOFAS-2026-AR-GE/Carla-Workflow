@@ -14,11 +14,13 @@ bağımsız güvenlik katmanı son komutu sınırlar.
 ```text
 main.py
   -> CarlaApplication
-      -> core/       CARLA bağlantısı, ego araç, rota ve trafik
+      -> core/       CARLA bağlantısı, rota haritası ve trafik üretimi
       -> sensors/    7 kamera, 5 radar, LiDAR, GNSS ve IMU verisi
+      -> localization/ GNSS + IMU + isteğe bağlı teker odometrisi EKF
       -> perception/ YOLO + UFLD + zamansal yol bağlamı
       -> bev/        sürekli kuş bakışı doğrulama ve lead recovery
       -> controller/ davranış, direksiyon, hız, gaz-fren ve acil fren
+      -> validation/ kontrol dışı CARLA oracle başarı ölçümü
       -> visualization/ OpenCV kamera/UFLD ve isteğe bağlı BEV görünümü
 ```
 
@@ -41,9 +43,10 @@ döngüsü eski kareleri sırayla işlemeye çalışmaz.
 
 | Karar | Ana kaynak | İlgili modül |
 |---|---|---|
-| Direksiyon | CARLA harita rotası | `pure_pursuit_mpc_controller.py` |
+| Araç pozu ve hızı | GNSS + IMU EKF, varsa teker/CAN odometrisi | `localization/` |
+| Direksiyon | EKF pozu üzerinde CARLA harita rotası | `pure_pursuit_mpc_controller.py` |
 | Viraj hızı | Rota eğriliği, şerit merkezleme hatası ve IMU kararlılığı | `speed_planner.py` |
-| Ön araç takibi | Kamera + radar, gerektiğinde BEV recovery | `lead_vehicle.py` |
+| Ön araç takibi | Kamera + radar, covariance + Hungarian/Mahalanobis, gerektiğinde BEV recovery | `lead_vehicle.py`, `tracking.py` |
 | Trafik kuralı | Zamansal doğrulanmış yol bağlamı | `road_context.py`, `behavior_planner.py` |
 | Gaz ve fren | IDM hız referansı + PID | `idm_speed_planner.py`, `longitudinal_pid_controller.py` |
 | Acil fren | Bağımsız yakın tehlike denetimi | `safety_supervisor.py` |
@@ -74,10 +77,12 @@ OpenCV pencere ölçüsü kamera kalibrasyonundan ayrıdır. Varsayılan
 `1500x600` gösterim, `1640x590` ve 150 derece UFLD eğitim kamerasını yalnız
 letterbox ile küçültür; sensör pozunu ve model piksel koordinatlarını oynatmaz.
 
-Trafik ışığında kamera uzak algılamayı sağlar. CARLA'nın yalnız ego aracını
-etkileyen kırmızı/turuncu durumu güvenlik yedeğidir; mevcutsa trafik ışığının
-stop waypoint mesafesi kullanılır. Böylece görüntü kutusu kaçırılsa bile
-etkileyen kırmızı ışık kontrol zincirinde durma engeline dönüşür.
+Trafik ışığında normal kontrol kaynağı kameradır. Varsayılan
+`TRAFFIC_LIGHT_ORACLE_MODE=validation` ayarında CARLA'nın etkileyen ışık rengi
+ve stop waypoint'i yalnız `validation/oracle.py` içinde başarı ölçümü üretir;
+kontrol sözlüğüne girmez. Simülasyon güvenlik yedeği ancak açıkça
+`fallback` seçildiğinde eklenir. Yeşilde duran araç ayrıca ön/arka köşe
+radarlarıyla çatışma bölgesi birkaç taze kare temiz görülmeden kalkmaz.
 
 ## Nerede değişiklik yapılır?
 
@@ -85,9 +90,13 @@ etkileyen kırmızı ışık kontrol zincirinde durma engeline dönüşür.
 |---|---|
 | Ortam değişkeni veya varsayılan değer | `carla_app/config.py` |
 | Sensör konumu/FOV/çözünürlük | `carla_app/sensors/layout.py` |
+| GNSS/IMU/odometri lokalizasyonu | `carla_app/localization/` |
+| Oracle karşılaştırması | `carla_app/validation/oracle.py` |
 | YOLO veya UFLD algılama | `carla_app/perception/` |
 | Trafik ışığı, tabela veya yaya kararı | `road_context.py`, `behavior_planner.py` |
-| Ön araç mesafesi ve radar eşleştirme | `lead_vehicle.py` |
+| Kavşak ve çapraz trafik gözetimi | `intersection_guard.py` |
+| Ön araç mesafesi ve radar eşleştirme | `lead_vehicle.py`, `tracking.py` |
+| Ölçüm yaşı/covariance kontrol zarfı | `uncertainty.py` |
 | Direksiyon davranışı | `pure_pursuit_controller.py`, `pure_pursuit_mpc_controller.py` |
 | Hız, gaz veya fren | `speed_planner.py`, `idm_speed_planner.py`, `longitudinal_pid_controller.py` |
 | OpenCV/BEV çizimi | `carla_app/visualization/`, `carla_app/bev/renderer.py` |

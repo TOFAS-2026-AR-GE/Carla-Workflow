@@ -15,7 +15,8 @@ Kodda sınıflar ilişkili durumu, fonksiyonlar ise sınırlı ve açık işleri
 
 Her CARLA karesinde aşağıdaki sıra izlenir:
 
-1. `application.py` dünya karesini ilerletir ve araç durumunu okur.
+1. `application.py` dünya karesini ilerletir; GNSS, IMU ve varsa teker
+   odometrisini EKF'de birleştirip sensör tabanlı araç durumunu üretir.
 2. `sensors/manager.py` her modda 15 sensörün en güncel verisini verir.
 3. `perception/system.py` YOLO nesnelerini işler; UFLD açıksa yalnız ön
    kamerada şeritleri görselleştirme/doğrulama amacıyla çıkarır.
@@ -43,7 +44,9 @@ Her CARLA karesinde aşağıdaki sıra izlenir:
 | `main.py` | Uygulamayı başlatan tek giriş noktasıdır. |
 | `carla_app/application.py` | Açılış, ana döngü, durum çıktısı ve kapanışı yönetir. |
 | `carla_app/config.py` | `.env` ayarlarını tek yerde okur ve doğrular. |
-| `carla_app/core/` | CARLA bağlantısı, ego araç, trafik, rota ve araç durumunu yönetir. |
+| `carla_app/core/` | CARLA bağlantısı, ego araç, trafik ve rota haritasını yönetir. |
+| `carla_app/localization/` | GNSS + IMU EKF'yi ve gerçek araç teker/CAN odometri girişini yönetir. |
+| `carla_app/validation/` | CARLA ground-truth bilgisini yalnız ölçüm ve test için izole eder. |
 | `carla_app/navigation/` | Harita hedefi, en kısa rota, kalan mesafe ve varış durumunu yönetir. |
 | `carla_app/sensors/layout.py` | Sensör adlarını, konumlarını ve CARLA ayarlarını tanımlar. |
 | `carla_app/sensors/factory.py` | Tanımlanan sensörleri CARLA üzerinde oluşturur. |
@@ -705,7 +708,51 @@ Tüm başlangıç değerleri `DrivingParameters` içinde tek yerde bulunur:
 | Kamera-LiDAR çelişme eşiği | 5 m veya kamera mesafesinin %35'i |
 | Yeşilde hedef hız artışı | 1.2 m/s² |
 
+## Sensör tabanlı lokalizasyon ve oracle ayrımı
+
+Normal sürüşte `vehicle.get_transform()`, `vehicle.get_velocity()` ve
+`vehicle.get_traffic_light_state()` kontrol girdisi değildir. GNSS konumu
+OpenDRIVE georeferansı üzerinden CARLA koordinatına çevrilir; IMU ivme,
+yaw-rate ve pusula EKF'de birleştirilir. Gerçek araçta CAN/teker hızı sensör
+snapshot'ına `wheel_odometry` olarak eklendiğinde aynı filtre bunu otomatik
+kullanır. CARLA'nın yerleşik teker enkoder sensörü olmadığı için
+`get_velocity()` sahte odometri olarak kullanılmaz.
+
+```dotenv
+TRAFFIC_LIGHT_ORACLE_MODE=validation
+ENABLE_ORACLE_VALIDATION=true
+LOCALIZATION_GNSS_STD_M=1.5
+LOCALIZATION_COMPASS_STD_DEG=6.0
+LOCALIZATION_DEGRADED_AGE_S=0.25
+LOCALIZATION_STOP_AGE_S=0.60
+```
+
+- `validation`: varsayılandır; oracle yalnız konum/yön/hız hatası ve kamera ışık
+  doğruluğu raporlar, `control_connected=false` kalır.
+- `fallback`: yalnız bilinçli CARLA güvenlik deneyi için etkileyen ışık durumunu
+  davranış planlayıcısına ekler.
+- `off`: bütün oracle okumalarını kapatır.
+
+Ana lead takipçisi artık sabit Öklid/greedy yerine covariance tabanlı Kalman,
+Mahalanobis kapısı ve Hungarian global atama kullanır. Ölçüm yaşı ile mesafe
+standart sapması IDM ve AEB'ye gitmeden önce muhafazakâr mesafe zarfına çevrilir.
+Algı 0.20 saniyeden sonra hız azaltır, 0.50 saniyede normal sürüş referansını
+sıfırlar; eski lead ölçümü 0.35 saniyeden sonra normal takipte kullanılmaz.
+
+Yeşilde duran araç, köşe radarlarından gelen çapraz trafik takipleri çatışma
+bölgesinden uzaklaşmadan veya bütün köşe radarları art arda üç taze kare temiz
+göstermeden kalkmaz. Radar verisi yoksa durum `UNKNOWN` kabul edilir ve araç
+bekler; eksik sensör "yol temiz" sayılmaz.
+
 ## Doğrulama
+
+CARLA sunucusu açıkken GNSS/IMU durumuyla gerçek kontrol komutu üreten 12
+saniyelik kapalı çevrim kabul testi isteğe bağlı çalıştırılabilir. Normal
+uygulamayı kapatıp şu komutu kullanın:
+
+```bash
+RUN_CARLA_SENSOR_ACCEPTANCE=1 python -m unittest   tests/test_carla_sensor_acceptance.py -v
+```
 
 Kod değişikliğinden sonra iki komut birlikte çalıştırılmalıdır:
 

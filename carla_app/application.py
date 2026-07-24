@@ -5,6 +5,7 @@ import time
 
 from carla_app.bev import BevModule
 from carla_app.config import DrivingParameters, Settings
+from carla_app.controller.vehicle.intersection_guard import IntersectionGuard
 from carla_app.controller.vehicle.lead_vehicle import LeadVehicleTracker
 from carla_app.controller.vehicle.vehicle_controller import VehicleController
 from carla_app.core.client import CarlaSession
@@ -15,14 +16,19 @@ from carla_app.core.performance import (
 from carla_app.core.route_manager import PersistentRouteManager
 from carla_app.core.scenario import load_scenario
 from carla_app.core.spectator import update_spectator
-from carla_app.core.state import read_vehicle_state, serializable_vehicle_state
+from carla_app.core.state import (
+    read_simulator_traffic_light,
+    serializable_vehicle_state,
+)
 from carla_app.core.traffic import Traffic
 from carla_app.core.vehicle import spawn_ego_vehicle
+from carla_app.localization import LocalizationSystem
 from carla_app.navigation import NavigationSystem
 from carla_app.perception.road_context import RoadContextTracker
 from carla_app.perception.system import PerceptionSystem
 from carla_app.perception.worker import PerceptionWorker
 from carla_app.sensors.manager import SensorManager
+from carla_app.validation import OracleValidator
 from carla_app.visualization.viewer import PerceptionViewer
 
 
@@ -42,7 +48,11 @@ class CarlaApplication:
         self.worker = None
         self.viewer = None
         self.controller = None
+        self.parameters = None
+        self.localization = None
         self.lead_tracker = None
+        self.intersection_guard = None
+        self.oracle_validator = None
         self.bev_module = None
         self.road_context_tracker = None
         self.status_every_frames = 1
@@ -104,6 +114,19 @@ class CarlaApplication:
         self.sensors = SensorManager(self.settings)
         self.sensors.start(self.world, self.vehicle, self.dt)
 
+        self.parameters = DrivingParameters(self.dt)
+        self.localization = LocalizationSystem(
+            self.world.get_map(),
+            self.sensors.layout,
+            self.dt,
+            self.settings,
+        )
+        self.localization.wait_until_ready(
+            self.world,
+            self.sensors,
+            self.settings.localization_startup_timeout_frames,
+        )
+
         if self.settings.enable_bev:
             self.bev_module = BevModule(
                 self.sensors.layout,
@@ -132,11 +155,11 @@ class CarlaApplication:
         self.controller = VehicleController(
             self.dt,
             cruise_speed_kmh=self.settings.maximum_speed_kmh,
-            parameters=DrivingParameters(self.dt),
+            parameters=self.parameters,
         )
         self.road_context_tracker = RoadContextTracker(
             layout=self.sensors.layout,
-            parameters=self.controller.parameters,
+            parameters=self.parameters,
         )
 
         radar_geometry = self.sensors.layout.front_radar_geometry
@@ -146,6 +169,20 @@ class CarlaApplication:
             camera_fov_deg=self.settings.camera_fov,
             radar_height_m=radar_geometry["height_above_ground_m"],
             radar_pitch_deg=radar_geometry["pitch_deg"],
+            tracker_mahalanobis_gate=self.parameters.tracker_mahalanobis_gate,
+            tracker_process_noise=self.parameters.tracker_process_noise,
+            tracker_measurement_std_m=self.parameters.tracker_measurement_std_m,
+        )
+        self.intersection_guard = IntersectionGuard(
+            self.sensors.layout,
+            self.dt,
+            self.parameters,
+        )
+        self.oracle_validator = OracleValidator(
+            enabled=(
+                self.settings.enable_oracle_validation
+                and self.settings.traffic_light_oracle_mode != "off"
+            )
         )
 
         self.status_every_frames = max(
@@ -181,6 +218,10 @@ class CarlaApplication:
             "IDM hız referansı + PID gaz-fren + bağımsız acil fren"
         )
         print(f"[INFO] Sensör modu: {self.settings.sensor_mode}")
+        print(
+            "[INFO] Lokalizasyon: GNSS+IMU EKF | trafik ışığı oracle="
+            f"{self.settings.traffic_light_oracle_mode}"
+        )
         perception_scope = (
             "7 kamera"
             if self.settings.enable_multicamera_perception
@@ -217,12 +258,24 @@ class CarlaApplication:
     def process_frame(self, frame_id):
         """Tek dünya karesinin algılama, kontrol, kayıt ve gösterimini yapar."""
         process_started_at = time.perf_counter()
-        state = read_vehicle_state(
-            self.world,
+        sensor_snapshot = self.sensors.get_bev_snapshot(
+            frame_id,
+            max_age_frames=max(10, self.parameters.sensor_timeout_frames),
+        )
+        localization_result = self.localization.update(
+            frame_id,
+            sensor_snapshot,
+        )
+        state = self.localization.build_vehicle_state(
+            frame_id,
+            self.route_manager,
             self.vehicle,
-            route_manager=self.route_manager,
         )
         state = self.sensors.enrich_vehicle_state(state, frame_id)
+        if self.settings.traffic_light_oracle_mode == "fallback":
+            state["simulator_traffic_light"] = read_simulator_traffic_light(
+                self.vehicle
+            )
         navigation_state = self.navigation.update(
             state["location"],
             state["speed_mps"],
@@ -263,6 +316,12 @@ class CarlaApplication:
             lidar_entry=lidar_entry,
             state=state,
         )
+        road_context["intersection"] = self.intersection_guard.update(
+            current_frame_id=frame_id,
+            state=state,
+            sensor_snapshot=sensor_snapshot,
+            road_context=road_context,
+        )
 
         lead_vehicle = self.lead_tracker.update(
             current_frame_id=frame_id,
@@ -296,10 +355,16 @@ class CarlaApplication:
             road_context=road_context,
             navigation_state=navigation_state,
         )
+        control_info["localization"] = localization_result
         if bev_validation is not None:
             control_info["bev_validation"] = bev_validation
         if bev_contribution is not None:
             control_info["bev_contribution"] = bev_contribution
+        control_info["oracle_validation"] = self.oracle_validator.observe(
+            self.vehicle,
+            state,
+            road_context,
+        )
         self.vehicle.apply_control(control)
         update_spectator(self.world, self.vehicle)
 
@@ -363,7 +428,6 @@ class CarlaApplication:
 
         bev_image = None
         if self.bev_module is not None:
-            sensor_snapshot = self.sensors.get_bev_snapshot(frame_id)
             self.bev_module.submit(
                 sensor_snapshot=sensor_snapshot,
                 perception_result=perception_result,
@@ -479,6 +543,13 @@ class CarlaApplication:
         )
         if self.performance is not None:
             message += self.performance.summary()
+        localization = control_info.get("localization", {})
+        if localization.get("available"):
+            message += (
+                f" loc={localization.get('status', 'UNKNOWN')}"
+                f" loc_std={float(localization.get('position_std_m', 0.0)):.2f}m"
+                f" loc_age={float(localization.get('sensor_age_s', 0.0)):.2f}s"
+            )
         lane_detection = perception_result.get("lane_detection", {})
         if lane_detection.get("available"):
             message += (
@@ -546,6 +617,12 @@ class CarlaApplication:
             )
 
         road_context = road_context or {}
+        intersection = road_context.get("intersection", {})
+        if intersection.get("active"):
+            message += (
+                f" intersection={intersection.get('status', 'UNKNOWN')}"
+                f" cross_tracks={int(intersection.get('track_count', 0))}"
+            )
         light = road_context.get("lead_traffic_light")
         primary = control_info.get("behavior", {}).get("primary_detection")
         if isinstance(primary, dict) and primary.get("state_source") == (

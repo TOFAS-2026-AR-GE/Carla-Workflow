@@ -57,6 +57,25 @@ class DrivingParameters:
         )
         self.traffic_light_maximum_distance_m = 60.0
 
+        # Ölçüm yaşı ve covariance doğrudan kontrol zarfına taşınır.
+        self.perception_degraded_age_s = 0.20
+        self.perception_stop_age_s = 0.50
+        self.perception_degraded_speed_mps = 15.0 / 3.6
+        self.lead_measurement_hard_age_s = 0.35
+        self.control_uncertainty_sigma = 2.0
+        self.localization_degraded_speed_mps = 10.0 / 3.6
+        self.localization_hard_stop_age_s = 0.60
+
+        # Yeşilde kalkıştan önce köşe radarlarıyla çatışma bölgesi gözetimi.
+        self.intersection_monitor_distance_m = 35.0
+        self.intersection_radar_maximum_age_s = 0.20
+        self.intersection_zone_start_m = 1.5
+        self.intersection_zone_end_m = 18.0
+        self.intersection_zone_half_width_m = 7.0
+        self.intersection_prediction_horizon_s = 4.0
+        self.intersection_clear_confirmation_frames = 3
+        self.intersection_hold_distance_m = 2.0
+
         # Boylamsal sürüş ve güvenli duruş değerleri.
         self.comfortable_deceleration_mps2 = 2.0
         self.maximum_normal_deceleration_mps2 = 4.0
@@ -80,6 +99,11 @@ class DrivingParameters:
         self.lidar_minimum_points = 3
         self.camera_lidar_conflict_m = 5.0
         self.camera_lidar_conflict_ratio = 0.35
+
+        # Ana lead takipçisinde covariance tabanlı atama.
+        self.tracker_mahalanobis_gate = 9.21
+        self.tracker_process_noise = 2.0
+        self.tracker_measurement_std_m = 1.5
 
         # Kontrol komutu ve düşük güven modu sınırları.
         self.degraded_speed_mps = 10.0 / 3.6
@@ -320,6 +344,56 @@ class Settings:
         # radar, LiDAR, GNSS ve IMU kanıtıyla görselsiz devam eder.
         self.enable_bev = True
         self.enable_data_recording = self.sensor_mode == "record"
+
+        self.traffic_light_oracle_mode = os.getenv(
+            "TRAFFIC_LIGHT_ORACLE_MODE",
+            "validation",
+        ).strip().lower()
+        if self.traffic_light_oracle_mode not in {
+            "off",
+            "validation",
+            "fallback",
+        }:
+            raise ValueError(
+                "TRAFFIC_LIGHT_ORACLE_MODE off, validation veya fallback olmali."
+            )
+        self.enable_oracle_validation = _boolean(
+            "ENABLE_ORACLE_VALIDATION",
+            True,
+        )
+        self.localization_startup_timeout_frames = max(
+            5,
+            int(os.getenv("LOCALIZATION_STARTUP_TIMEOUT_FRAMES", "40")),
+        )
+        self.localization_gnss_std_m = max(
+            0.10,
+            float(os.getenv("LOCALIZATION_GNSS_STD_M", "1.5")),
+        )
+        self.localization_compass_std_deg = max(
+            0.50,
+            float(os.getenv("LOCALIZATION_COMPASS_STD_DEG", "6.0")),
+        )
+        self.localization_odometry_std_mps = max(
+            0.05,
+            float(os.getenv("LOCALIZATION_ODOMETRY_STD_MPS", "0.45")),
+        )
+        self.localization_degraded_age_s = max(
+            0.05,
+            float(os.getenv("LOCALIZATION_DEGRADED_AGE_S", "0.25")),
+        )
+        self.localization_stop_age_s = max(
+            self.localization_degraded_age_s,
+            float(os.getenv("LOCALIZATION_STOP_AGE_S", "0.60")),
+        )
+        self.localization_max_position_std_m = max(
+            0.25,
+            float(os.getenv("LOCALIZATION_MAX_POSITION_STD_M", "3.0")),
+        )
+        self.localization_max_yaw_std_deg = max(
+            1.0,
+            float(os.getenv("LOCALIZATION_MAX_YAW_STD_DEG", "12.0")),
+        )
+
         self.show_bev_panel = _boolean(
             "SHOW_BEV_PANEL",
             self.sensor_mode == "bev",

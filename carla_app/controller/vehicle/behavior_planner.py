@@ -3,6 +3,9 @@
 import math
 
 from carla_app.config import DrivingParameters
+from carla_app.controller.vehicle.intersection_guard import (
+    should_hold_for_intersection,
+)
 
 
 def clamp(value, minimum, maximum):
@@ -101,6 +104,28 @@ class BehaviorPlanner:
                     light_decision["target_speed_mps"],
                 )
                 stop_obstacle = light_decision["stop_obstacle"]
+
+        intersection_decision = self.evaluate_intersection_release(
+            light,
+            context,
+            ego_speed,
+        )
+        if (
+            intersection_decision["applies"]
+            and pedestrian_risk not in {"PREPARE_STOP", "EMERGENCY"}
+        ):
+            mode = intersection_decision["mode"]
+            reason = intersection_decision["reason"]
+            maximum_speed = min(
+                maximum_speed,
+                intersection_decision["target_speed_mps"],
+            )
+            constraints["intersection_speed_mps"] = intersection_decision[
+                "target_speed_mps"
+            ]
+            stop_obstacle = intersection_decision["stop_obstacle"]
+            brake_urgency = intersection_decision["brake_urgency"]
+            primary_detection = intersection_decision["primary_detection"]
 
         perception_age = int(context.get("perception_age_frames", 0) or 0)
         fault_age = int(context.get("sensor_fault_age_frames", 0) or 0)
@@ -413,6 +438,40 @@ class BehaviorPlanner:
         light["latched_without_detection"] = True
         light["state_source"] = "latched_camera_red"
         return light
+
+    def evaluate_intersection_release(self, light, context, ego_speed):
+        """Yeşilde duran aracı yalnız çatışma bölgesi temizse serbest bırakır."""
+        no_decision = {
+            "applies": False,
+            "mode": "CRUISE",
+            "reason": "intersection_guard_not_required",
+            "target_speed_mps": self.parameters.maximum_target_speed_mps,
+            "stop_obstacle": None,
+            "brake_urgency": "NONE",
+            "primary_detection": None,
+        }
+        intersection = context.get("intersection", {}) or {}
+        if not should_hold_for_intersection(light, intersection, ego_speed):
+            return no_decision
+
+        conflict = intersection.get("conflict")
+        hold_distance = float(
+            getattr(self.parameters, "intersection_hold_distance_m", 2.0)
+        )
+        return {
+            "applies": True,
+            "mode": "WAIT_FOR_INTERSECTION_CLEAR",
+            "reason": "cross_traffic_or_unverified_conflict_zone",
+            "target_speed_mps": 0.0,
+            "stop_obstacle": self.make_stop_obstacle(
+                hold_distance,
+                ego_speed,
+                "intersection_conflict",
+                conflict,
+            ),
+            "brake_urgency": "NORMAL",
+            "primary_detection": conflict or intersection,
+        }
 
     def no_light_decision(self):
         return {

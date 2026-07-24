@@ -1,0 +1,93 @@
+1. Araç Kontrol Sisteminin Geliştirilmesi
+
+Çalışmanın ilk aşamasında, temel kontrol algoritmaları kullanılarak CARLA ortamındaki ego aracın hareket etmesi sağlandı. Daha sonra sistemin geliştirilebilmesi amacıyla farklı kontrol yöntemleri araştırıldı.
+
+Hız kontrolü için dayanıklı, anlaşılır ve uygulanması kolay bir yöntem olan PID kontrolcü tercih edildi. Daha yüksek hızlarda ve daha karmaşık sürüş koşullarında ise MPC yönteminin kullanılabileceği değerlendirildi.
+
+Yanal kontrol için Pure Pursuit yöntemi seçildi. Stanley kontrol yöntemi de test edildi; ancak bazı deneylerde yeterince kararlı sonuç vermediği ve aracın sık sık yalpa hareketi yaptığı gözlemlendi. Gerekli simülasyonlar, nuScenes veri setinden elde edilen verilerden de yararlanılarak gerçekleştirildi.
+
+Kontrolcüler seçildikten sonra sürüş konforunu ve yumuşaklığı artırmak amacıyla kontrolcü parametreleri ayarlandı. Digital Twin ve MPC-LPV yöntemleri, ileride daha ayrıntılı olarak incelenmek üzere çalışma kapsamına alındı.
+
+2. Durum Yönetimi ve Güvenlik Mekanizmaları
+
+Trafik ışıkları, diğer araçlar, engeller ve kaldırımlar gibi çevresel durumların yönetilmesi için bir Sonlu Durum Makinesi (FSM) oluşturuldu. FSM tarafından üretilen durumlara göre araca durma, hareket etme, yavaşlama ve yeniden hızlanma komutları uygulandı.
+
+Sert duruş veya ani kalkış gerektiren koşullarda acil durum mekanizması devreye alındı. Normal sürüş koşullarında ise aracın daha yumuşak ve konforlu hareket etmesi için kontrolcü parametreleri düzenlendi. Örneğin öndeki araç yavaşça durduğunda, ego aracın da ani fren yapmak yerine kontrollü biçimde yavaşlaması hedeflendi.
+
+Kontrol algoritmalarının gerçek bir araç sistemine nasıl uygulanacağı konusu, güç elektroniği ve aktüatör kontrolü kapsamında ayrıca incelenebilir.
+
+3. Ekstrem Koşullar ve Sensör Füzyonu
+
+Farklı hava ve yol koşullarında sistemin kararlılığını koruyabilmesi için çeşitli yöntemler araştırıldı. Tek bir sensörün her koşulda yeterli olmayacağı değerlendirilerek sensör füzyonu yaklaşımı benimsendi.
+
+Örnek olarak:
+
+Karanlık koşullarda radar verisine daha fazla güvenilebilir.
+
+Aydınlık ve açık havada kamera verisi daha etkili olabilir.
+
+Sisli koşullarda LiDAR veya diğer sensörlerin katkısı artırılabilir.
+
+Sensörlerden gelen ölçümlerdeki gürültüyü azaltmak ve daha güvenilir bir ortak sonuç üretmek için Kalman filtresi kullanıldı. Sensörlerin hata oranlarına göre Kalman kazancı değiştiğinden, daha güvenilir sensörün nihai tahmin üzerindeki etkisi artırılabilir.
+
+4. Yol Sürtünmesinin Tahmin Edilmesi
+
+Aracın yol üzerindeki davranışını doğrudan etkileyen sürtünme katsayısının tahmin edilmesi için araştırmalar yapıldı. Bu problemde de Kalman filtresinden yararlanılarak yakın bir tahmin elde edilmesi amaçlandı.
+
+Sürtünme katsayısının gerçek değeri her zaman doğrudan bulunamayabilir. Bunun yerine aşağıdaki kaynaklardan gelen tahminler birleştirilebilir:
+
+Kamera verisi
+
+Araç dinamiği verileri
+
+Hava durumu bilgisi
+
+V2X veya harita verileri
+
+Tekerlek hızı ve kayma bilgisi
+
+Sensörlere duyulan güven, mevcut koşullara göre değiştirilmelidir. Örneğin hava açıksa kamera verisine daha fazla ağırlık verilebilir.
+
+Daha basit bir yaklaşım olarak, araçta kayma algılandığında tekerleklere uygulanan tork ve fren kuvvetleri düzenlenebilir. Önden çekişli bir araçta çekiş kaybı oluşması durumunda tork azaltılarak veya belirli tekerleklere fren uygulanarak aracın yeniden kararlı hâle gelmesi sağlanabilir. Bu yaklaşımın ayrıntılı olarak araştırılması planlanmaktadır.
+
+5. Şerit Algılama Çalışmaları
+
+Şerit algılama ve şerit segmentasyonu konusu araştırıldı. Bu amaçla yeni nesil ve araştırma odaklı bir yaklaşım olan PTLD yöntemi kullanıldı.
+
+PTLD, kamera görüntüsündeki şeritleri nokta dizileri biçiminde tahmin eden, diffusion tabanlı bir şerit algılama sistemidir. Şerit çizgileri silik olduğunda, kısmen görünmediğinde veya başka bir araç tarafından kapatıldığında da şeritlerin konumunu tahmin etmeyi amaçlar.
+
+Model CARLA sistemine başarıyla entegre edildi. Entegrasyon ve geliştirme çalışmaları devam etmektedir. Sistem düz yollarda daha başarılı sonuç verirken virajlı yollardaki performansın geliştirilmesi gerekmektedir. Modelin eğitiminde gerçek dünya verilerinden yararlanılmıştır.
+
+6. LoRa Tabanlı V2I Güvenliği
+
+V2I iletişimi yaygın ve faydalı olmasına rağmen güvenlik açısından önemli riskler taşır. Kötü niyetli bir kişi, araç ile yol altyapısı arasında iletilen veriyi değiştirerek yanlış kararlar alınmasına ve ciddi kazalara neden olabilir.
+
+Bu nedenle LoRa tabanlı, fiziksel katman özelliklerinden yararlanan yeni bir güvenlik ve anahtar üretme sistemi araştırıldı. Bu yaklaşım, geleneksel merkezi anahtar dağıtımından farklıdır. Kriptografik anahtar doğrudan haberleşen cihazların ölçümlerinden üretilir.
+
+Araç ve RSU (Roadside Unit) karşılıklı olarak sinyaller gönderir. Radyo kanalının karşılıklılığı ilkesine göre araç ve RSU, birbirlerine yakın zamanlarda aynı ortam üzerinden haberleştikleri için benzer kanal özellikleri ölçer. İki tarafın karşılaştığı ağaç, bina ve alışveriş merkezi gibi çevresel engeller aynıdır. Farklı bir konumda bulunan saldırgan ise aynı kanal verisini elde edemez.
+
+6.1. Kullanılan Donanım
+
+Araç tarafında LoRa modülü
+
+RSU tarafında Raspberry Pi 4
+
+RAK2245 LoRa ağ geçidi
+
+Yaklaşık 868 MHz - 920 MHz çalışma bandı
+
+6.2. Anahtar Üretim Aşamaları
+
+Araç ve RSU tarafından RSSI değerleri ölçülür.
+
+Ölçümlerdeki gürültü ve bozulmalar Kalman filtresi ile azaltılır.
+
+Düzeltilmiş sinyal değerleri, uyarlamalı çok bitli niceleme yöntemiyle bitlere dönüştürülür.
+
+Bit dizileri Gray code kullanılarak düzenlenir.
+
+İki tarafta oluşan küçük bit farklılıkları BCH hata düzeltme kodu ile giderilir.
+
+Universal Hash ve AES-128 kullanılarak anahtarın entropisi artırılır ve 128 bitlik güvenli bir anahtar üretilir.
+
+Bu yapı ileride 5G, C-V2X veya özel bir MAC katmanı ile hızlandırılabilir ve daha geniş bir V2I sistemine entegre edilebilir.

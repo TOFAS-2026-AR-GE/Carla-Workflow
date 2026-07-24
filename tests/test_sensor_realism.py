@@ -25,6 +25,7 @@ class Parameters:
     intersection_prediction_horizon_s = 4.0
     control_uncertainty_sigma = 2.0
     lead_measurement_hard_age_s = 0.35
+    emergency_measurement_hard_age_s = 0.20
     localization_degraded_speed_mps = 10.0 / 3.6
     localization_hard_stop_age_s = 0.60
     perception_degraded_age_s = 0.20
@@ -147,6 +148,58 @@ class UncertaintyPolicyTests(unittest.TestCase):
         self.assertIsNone(adjusted)
         self.assertTrue(info["lead_adjusted"] is False)
 
+    def test_fresh_lead_keeps_measured_relative_speed(self):
+        manager = ControlUncertaintyManager(0.05, Parameters())
+        state = {
+            "frame_id": 20,
+            "speed_mps": 10.0,
+            "localization": {"status": "NOMINAL", "sensor_age_s": 0.0},
+        }
+        lead = {
+            "distance_m": 20.0,
+            "relative_speed_mps": -1.0,
+            "source": "camera_radar_track",
+            "measurement_frame_id": 20,
+        }
+        adjusted, _, _ = manager.apply(
+            state,
+            lead,
+            None,
+            {"perception_age_frames": 0},
+        )
+        self.assertIsNotNone(adjusted)
+        self.assertAlmostEqual(adjusted["relative_speed_mps"], -1.0)
+        self.assertAlmostEqual(
+            adjusted["relative_speed_uncertainty_mps"],
+            0.0,
+        )
+
+    def test_relative_speed_margin_grows_with_measurement_age(self):
+        manager = ControlUncertaintyManager(0.05, Parameters())
+        state = {
+            "frame_id": 20,
+            "speed_mps": 10.0,
+            "localization": {"status": "NOMINAL", "sensor_age_s": 0.0},
+        }
+        lead = {
+            "distance_m": 20.0,
+            "relative_speed_mps": -1.0,
+            "source": "camera_radar_track",
+            "measurement_frame_id": 16,
+        }
+        adjusted, _, _ = manager.apply(
+            state,
+            lead,
+            None,
+            {"perception_age_frames": 0},
+        )
+        self.assertIsNotNone(adjusted)
+        self.assertLess(adjusted["relative_speed_mps"], -1.0)
+        self.assertGreater(
+            adjusted["relative_speed_uncertainty_mps"],
+            0.0,
+        )
+
     def test_legacy_state_without_localization_keeps_existing_tests_compatible(self):
         manager = ControlUncertaintyManager(0.05, Parameters())
         _, _, info = manager.apply(
@@ -234,6 +287,19 @@ class IntersectionGuardTests(unittest.TestCase):
         result = guard.update(10, self.state(), {}, self.context())
         self.assertEqual(result["status"], "UNKNOWN")
         self.assertFalse(result["clear"])
+
+    def test_partial_corner_radar_coverage_is_unknown(self):
+        guard = self.build_guard()
+        snapshot = {
+            "radar_front_left": {"frame_id": 10, "data": []},
+        }
+        result = guard.update(10, self.state(), snapshot, self.context())
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertFalse(result["clear"])
+        self.assertEqual(result["fresh_radar_count"], 1)
+        self.assertEqual(result["required_radar_count"], 2)
+        self.assertFalse(result["coverage_complete"])
+        self.assertEqual(result["clear_hits"], 0)
 
     def test_repeated_radar_frame_is_not_counted_twice(self):
         guard = self.build_guard()

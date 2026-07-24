@@ -85,22 +85,43 @@ class ControlUncertaintyManager:
         adjusted["distance_std_m"] = distance_std
         adjusted["uncertainty_margin_m"] = motion_margin + uncertainty_margin
 
+        if normal_path:
+            hard_age = float(
+                getattr(
+                    self.parameters,
+                    "lead_measurement_hard_age_s",
+                    0.35,
+                )
+            )
+        else:
+            hard_age = float(
+                getattr(
+                    self.parameters,
+                    "emergency_measurement_hard_age_s",
+                    0.20,
+                )
+            )
+        hard_age = max(self.dt, hard_age)
+
         try:
             relative_speed = float(obstacle.get("relative_speed_mps", 0.0))
         except (TypeError, ValueError):
             relative_speed = 0.0
-        adjusted["relative_speed_mps"] = relative_speed - min(
+
+        # Konum belirsizliğini doğrudan hıza bölmek taze ölçümde bile yapay bir
+        # -3 m/s yaklaşma üretirdi. Hız payı artık ölçüm yaşıyla sıfırdan büyür.
+        age_ratio = clamp(age_s / hard_age, 0.0, 1.0)
+        relative_speed_uncertainty = min(
             3.0,
-            distance_std / max(self.dt, age_s + self.dt),
+            age_ratio * distance_std / hard_age,
+        )
+        adjusted["relative_speed_mps"] = (
+            relative_speed - relative_speed_uncertainty
+        )
+        adjusted["relative_speed_uncertainty_mps"] = (
+            relative_speed_uncertainty
         )
 
-        hard_age = float(
-            getattr(
-                self.parameters,
-                "lead_measurement_hard_age_s",
-                0.35 if normal_path else 0.20,
-            )
-        )
         adjusted["too_old_for_control"] = age_s > hard_age
         if normal_path and adjusted["too_old_for_control"]:
             return None

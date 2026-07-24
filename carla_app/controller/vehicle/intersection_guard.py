@@ -50,13 +50,25 @@ class IntersectionGuard:
                 "fresh_radar_count": 0,
             }
 
-        measurements, fresh_radar_count, newest_frame = self.collect_measurements(
+        (
+            measurements,
+            fresh_radar_count,
+            radar_frame_signature,
+        ) = self.collect_measurements(
             current_frame_id,
             state,
             sensor_snapshot or {},
         )
-        measurement_key = (newest_frame, len(measurements))
-        new_measurement_evidence = measurement_key != self.last_measurement_key
+        required_radar_count = len(self.radar_specs)
+        coverage_complete = (
+            required_radar_count > 0
+            and fresh_radar_count == required_radar_count
+        )
+        measurement_key = radar_frame_signature
+        new_measurement_evidence = (
+            bool(measurement_key)
+            and measurement_key != self.last_measurement_key
+        )
         if new_measurement_evidence:
             tracks = self.tracker.step(self.dt, measurements)
             self.last_measurement_key = measurement_key
@@ -64,7 +76,10 @@ class IntersectionGuard:
             tracks = self.tracker.step(self.dt, [])
 
         conflict = self.find_conflict(tracks, state)
-        if fresh_radar_count == 0:
+        if not coverage_complete:
+            # Tek bir kör köşe bile çatışma bölgesinin tamamının temiz olduğunu
+            # kanıtlamaz. Kısmi radar paketi hedef takibine katkı verebilir fakat
+            # yeşilde kalkış izni üretemez.
             status = "UNKNOWN"
             clear = False
             self.clear_hits = 0
@@ -93,6 +108,8 @@ class IntersectionGuard:
             "clear": bool(clear),
             "conflict": conflict,
             "fresh_radar_count": int(fresh_radar_count),
+            "required_radar_count": int(required_radar_count),
+            "coverage_complete": bool(coverage_complete),
             "measurement_count": len(measurements),
             "track_count": len(tracks),
             "clear_hits": int(self.clear_hits),
@@ -117,7 +134,7 @@ class IntersectionGuard:
     def collect_measurements(self, current_frame_id, state, sensor_snapshot):
         measurements = []
         fresh_radar_count = 0
-        newest_frame = None
+        radar_frame_signature = []
         maximum_age_frames = max(
             1,
             int(
@@ -148,8 +165,7 @@ class IntersectionGuard:
             if age_frames < 0 or age_frames > maximum_age_frames:
                 continue
             fresh_radar_count += 1
-            if newest_frame is None or int(radar_frame_id) > newest_frame:
-                newest_frame = int(radar_frame_id)
+            radar_frame_signature.append((spec.name, int(radar_frame_id)))
 
             sensor_x = float(spec.transform.location.x)
             sensor_y = float(spec.transform.location.y)
@@ -168,7 +184,11 @@ class IntersectionGuard:
                 if measurement is not None:
                     measurements.append(measurement)
 
-        return measurements, fresh_radar_count, newest_frame
+        return (
+            measurements,
+            fresh_radar_count,
+            tuple(sorted(radar_frame_signature)),
+        )
 
     def cluster_points(self, radar_points):
         prepared = []

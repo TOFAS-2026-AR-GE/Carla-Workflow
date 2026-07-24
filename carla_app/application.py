@@ -550,6 +550,18 @@ class CarlaApplication:
                 f" loc_std={float(localization.get('position_std_m', 0.0)):.2f}m"
                 f" loc_age={float(localization.get('sensor_age_s', 0.0)):.2f}s"
             )
+        oracle_validation = control_info.get("oracle_validation", {})
+        if oracle_validation.get("enabled"):
+            message += (
+                f" oracle_pos={float(oracle_validation.get('position_error_m', 0.0)):.2f}m"
+                f" oracle_yaw={float(oracle_validation.get('heading_error_deg', 0.0)):.1f}deg"
+                f" oracle_speed={float(oracle_validation.get('speed_error_mps', 0.0)):.2f}m/s"
+            )
+            light_accuracy = oracle_validation.get("traffic_light", {}).get(
+                "accuracy"
+            )
+            if light_accuracy is not None:
+                message += f" light_acc={100.0 * float(light_accuracy):.1f}%"
         lane_detection = perception_result.get("lane_detection", {})
         if lane_detection.get("available"):
             message += (

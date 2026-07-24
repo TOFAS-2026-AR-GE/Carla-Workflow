@@ -62,6 +62,7 @@ class DrivingParameters:
         self.perception_stop_age_s = 0.50
         self.perception_degraded_speed_mps = 15.0 / 3.6
         self.lead_measurement_hard_age_s = 0.35
+        self.emergency_measurement_hard_age_s = 0.20
         self.control_uncertainty_sigma = 2.0
         self.localization_degraded_speed_mps = 10.0 / 3.6
         self.localization_hard_stop_age_s = 0.60

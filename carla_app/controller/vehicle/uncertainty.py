@@ -46,44 +46,18 @@ class ControlUncertaintyManager:
     ):
         if obstacle is None:
             return None
-        adjusted = dict(obstacle)
+
         measurement_frame_id = obstacle.get("measurement_frame_id")
         age_frames = 0
         if measurement_frame_id is not None:
-            age_frames = max(0, current_frame_id - int(measurement_frame_id))
+            try:
+                age_frames = max(
+                    0,
+                    int(current_frame_id) - int(measurement_frame_id),
+                )
+            except (TypeError, ValueError):
+                age_frames = 0
         age_s = age_frames * self.dt
-
-        source = str(obstacle.get("source", "unknown"))
-        default_std = 0.75
-        if "camera" in source:
-            default_std = 1.50
-        elif "radar" in source:
-            default_std = 0.65
-        try:
-            distance_std = float(obstacle.get("distance_std_m", default_std))
-        except (TypeError, ValueError):
-            distance_std = default_std
-        distance_std = max(0.20, distance_std + 0.80 * age_s)
-
-        try:
-            distance = float(obstacle["distance_m"])
-        except (KeyError, TypeError, ValueError):
-            return adjusted
-        sigma_multiplier = float(
-            getattr(self.parameters, "control_uncertainty_sigma", 2.0)
-        )
-        motion_margin = ego_speed * age_s
-        uncertainty_margin = sigma_multiplier * distance_std
-        conservative_distance = max(
-            0.0,
-            distance - motion_margin - uncertainty_margin,
-        )
-        adjusted["raw_distance_m"] = distance
-        adjusted["distance_m"] = conservative_distance
-        adjusted["measurement_age_frames"] = age_frames
-        adjusted["measurement_age_s"] = age_s
-        adjusted["distance_std_m"] = distance_std
-        adjusted["uncertainty_margin_m"] = motion_margin + uncertainty_margin
 
         if normal_path:
             hard_age = float(
@@ -102,29 +76,90 @@ class ControlUncertaintyManager:
                 )
             )
         hard_age = max(self.dt, hard_age)
+        if age_s > hard_age:
+            # Süresi dolmuş bir ölçüm ne normal takipte ne de AEB yolunda
+            # yeniden kullanılır. Yeni sensör kanıtı gelene kadar üst katmandaki
+            # algı/lokalizasyon yaş politikası aracı güvenli hıza indirir.
+            return None
+
+        try:
+            distance = float(obstacle["distance_m"])
+        except (KeyError, TypeError, ValueError):
+            return obstacle
+        if not math.isfinite(distance):
+            return obstacle
+
+        source = str(obstacle.get("source", "unknown"))
+        default_std = 0.75
+        if "camera" in source:
+            default_std = 1.50
+        elif "radar" in source:
+            default_std = 0.65
+
+        explicit_distance_std = "distance_std_m" in obstacle
+        try:
+            base_distance_std = float(
+                obstacle.get("distance_std_m", default_std)
+            )
+        except (TypeError, ValueError):
+            base_distance_std = default_std
+            explicit_distance_std = False
+        if not math.isfinite(base_distance_std):
+            base_distance_std = default_std
+            explicit_distance_std = False
+        distance_std = max(0.20, base_distance_std + 0.80 * age_s)
+
+        # Sigma mesafe payı yalnız tracker/sensör açıkça covariance sağladığında
+        # uygulanır. Kaynağı bilinmeyen taze eski-uyumlu girdiye varsayımsal
+        # standart sapma eklemek 7.1 m'yi sebepsiz 4.1 m'ye düşürüyordu.
+        sigma_multiplier = float(
+            getattr(self.parameters, "control_uncertainty_sigma", 2.0)
+        )
+        sigma_margin = (
+            max(0.0, sigma_multiplier) * distance_std
+            if explicit_distance_std
+            else 0.0
+        )
+        motion_margin = max(0.0, float(ego_speed)) * age_s
+        total_margin = motion_margin + sigma_margin
 
         try:
             relative_speed = float(obstacle.get("relative_speed_mps", 0.0))
         except (TypeError, ValueError):
             relative_speed = 0.0
+        if not math.isfinite(relative_speed):
+            relative_speed = 0.0
 
-        # Konum belirsizliğini doğrudan hıza bölmek taze ölçümde bile yapay bir
-        # -3 m/s yaklaşma üretirdi. Hız payı artık ölçüm yaşıyla sıfırdan büyür.
         age_ratio = clamp(age_s / hard_age, 0.0, 1.0)
         relative_speed_uncertainty = min(
             3.0,
             age_ratio * distance_std / hard_age,
         )
+
+        # Taze ve covariance bilgisi taşımayan girdiyi aynen döndürmek eski API
+        # sözleşmesini, nesne kimliğini ve ham sensör teşhisini korur.
+        if (
+            age_frames == 0
+            and not explicit_distance_std
+            and relative_speed_uncertainty == 0.0
+        ):
+            return obstacle
+
+        adjusted = dict(obstacle)
+        adjusted["raw_distance_m"] = distance
+        adjusted["distance_m"] = max(0.0, distance - total_margin)
+        adjusted["measurement_age_frames"] = age_frames
+        adjusted["measurement_age_s"] = age_s
+        adjusted["distance_std_m"] = distance_std
+        adjusted["uncertainty_margin_m"] = total_margin
         adjusted["relative_speed_mps"] = (
             relative_speed - relative_speed_uncertainty
         )
         adjusted["relative_speed_uncertainty_mps"] = (
             relative_speed_uncertainty
         )
-
-        adjusted["too_old_for_control"] = age_s > hard_age
-        if normal_path and adjusted["too_old_for_control"]:
-            return None
+        adjusted["too_old_for_control"] = False
+        adjusted["distance_uncertainty_explicit"] = explicit_distance_std
         return adjusted
 
     def speed_cap(self, state, road_context):

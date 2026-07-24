@@ -148,6 +148,27 @@ class UncertaintyPolicyTests(unittest.TestCase):
         self.assertIsNone(adjusted)
         self.assertTrue(info["lead_adjusted"] is False)
 
+    def test_old_emergency_obstacle_is_removed_from_aeb(self):
+        manager = ControlUncertaintyManager(0.05, Parameters())
+        state = {
+            "frame_id": 20,
+            "speed_mps": 10.0,
+            "localization": {"status": "NOMINAL", "sensor_age_s": 0.0},
+        }
+        emergency = {
+            "distance_m": 6.0,
+            "relative_speed_mps": -8.0,
+            "source": "radar_emergency",
+            "measurement_frame_id": 15,
+        }
+        _, adjusted, _ = manager.apply(
+            state,
+            None,
+            emergency,
+            {"perception_age_frames": 0},
+        )
+        self.assertIsNone(adjusted)
+
     def test_fresh_lead_keeps_measured_relative_speed(self):
         manager = ControlUncertaintyManager(0.05, Parameters())
         state = {
@@ -167,12 +188,35 @@ class UncertaintyPolicyTests(unittest.TestCase):
             None,
             {"perception_age_frames": 0},
         )
-        self.assertIsNotNone(adjusted)
+        self.assertIs(adjusted, lead)
+        self.assertAlmostEqual(adjusted["distance_m"], 20.0)
         self.assertAlmostEqual(adjusted["relative_speed_mps"], -1.0)
-        self.assertAlmostEqual(
-            adjusted["relative_speed_uncertainty_mps"],
-            0.0,
+        self.assertNotIn("relative_speed_uncertainty_mps", adjusted)
+
+    def test_explicit_distance_uncertainty_reduces_control_distance(self):
+        manager = ControlUncertaintyManager(0.05, Parameters())
+        state = {
+            "frame_id": 20,
+            "speed_mps": 10.0,
+            "localization": {"status": "NOMINAL", "sensor_age_s": 0.0},
+        }
+        lead = {
+            "distance_m": 20.0,
+            "distance_std_m": 0.5,
+            "relative_speed_mps": -1.0,
+            "source": "camera_radar_track",
+            "measurement_frame_id": 20,
+        }
+        adjusted, _, _ = manager.apply(
+            state,
+            lead,
+            None,
+            {"perception_age_frames": 0},
         )
+        self.assertIsNot(adjusted, lead)
+        self.assertAlmostEqual(adjusted["raw_distance_m"], 20.0)
+        self.assertAlmostEqual(adjusted["distance_m"], 19.0)
+        self.assertTrue(adjusted["distance_uncertainty_explicit"])
 
     def test_relative_speed_margin_grows_with_measurement_age(self):
         manager = ControlUncertaintyManager(0.05, Parameters())
@@ -194,6 +238,9 @@ class UncertaintyPolicyTests(unittest.TestCase):
             {"perception_age_frames": 0},
         )
         self.assertIsNotNone(adjusted)
+        self.assertIsNot(adjusted, lead)
+        self.assertAlmostEqual(adjusted["distance_m"], 18.0)
+        self.assertFalse(adjusted["distance_uncertainty_explicit"])
         self.assertLess(adjusted["relative_speed_mps"], -1.0)
         self.assertGreater(
             adjusted["relative_speed_uncertainty_mps"],
